@@ -65,10 +65,15 @@ export default {
     function creditsAvailable(q) {
       if (!q) return '—';
       const num = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
-      const total = num(q.total);
       const balance = num(q.balance);
+      const remaining = num(q.remaining);
+      const total = num(q.total);
+      const text = (v, unit) => v.toLocaleString(undefined, { maximumFractionDigits: 2 }) + (unit ? ' ' + unit : '');
+      // 余额/剩余才是“可用”；total 只在没有剩余字段时兜底，避免把总量当可用量。
+      if (balance !== null && balance > 0) return text(balance, q.balance_unit || q.unit);
+      if (remaining !== null) return text(remaining, q.unit || q.balance_unit);
+      if (balance !== null) return text(balance, q.balance_unit || q.unit);
       if (total !== null && total > 0) return total.toLocaleString() + (q.unit ? ' ' + q.unit : '');
-      if (balance !== null) return balance.toLocaleString(undefined, { maximumFractionDigits: 2 }) + (q.balance_unit ? ' ' + q.balance_unit : '');
       const wins = (q.windows || []).filter((w) => /credit/i.test(String(w.unit || '')) && Number(w.limit) > 0);
       if (wins.length) {
         const remain = wins.reduce((s, w) => s + Number(w.limit) * (1 - usedPct(w) / 100), 0);
