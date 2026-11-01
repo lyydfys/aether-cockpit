@@ -98,6 +98,8 @@ func TestGeminiOAuthCodeAssistChat(t *testing.T) {
 		"expires_at": time.Now().Add(-time.Hour).Format(time.RFC3339),
 		"base_url":   srv.URL, "oauth_token_url": srv.URL + "/token",
 	}
+	env.Credentials["oauth_client_id"] = "test-client-id"
+	env.Credentials["oauth_client_secret"] = "test-client-secret"
 	env.SetHTTPClient(srv.Client())
 	req := &ir.UnifiedChatRequest{
 		Model: "google/gemini-2.5-flash", UpstreamModel: "gemini-2.5-flash", Stream: true,

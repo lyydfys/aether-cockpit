@@ -31,8 +31,6 @@ const (
 	aiStudioBaseURL      = "https://generativelanguage.googleapis.com"
 	cloudResourceBaseURL = "https://cloudresourcemanager.googleapis.com"
 	geminiCLIUserAgent   = "GeminiCLI/0.1.5 (Windows; AMD64)"
-	geminiCLIClientID    = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-	geminiCLISecret      = "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"
 )
 
 type geminiOAuthFile struct {
@@ -125,6 +123,21 @@ func isGeminiOAuthAccount(env *provider.AccountEnv) bool {
 		(strings.TrimSpace(env.GetCredential("refresh_token")) != "" || strings.TrimSpace(env.GetCredential("access_token")) != "")
 }
 
+func geminiOAuthClientCredentials(env *provider.AccountEnv) (string, string, error) {
+	clientID := strings.TrimSpace(env.GetCredential("oauth_client_id"))
+	clientSecret := strings.TrimSpace(env.GetCredential("oauth_client_secret"))
+	if clientID == "" {
+		clientID = strings.TrimSpace(os.Getenv("AETHER_GEMINI_CLI_OAUTH_CLIENT_ID"))
+	}
+	if clientSecret == "" {
+		clientSecret = strings.TrimSpace(os.Getenv("AETHER_GEMINI_CLI_OAUTH_CLIENT_SECRET"))
+	}
+	if clientID == "" || clientSecret == "" {
+		return "", "", errors.New("Gemini CLI token refresh requires oauth_client_id/oauth_client_secret or AETHER_GEMINI_CLI_OAUTH_CLIENT_ID/AETHER_GEMINI_CLI_OAUTH_CLIENT_SECRET")
+	}
+	return clientID, clientSecret, nil
+}
+
 func (p *Provider) ensureOAuthToken(ctx context.Context, env *provider.AccountEnv) (string, error) {
 	access := strings.TrimSpace(env.GetCredential("access_token"))
 	exp, _ := time.Parse(time.RFC3339, strings.TrimSpace(env.GetCredential("expires_at")))
@@ -142,10 +155,9 @@ func (p *Provider) ensureOAuthToken(ctx context.Context, env *provider.AccountEn
 	if tokenURL == "" {
 		tokenURL = geminiOAuthTokenURL
 	}
-	clientID := strings.TrimSpace(env.GetCredential("oauth_client_id"))
-	clientSecret := strings.TrimSpace(env.GetCredential("oauth_client_secret"))
-	if clientID == "" || clientSecret == "" {
-		clientID, clientSecret = geminiCLIClientID, geminiCLISecret
+	clientID, clientSecret, err := geminiOAuthClientCredentials(env)
+	if err != nil {
+		return "", err
 	}
 	form := url.Values{
 		"grant_type":    {"refresh_token"},

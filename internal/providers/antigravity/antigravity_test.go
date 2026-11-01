@@ -258,6 +258,8 @@ func TestParseLocalCredential(t *testing.T) {
 }
 
 func TestManifest(t *testing.T) {
+	t.Setenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID", "test-client-id")
+	t.Setenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET", "test-client-secret")
 	m := (&Provider{}).Manifest()
 	if m.ID != "antigravity" || !m.Capabilities.Chat || !m.Capabilities.LocalImport || !m.Capabilities.Refresh {
 		t.Fatalf("manifest = %+v", m)
@@ -276,6 +278,20 @@ func TestManifest(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("缺少 claude-sonnet-4-6: %+v", m.Models)
+	}
+}
+
+func TestManifestOmitsOAuthWithoutClientCredentials(t *testing.T) {
+	t.Setenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID", "")
+	t.Setenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET", "")
+	m := (&Provider{}).Manifest()
+	if m.OAuth != nil {
+		t.Fatal("OAuth config should be omitted without local client credentials")
+	}
+	for _, auth := range m.SupportedAuths {
+		if auth == provider.AuthOAuthPKCE {
+			t.Fatal("OAuth PKCE should not be advertised without local client credentials")
+		}
 	}
 }
 

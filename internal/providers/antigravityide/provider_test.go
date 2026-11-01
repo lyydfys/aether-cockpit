@@ -8,6 +8,8 @@ import (
 )
 
 func TestManifestAlias(t *testing.T) {
+	t.Setenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID", "test-client-id")
+	t.Setenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET", "test-client-secret")
 	m := (&Provider{}).Manifest()
 	if m.ID != "antigravity-ide" || m.DisplayName != "Antigravity IDE" || m.Family != "antigravity" {
 		t.Fatalf("manifest 标识不对: %+v", m)

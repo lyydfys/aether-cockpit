@@ -16,6 +16,8 @@ import (
 // 接入向导依赖 /api/providers 下发 auth_form_schema / oauth / webview_login_url；
 // 这三个字段一旦被过滤掉，前端就只能退化成“填 API Key”。
 func TestProvidersExposeAuthSchema(t *testing.T) {
+	t.Setenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID", "test-client-id")
+	t.Setenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET", "test-client-secret")
 	g := New(Config{
 		Addr:             "127.0.0.1:0",
 		UsagePath:        "-",
