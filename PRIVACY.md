@@ -35,9 +35,9 @@ OTLP 导出默认关闭。启用后，事件可能包含时间戳、模型/协�
 
 仓库当前未配置默认的维护者遥测服务。应用内更新检查只有在配置更新源后才会访问该源；已配置时，源站可看到常规网络连接信息。更新下载会在本机校验清单提供的 SHA-256，不会自动替换正在运行的程序。
 
-## 客户端 OAuth 常量
+## 客户端 OAuth 凭据
 
-Antigravity 与 Gemini CLI 渠道的 OAuth 登录复用对应官方 CLI 公开发布的 client_id / client_secret（与上游客户端一致），仅用于发起授权码/设备码流程；它们不是用户账号凭证，也不会写入 `data/`。这些公开参数可能随上游版本变化，届时需要升级应用或改用本机登录态导入。
+Antigravity 与 Gemini CLI 渠道的 OAuth 客户端参数由用户提供：优先读取账号凭据中的 `oauth_client_id` / `oauth_client_secret`，其次读取环境变量（Antigravity 为 `AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID` / `AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET`，Gemini CLI 为 `AETHER_GEMINI_CLI_OAUTH_CLIENT_ID` / `AETHER_GEMINI_CLI_OAUTH_CLIENT_SECRET`）。仓库不再内置 OAuth 客户端密钥；未配置时 OAuth 登录或刷新不可用，已导入且未过期的访问令牌仍可使用。
 
 ## 数据控制
 
