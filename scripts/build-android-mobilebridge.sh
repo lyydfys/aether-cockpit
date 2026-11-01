@@ -17,14 +17,16 @@ case "$ABI" in
     ;;
 esac
 
-NDK="${ANDROID_NDK_HOME:-}"
-if [ -z "$NDK" ]; then
-  SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-  if [ -z "$SDK_ROOT" ]; then
-    echo "set ANDROID_HOME/ANDROID_SDK_ROOT or ANDROID_NDK_HOME" >&2
-    exit 2
-  fi
+SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+NDK=""
+if [ -n "$SDK_ROOT" ] && [ -d "$SDK_ROOT/ndk/$NDK_VERSION" ]; then
   NDK="$SDK_ROOT/ndk/$NDK_VERSION"
+elif [ -n "${ANDROID_NDK_HOME:-}" ] && [ "$(basename "$ANDROID_NDK_HOME")" = "$NDK_VERSION" ]; then
+  NDK="$ANDROID_NDK_HOME"
+fi
+if [ -z "$NDK" ]; then
+  echo "pinned NDK $NDK_VERSION not found (looked at ${SDK_ROOT:-<unset>}/ndk/$NDK_VERSION and ANDROID_NDK_HOME)" >&2
+  exit 2
 fi
 
 case "$(uname -s)" in
@@ -68,6 +70,7 @@ HDR="$OUT/libaether_mobilebridge.h"
 
 echo "android_abi=$ABI"
 echo "goarch=$GOARCH"
+echo "ndk=$NDK"
 echo "cc=$CC"
 echo "go=$(go version)"
 
@@ -75,17 +78,19 @@ cd "$ROOT"
 GOOS=android GOARCH="$GOARCH" CGO_ENABLED=1 CC="$CC" \
   go build -trimpath -buildmode=c-shared -o "$SO" ./cmd/mobilebridge
 
+SYMBOLS="$("$NM" -D --defined-only "$SO")"
 for symbol in nativeBridgeVersion nativeStart nativeGetStatus nativeStop; do
-  if ! "$NM" -D --defined-only "$SO" | grep -q " $symbol$"; then
+  if ! grep -q " $symbol$" <<<"$SYMBOLS"; then
     echo "missing exported symbol: $symbol" >&2
-    "$NM" -D --defined-only "$SO" | head -20 >&2
+    awk 'NR<=20' <<<"$SYMBOLS" >&2
     exit 4
   fi
 done
 
-if ! "$READELF" -h "$SO" | grep -q "AArch64"; then
+ELF_HEADER="$("$READELF" -h "$SO")"
+if ! grep -q "AArch64" <<<"$ELF_HEADER"; then
   echo "unexpected ELF machine:" >&2
-  "$READELF" -h "$SO" | grep -E "Class|Machine" >&2
+  grep -E "Class|Machine" <<<"$ELF_HEADER" >&2
   exit 5
 fi
 
@@ -98,9 +103,10 @@ done
 
 PROBE="$OUT/mobilebridge-probe"
 "$CC" -std=c11 -O2 -fPIE -pie -o "$PROBE" "$ROOT/cmd/mobilebridge/probe/main.c" -ldl
-if ! "$READELF" -h "$PROBE" | grep -q "AArch64"; then
+PROBE_HEADER="$("$READELF" -h "$PROBE")"
+if ! grep -q "AArch64" <<<"$PROBE_HEADER"; then
   echo "probe is not an AArch64 binary:" >&2
-  "$READELF" -h "$PROBE" | grep -E "Class|Machine" >&2
+  grep -E "Class|Machine" <<<"$PROBE_HEADER" >&2
   exit 7
 fi
 
@@ -111,4 +117,5 @@ echo "sha256=$(sha256sum "$SO" | cut -d' ' -f1)"
 echo "probe=$PROBE"
 echo "probe_size=$(wc -c < "$PROBE" | tr -d ' ')"
 echo "probe_sha256=$(sha256sum "$PROBE" | cut -d' ' -f1)"
-go version -m "$SO" | head -8
+BUILD_INFO="$(go version -m "$SO")"
+awk 'NR<=8' <<<"$BUILD_INFO"
