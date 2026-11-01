@@ -53,6 +53,11 @@ export function post(path, body) {
   }).finally(invalidate);
 }
 
+/* 交给网关用系统默认浏览器打开授权页；避免 WebView 的 target=_blank 单开窗口。 */
+export function openExternal(url) {
+  return post('open', { url });
+}
+
 export function del(path) {
   invalidate();
   return request(path, { method: 'DELETE' }).finally(invalidate);

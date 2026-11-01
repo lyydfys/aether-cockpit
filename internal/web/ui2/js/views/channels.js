@@ -8,6 +8,12 @@ import { openProvider } from './onboard.js';
 import { brandIcon } from '../brandicons.js';
 import { accountRefreshMode } from '../capabilities.js';
 
+// 授权页统一交给系统默认浏览器打开，避免 Wails/WebView 因 target=_blank 单开窗口。
+const openAuthPage = (url) => {
+  if (!url) return;
+  api.openExternal(url).catch((e) => toast('打开浏览器失败：' + (e.message || e)));
+};
+
 const POOL = { 'Claude and GPT models': 'Claude', 'Gemini Models': 'Gemini' };
 const isTest = (id) => /^mock/.test(id) || id === 'openai-compat';
 
@@ -533,7 +539,7 @@ export default {
         host.replaceChildren(
           h('div', { class: 'meta' }, '1. 打开授权页　2. 完成登录　3. 回到这里自动替换凭证'),
           h('div', { class: 'inline' },
-            h('a', { class: 'btn primary', href: s.authorize_url, target: '_blank', rel: 'noopener' }, '打开授权页面'),
+            btn('打开授权页面', { primary: true, icon: 'external', onClick: () => openAuthPage(s.authorize_url) }),
             btn('复制链接', { ghost: true, onClick: () => copyText(s.authorize_url) })));
         const timer = setInterval(async () => {
           if (!host.isConnected) { clearInterval(timer); return; }
