@@ -37,7 +37,7 @@ OTLP 导出默认关闭。启用后，事件可能包含时间戳、模型/协�
 
 ## 客户端 OAuth 凭据
 
-Antigravity 默认使用官方 Antigravity 客户端公开发布的 OAuth 客户端参数（与 cockpit-tools / magpie 等开源实现一致，属于公开客户端信息，不是用户账号凭证）；账号凭据中的 `oauth_client_id` / `oauth_client_secret` 与 `AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID` / `AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET` 可覆盖默认值。客户端参数轮换时，会从本机官方 Antigravity 的 `language_server` 运行时发现可用组合。Gemini CLI 的 OAuth 客户端参数仍需用户配置（`AETHER_GEMINI_CLI_OAUTH_CLIENT_ID` / `AETHER_GEMINI_CLI_OAUTH_CLIENT_SECRET` 或账号凭据）。仓库不保存用户的 access/refresh token；未配置 Gemini 参数时其 OAuth 刷新不可用，已导入且未过期的访问令牌仍可使用。
+Antigravity 默认使用官方 Antigravity 客户端公开发布的 OAuth 客户端参数（与 cockpit-tools / magpie 等开源实现一致，属于公开客户端信息，不是用户账号凭证）；账号凭据中的 `oauth_client_id` / `oauth_client_secret` 与 `AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID` / `AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET` 可覆盖默认值。客户端参数轮换时，会从本机官方 Antigravity 的 `language_server` 运行时发现可用组合。Gemini CLI 的 OAuth 刷新默认使用 Gemini CLI 官方公开发布的同一组参数（与 magpie 一致），账号凭据或 `AETHER_GEMINI_CLI_OAUTH_CLIENT_ID` / `AETHER_GEMINI_CLI_OAUTH_CLIENT_SECRET` 可覆盖。仓库不保存用户的 access/refresh token；已导入且未过期的访问令牌仍可使用。
 
 ## 数据控制
 

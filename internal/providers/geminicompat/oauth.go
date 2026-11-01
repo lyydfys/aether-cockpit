@@ -155,9 +155,9 @@ func (p *Provider) ensureOAuthToken(ctx context.Context, env *provider.AccountEn
 	if tokenURL == "" {
 		tokenURL = geminiOAuthTokenURL
 	}
-	clientID, clientSecret, err := geminiOAuthClientCredentials(env)
-	if err != nil {
-		return "", err
+	clientID, clientSecret := referenceGeminiOAuthClientID, referenceGeminiOAuthClientSecret
+	if id, secret, err := geminiOAuthClientCredentials(env); err == nil {
+		clientID, clientSecret = id, secret
 	}
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
