@@ -1,5 +1,5 @@
-// Package mobilebridge defines the narrow string ABI exported to the Android host.
-// It owns no gateway state; the lifecycle ABI is added by later stages.
+// Package mobilebridge owns the narrow string ABI version and buffer helper.
+// The process-wide runtime lives in internal/mobile.
 package mobilebridge
 
 // ABIVersion identifies the exported c-shared contract. Callers must reject an

@@ -19,6 +19,10 @@ func (p *Provider) DiscoverLocalAccounts(ctx context.Context) ([]*provider.Crede
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if !localImportSupported {
+		return nil, ir.NewAPIError(ir.ErrCodeUnsupported,
+			"WorkBuddy 本机登录态导入仅支持 Windows；请手动填写 token / user_id。").WithProvider(p.profile.id)
+	}
 
 	infoPath, err := localInfoPath(p.profile.infoFile)
 	if err != nil {
