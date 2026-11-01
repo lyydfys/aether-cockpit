@@ -7,6 +7,12 @@ import { icon } from '../icons.js';
 import { chip, btn, iconBtn, drawer, field, input, select, textarea, toggle, toast, skeleton, empty, errorBox, fmtDate, copyText } from '../components.js';
 import { brandTile } from '../brandicons.js';
 
+// 授权页统一交给系统默认浏览器打开，避免 Wails/WebView 因 target=_blank 单开窗口。
+const openAuthPage = (url) => {
+  if (!url) return;
+  api.openExternal(url).catch((e) => toast('打开浏览器失败：' + (e.message || e)));
+};
+
 const METHOD_LABEL = {
   local_import: '本机导入',
   oauth_pkce: '浏览器授权',
@@ -467,10 +473,10 @@ export function openProvider(p, done) {
             detail.append(h('div', { class: 'meta' }, '在浏览器里确认这段设备码：'),
               h('div', { class: 'inline' }, h('div', { class: 'mono', style: 'font-size:20px;letter-spacing:.12em' }, session.user_code),
                 btn('复制设备码', { ghost: true, onClick: () => copyText(session.user_code) })),
-              session.verification_uri ? h('a', { class: 'btn primary', href: session.verification_uri, target: '_blank', rel: 'noopener' }, '打开授权页面') : null);
+              session.verification_uri ? btn('打开授权页面', { primary: true, icon: 'external', onClick: () => openAuthPage(session.verification_uri) }) : null);
           } else if (session.authorize_url) {
             detail.append(h('div', { class: 'meta' }, '没有自动打开时，复制链接到浏览器：'),
-              h('div', { class: 'inline' }, h('a', { class: 'btn primary', href: session.authorize_url, target: '_blank', rel: 'noopener' }, '打开授权页面'),
+              h('div', { class: 'inline' }, btn('打开授权页面', { primary: true, icon: 'external', onClick: () => openAuthPage(session.authorize_url) }),
                 btn('复制链接', { ghost: true, onClick: () => copyText(session.authorize_url) })));
           }
           if (session.authorize_url && !session.user_code) {
@@ -544,7 +550,7 @@ export function openProvider(p, done) {
         id = out.id || '';
         status.textContent = '在浏览器里用 MiniMax 账号确认这段代码：';
         code.append(h('div', { class: 'mono', style: 'font-size:20px;letter-spacing:.12em' }, out.user_code || ''),
-          out.verification_uri ? h('a', { class: 'btn primary', href: out.verification_uri, target: '_blank', rel: 'noopener' }, '打开授权页面') : null);
+          out.verification_uri ? btn('打开授权页面', { primary: true, icon: 'external', onClick: () => openAuthPage(out.verification_uri) }) : null);
         const wait = Math.max(3, Number(out.interval) || 5) * 1000;
         t = setInterval(async () => {
           if (!d.el.isConnected) { stopLocal(); return; }
@@ -594,7 +600,7 @@ export function openProvider(p, done) {
         status.textContent = '在浏览器完成 Trae 登录，这里会自动接入';
         box.append(
           h('div', { class: 'meta' }, '1. 打开 Trae 登录页并授权　2. 浏览器会回调本机完成接入'),
-          h('div', { class: 'inline' }, h('a', { class: 'btn primary', href: out.login_url, target: '_blank', rel: 'noopener' }, '打开登录页面'),
+          h('div', { class: 'inline' }, btn('打开登录页面', { primary: true, icon: 'external', onClick: () => openAuthPage(out.login_url) }),
             btn('复制链接', { ghost: true, onClick: () => copyText(out.login_url) })),
           h('div', { class: 'meta' }, '等待浏览器登录…'));
         const wait = Math.max(2, Number(out.interval) || 1) * 1000;
@@ -626,7 +632,7 @@ export function openProvider(p, done) {
         status.textContent = '在浏览器完成 Kiro 登录，这里会自动接入';
         box.append(
           h('div', { class: 'meta' }, '1. 打开 Kiro 登录页并授权　2. 浏览器会回调本机完成接入'),
-          h('div', { class: 'inline' }, h('a', { class: 'btn primary', href: out.login_url, target: '_blank', rel: 'noopener' }, '打开登录页面'),
+          h('div', { class: 'inline' }, btn('打开登录页面', { primary: true, icon: 'external', onClick: () => openAuthPage(out.login_url) }),
             btn('复制链接', { ghost: true, onClick: () => copyText(out.login_url) })),
           h('div', { class: 'meta' }, '等待浏览器登录…'));
         const wait = Math.max(2, Number(out.interval) || 1) * 1000;
@@ -658,7 +664,7 @@ export function openProvider(p, done) {
         status.textContent = '在浏览器完成 Zed 登录，这里会自动接入';
         box.append(
           h('div', { class: 'meta' }, '1. 打开 Zed 登录页并授权　2. 浏览器会回调本机完成接入'),
-          h('div', { class: 'inline' }, h('a', { class: 'btn primary', href: out.login_url, target: '_blank', rel: 'noopener' }, '打开登录页面'),
+          h('div', { class: 'inline' }, btn('打开登录页面', { primary: true, icon: 'external', onClick: () => openAuthPage(out.login_url) }),
             btn('复制链接', { ghost: true, onClick: () => copyText(out.login_url) })),
           h('div', { class: 'meta' }, '等待浏览器登录…'));
         const wait = Math.max(2, Number(out.interval) || 1) * 1000;
@@ -690,7 +696,7 @@ export function openProvider(p, done) {
         status.textContent = '在浏览器完成 CodeBuddy 登录，这里会自动接入';
         box.append(
           h('div', { class: 'meta' }, '1. 打开登录页并完成登录　2. 完成后自动入库'),
-          h('div', { class: 'inline' }, h('a', { class: 'btn primary', href: out.login_url, target: '_blank', rel: 'noopener' }, '打开登录页面'),
+          h('div', { class: 'inline' }, btn('打开登录页面', { primary: true, icon: 'external', onClick: () => openAuthPage(out.login_url) }),
             btn('复制链接', { ghost: true, onClick: () => copyText(out.login_url) })),
           h('div', { class: 'meta' }, '等待浏览器登录…'));
         const wait = Math.max(2, Number(out.interval) || 2) * 1000;
@@ -722,7 +728,7 @@ export function openProvider(p, done) {
         status.textContent = '在浏览器完成 WorkBuddy 登录，这里会自动接入';
         box.append(
           h('div', { class: 'meta' }, '1. 打开登录页并完成登录　2. 完成后自动入库'),
-          h('div', { class: 'inline' }, h('a', { class: 'btn primary', href: out.login_url, target: '_blank', rel: 'noopener' }, '打开登录页面'),
+          h('div', { class: 'inline' }, btn('打开登录页面', { primary: true, icon: 'external', onClick: () => openAuthPage(out.login_url) }),
             btn('复制链接', { ghost: true, onClick: () => copyText(out.login_url) })),
           h('div', { class: 'meta' }, '等待浏览器登录…'));
         const wait = Math.max(2, Number(out.interval) || 2) * 1000;
@@ -754,7 +760,7 @@ export function openProvider(p, done) {
         status.textContent = '在浏览器完成 Qoder 登录，这里会自动接入';
         box.append(
           h('div', { class: 'meta' }, '1. 打开登录页并选择账号　2. 完成后自动入库'),
-          h('div', { class: 'inline' }, h('a', { class: 'btn primary', href: out.login_url, target: '_blank', rel: 'noopener' }, '打开登录页面'),
+          h('div', { class: 'inline' }, btn('打开登录页面', { primary: true, icon: 'external', onClick: () => openAuthPage(out.login_url) }),
             btn('复制链接', { ghost: true, onClick: () => copyText(out.login_url) })),
           h('div', { class: 'meta' }, '等待浏览器登录…'));
         const wait = Math.max(2, Number(out.interval) || 1) * 1000;
