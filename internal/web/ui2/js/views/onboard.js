@@ -18,7 +18,7 @@ const METHOD_LABEL = {
   oauth_pkce: '浏览器授权',
   device_code: '设备码',
   manual_input: '手动凭据',
-  webview_login: '内置登录',
+  webview_login: '浏览器登录',
   minimax_device: 'MiniMax 设备码',
   qoder_device: 'Qoder 登录',
   workbuddy_device: 'WorkBuddy 登录',
@@ -781,10 +781,10 @@ export function openProvider(p, done) {
 
     function renderWebview() {
       if (p.webview_login_url) {
-        content.append(h('div', { class: 'meta' }, '该渠道使用内置登录页；若未自动完成，请在浏览器登录后改用「手动凭据」。'),
-          h('a', { class: 'btn primary', href: p.webview_login_url, target: '_blank', rel: 'noopener' }, '打开登录页面'));
+        content.append(h('div', { class: 'meta' }, '该渠道使用网页登录；若未自动完成，请在浏览器登录后改用「手动凭据」。'),
+          btn('打开登录页面', { primary: true, icon: 'external', onClick: () => openAuthPage(p.webview_login_url) }));
       } else {
-        content.append(empty('该渠道暂未提供内置登录', '请使用手动凭据。'));
+        content.append(empty('该渠道暂未提供网页登录', '请使用手动凭据。'));
       }
     }
     renderMethod();
