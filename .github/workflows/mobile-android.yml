@@ -1,29 +1,37 @@
-name: Mobile Android Stage 0
+name: Mobile Android Gate
 
 on:
   pull_request:
     paths:
       - "mobile/**"
+      - "internal/mobile/**"
       - "internal/mobilebridge/**"
       - "cmd/mobilebridge/**"
+      - "internal/core/launcher/**"
+      - "internal/providers/workbuddy/**"
       - "scripts/build-android-mobilebridge.sh"
       - "scripts/check-mobile-stage0.sh"
+      - "scripts/check-mobile-stage1.sh"
       - ".github/workflows/mobile-android.yml"
   push:
     branches:
       - master
     paths:
       - "mobile/**"
+      - "internal/mobile/**"
       - "internal/mobilebridge/**"
       - "cmd/mobilebridge/**"
+      - "internal/core/launcher/**"
+      - "internal/providers/workbuddy/**"
       - "scripts/build-android-mobilebridge.sh"
       - "scripts/check-mobile-stage0.sh"
+      - "scripts/check-mobile-stage1.sh"
       - ".github/workflows/mobile-android.yml"
   workflow_dispatch:
 
 jobs:
   stage0:
-    name: Stage 0 gate (pinned MCA AAR + arm64 bridge)
+    name: Mobile gate (pinned MCA AAR + arm64 bridge + Stage 1)
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -62,10 +70,13 @@ jobs:
           echo "ANDROID_NDK_VERSION=29.0.13113456" >> "$GITHUB_ENV"
 
       - name: Make scripts executable
-        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh
+        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh scripts/check-mobile-stage1.sh
 
       - name: Run Stage 0 gate
         run: bash scripts/check-mobile-stage0.sh --ci
+
+      - name: Run Stage 1 gate
+        run: bash scripts/check-mobile-stage1.sh
 
       - name: Upload Stage 0 artifacts
         if: success()

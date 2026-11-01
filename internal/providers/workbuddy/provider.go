@@ -96,7 +96,7 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 
 	// 签到活动只在国内版存在（国际版没有这个事件）。
 	var tasks []provider.TaskDefinition
-	capabilities := provider.CapabilitySet{Chat: true, LocalImport: true, Quota: true}
+	capabilities := provider.CapabilitySet{Chat: true, LocalImport: localImportSupported, Quota: true}
 	if !p.profile.intl {
 		tasks = []provider.TaskDefinition{
 			{TaskID: "daily_checkin", Title: "每日签到", CronDefault: "0 9 * * *"},
@@ -104,18 +104,20 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 		capabilities.CheckIn = true
 	}
 
+	auths := []provider.AuthMethod{provider.AuthManualInput}
+	if localImportSupported {
+		auths = []provider.AuthMethod{provider.AuthLocalImport, provider.AuthManualInput}
+	}
+
 	return provider.ProviderManifest{
-		ID:            p.profile.id,
-		DisplayName:   p.profile.displayName,
-		Family:        p.profile.family,
-		RegionTag:     p.profile.regionTag,
-		BrandColor:    p.profile.brandColor,
-		Description:   p.profile.description,
-		NetworkPolicy: p.profile.network,
-		SupportedAuths: []provider.AuthMethod{
-			provider.AuthLocalImport,
-			provider.AuthManualInput,
-		},
+		ID:             p.profile.id,
+		DisplayName:    p.profile.displayName,
+		Family:         p.profile.family,
+		RegionTag:      p.profile.regionTag,
+		BrandColor:     p.profile.brandColor,
+		Description:    p.profile.description,
+		NetworkPolicy:  p.profile.network,
+		SupportedAuths: auths,
 		AuthFormSchema: []provider.FormFieldSchema{
 			{
 				Key: "token", Label: "Token", Type: "password", Required: true,

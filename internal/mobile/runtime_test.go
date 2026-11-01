@@ -1,4 +1,4 @@
-package mobilebridge
+package mobile
 
 import (
 	"context"
@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-func testConfig(t *testing.T) Config {
+func testConfig(t *testing.T) RuntimeConfig {
 	t.Helper()
-	return Config{
+	return RuntimeConfig{
 		DataDir:    filepath.Join(t.TempDir(), "aether"),
 		ListenHost: "127.0.0.1",
 		Port:       0,
@@ -22,7 +22,7 @@ func testConfig(t *testing.T) Config {
 	}
 }
 
-func startForTest(t *testing.T, cfg Config) *Runtime {
+func startForTest(t *testing.T, cfg RuntimeConfig) *Runtime {
 	t.Helper()
 	rt, err := Start(context.Background(), cfg)
 	if err != nil {
@@ -123,5 +123,46 @@ func TestStartRejectsEmptyDataDir(t *testing.T) {
 	var se *StartError
 	if !errors.As(err, &se) || se.Code != "data_dir_required" {
 		t.Fatalf("err = %v, want data_dir_required", err)
+	}
+}
+
+func TestStartRejectsInvalidPort(t *testing.T) {
+	for _, port := range []int{-1, 70000} {
+		cfg := testConfig(t)
+		cfg.Port = port
+		_, err := Start(context.Background(), cfg)
+		var se *StartError
+		if !errors.As(err, &se) || se.Code != "invalid_port" {
+			t.Fatalf("port %d err = %v, want invalid_port", port, err)
+		}
+	}
+}
+
+func TestStartFailsWhenPortIsInUse(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	cfg := testConfig(t)
+	cfg.Port = port
+	_, err = Start(context.Background(), cfg)
+	var se *StartError
+	if !errors.As(err, &se) || se.Code != "listen_failed" {
+		t.Fatalf("err = %v, want listen_failed for occupied port %d", err, port)
+	}
+}
+
+func TestHealthzRejectsNonGET(t *testing.T) {
+	rt := startForTest(t, testConfig(t))
+	resp, err := http.Post("http://"+rt.Status().Addr+"/healthz", "text/plain", nil)
+	if err != nil {
+		t.Fatalf("POST /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
 	}
 }
