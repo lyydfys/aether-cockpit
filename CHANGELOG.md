@@ -1,5 +1,12 @@
 # 更新日志
 
+## 0.1.6（2026-11-02）
+
+### Antigravity 额度
+
+- 恢复官方公开 OAuth 客户端参数（与 cockpit-tools / magpie 一致）作为 Antigravity 刷新默认值；账号凭据/环境变量可覆盖，客户端参数轮换时从本机 `language_server` 运行时发现。
+- 修复安全版移除内置参数后 Antigravity token 刷新失败、额度窗口读不到的问题；账号卡恢复 Gemini / Claude & GPT 的 5h/7d 窗口。
+
 ## 0.1.5（2026-11-02）
 
 ### 额度窗口
