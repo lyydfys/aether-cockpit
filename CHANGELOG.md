@@ -1,5 +1,12 @@
 # 更新日志
 
+## 0.1.7（2026-11-02）
+
+### Gemini CLI OAuth
+
+- 恢复 Gemini CLI 官方公开 OAuth 客户端参数（与 magpie 一致）作为刷新默认；账号凭据/环境变量可覆盖。
+- 修复安全版移除内置参数后 Gemini CLI token 刷新失败的问题。
+
 ## 0.1.6（2026-11-02）
 
 ### Antigravity 额度
