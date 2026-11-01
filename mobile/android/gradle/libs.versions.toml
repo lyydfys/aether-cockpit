@@ -1,0 +1,23 @@
+[versions]
+agp = "8.13.2"
+kotlin = "2.3.21"
+compileSdk = "36"
+minSdk = "26"
+targetSdk = "36"
+composeBom = "2026.05.01"
+activityCompose = "1.13.0"
+junit = "4.13.2"
+mcaDesignSystem = "0.1.0"
+
+[libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+junit = { module = "junit:junit", version.ref = "junit" }
+mca-designsystem = { module = "com.muyuchat.mca:designsystem", version.ref = "mcaDesignSystem" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
