@@ -4,6 +4,23 @@ import * as api from '../api.js';
 import { card, chip, btn, iconBtn, input, empty, errorBox, skeleton, toast, fmtDate, fmtTokens, fmtCost, drawer, copyText } from '../components.js';
 
 const promptTokens = (e) => (e.input_tokens || 0) + (e.cache_read || 0) + (e.cache_write || 0);
+
+const protocolLabel = (p) => {
+  const raw = String(p || 'http');
+  if (raw === 'openai_chat') return 'chat';
+  if (raw === 'anthropic_messages') return 'anthropic';
+  if (raw === 'openai_responses' || raw === 'responses') return 'responses';
+  return raw.replace(/^openai_/, '').replace(/_messages$/, '');
+};
+
+// 输出速率：有首字节时只算首字节之后的解码时间；没有 TTFT 时退回总耗时。
+const outputSpeed = (e) => {
+  const out = Number(e.output_tokens) || 0;
+  const decode = e.first_byte_ms > 0 && e.duration_ms > e.first_byte_ms
+    ? e.duration_ms - e.first_byte_ms
+    : e.duration_ms;
+  return out > 0 && decode > 0 ? (out / decode) * 1000 : 0;
+};
 const RANGES = [['today', '今日'], ['7d', '近 7 天'], ['30d', '近 30 天']];
 
 // 账本里的 err_type 是传输层类型（rate/auth/shape/other），错误正文才是具体原因；
@@ -127,7 +144,7 @@ export default {
       const tokens = (Number(v.input) || 0) + (Number(v.output) || 0) + (Number(v.cache_read) || 0) + (Number(v.cache_write) || 0);
       const money = (n) => fmtCost(n, state.pricing.currency, state.pricing.usd_cny);
 
-      host.append(h('div', { class: 'kpis' },
+      host.append(h('div', { class: 'kpis logs-kpis' },
         kpi('请求数', calls, '已持久化 · ' + rangeLabel()),
         kpi('成功 / 失败', (calls - errors) + ' / ' + errors, calls ? '失败率 ' + ((errors / calls) * 100).toFixed(1) + '%' : '—'),
         kpi('平均延迟', (v.avg_ms || 0) + ' ms', 'P95 ' + (v.p95_ms || 0) + ' ms'),
@@ -142,7 +159,7 @@ export default {
           onclick: () => { if (state.range !== id) { state.range = id; load(); } },
         }, label)));
       const search = input({ placeholder: '搜索模型 / 渠道 / 账号 / 错误 / 会话…', value: state.q, label: '搜索日志' });
-      search.style.flex = '0 1 240px';
+      search.classList.add('log-search');
       search.addEventListener('input', () => { state.q = search.value; paintList(); });
       const seg = h('div', { class: 'tabs' });
       for (const [id, label] of [['all', '全部'], ['ok', '成功'], ['error', '失败']]) {
@@ -175,31 +192,44 @@ export default {
           box.append(empty(rows.length ? '没有符合条件的请求' : '还没有请求', rows.length ? '换一个筛选。' : '接入客户端并发一次请求后，这里会出现审计记录。'));
           return;
         }
+        box.append(h('div', { class: 'log-head' },
+          h('span', null, '时间'),
+          h('span', { class: 'log-proto' }, '协议'),
+          h('span', null, '模型 · 渠道'),
+          h('span', { class: 'num' }, '首字节 / 总耗时'),
+          h('span', { class: 'num' }, '输入 / 输出'),
+          h('span', { class: 'num' }, '输出速率'),
+          h('span', { class: 'num' }, '费用'),
+          h('span', { class: 'num' }, '状态')));
         for (const e of list) {
           const err = e.status !== 'ok';
-          const tokens = promptTokens(e);
-          const total = tokens + (e.output_tokens || 0);
+          const inputTokens = promptTokens(e);
+          const outTokens = Number(e.output_tokens) || 0;
+          const speed = outputSpeed(e);
           const ex = err ? explainError(e) : null;
-          box.append(h('div', { class: 'row', style: 'align-items:flex-start;gap:10px;cursor:pointer', onclick: () => openDetail(e) },
-            h('span', { class: 'meta mono', style: 'min-width:74px' }, fmtDate(e.time, true, true).slice(5)),
-            chip(e.protocol || 'http', 'plain'),
-            h('div', { style: 'min-width:0;flex:1' },
-              h('div', { class: 'name' }, e.model || '—', e.stream ? h('span', { class: 'meta', style: 'margin-left:6px' }, '流式') : null),
-              h('div', { class: 'meta', style: 'margin-top:2px' },
-                [e.provider_name || e.provider_id, e.account_name || e.account_id, e.agent, e.fast_path ? '快速直通' : ''].filter(Boolean).join(' · ') || '—'),
-              ex ? h('div', { class: 'meta', style: 'margin-top:2px;color:var(--red)' }, ex.title + (e.err_type ? ' · ' + e.err_type : '')) : null),
-            h('div', { class: 'meta', style: 'min-width:130px;text-align:right;font-variant-numeric:tabular-nums' },
-              h('div', null, (e.first_byte_ms ? e.first_byte_ms + ' / ' : '') + e.duration_ms + ' ms'),
-              h('div', { style: 'font-size:11px;color:var(--faint)' }, e.first_byte_ms ? '首字节 / 总耗时' : '总耗时')),
-            h('div', { class: 'meta', style: 'min-width:150px;text-align:right;font-variant-numeric:tabular-nums' },
-              h('div', null, total ? fmtTokens(total) : '—', tokens ? h('span', { style: 'color:var(--faint)' }, ' / ' + fmtTokens(e.output_tokens || 0)) : null),
-              h('div', { style: 'font-size:11px;color:var(--faint)' }, e.cache_read ? '缓存 ↓ ' + fmtTokens(e.cache_read) : '输入 / 输出')),
-            h('div', { class: 'meta', style: 'min-width:100px;text-align:right;font-variant-numeric:tabular-nums' },
-              h('div', null, e.priced ? money(e.cost) : '未计价'),
-              h('div', { style: 'font-size:11px;color:var(--faint)' }, e.pricing_model || '—')),
-            h('div', { class: 'inline', style: 'gap:6px' },
+          const providerLine = [e.provider_name || e.provider_id, e.account_name || e.account_id, e.agent, e.fast_path ? '快速直通' : ''].filter(Boolean).join(' · ') || '—';
+          const ttft = e.first_byte_ms ? e.first_byte_ms + ' / ' : '— / ';
+          const tokenText = (inputTokens || outTokens) ? fmtTokens(inputTokens) + ' / ' + fmtTokens(outTokens) : '—';
+          const costText = e.priced ? money(e.cost) : '未计价';
+          const node = h('div', {
+            class: 'log-row', role: 'button', tabindex: '0',
+            onclick: () => openDetail(e),
+            onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openDetail(e); } },
+          },
+            h('span', { class: 'log-time mono' }, fmtDate(e.time, true, true).slice(5)),
+            h('span', { class: 'log-proto', title: e.protocol || 'http' }, chip(protocolLabel(e.protocol), 'plain')),
+            h('div', { class: 'log-model' },
+              h('div', { class: 'log-title' }, h('span', { class: 'name' }, e.model || '—'), e.stream ? chip('流式', 'plain') : null),
+              h('div', { class: 'log-sub', title: providerLine }, providerLine),
+              ex ? h('div', { class: 'log-err' }, ex.title + (e.err_type ? ' · ' + e.err_type : '')) : null),
+            h('span', { class: 'log-num log-lat', 'data-label': '首字节 / 总耗时' }, ttft + e.duration_ms + ' ms'),
+            h('span', { class: 'log-num log-tokens', 'data-label': '输入 / 输出', title: '输入 ' + fmtTokens(inputTokens) + ' · 输出 ' + fmtTokens(outTokens) }, tokenText),
+            h('span', { class: 'log-num log-speed' + (speed ? '' : ' muted'), 'data-label': '输出速率' }, speed ? speed.toFixed(1) + ' tok/s' : '—'),
+            h('span', { class: 'log-num log-cost' + (e.priced ? '' : ' muted'), 'data-label': '费用', title: '计价模型：' + (e.pricing_model || '—') }, costText),
+            h('div', { class: 'log-status' },
               chip(err ? '失败 ' + (e.http_status || '') : '成功 ' + (e.http_status || ''), err ? 'red' : 'green'),
-              iconBtn('external', '详情', (ev) => { ev.stopPropagation(); openDetail(e); }))));
+              iconBtn('external', '详情', (ev) => { ev.stopPropagation(); openDetail(e); })));
+          box.append(node);
         }
       }
     }
@@ -210,8 +240,7 @@ export default {
       const inputTotal = promptTokens(e);
       const total = inputTotal + (e.output_tokens || 0);
       const ex = err ? explainError(e) : null;
-      const decode = e.duration_ms > e.first_byte_ms ? e.duration_ms - e.first_byte_ms : 0;
-      const tps = decode > 0 && e.output_tokens > 0 ? (e.output_tokens / decode) * 1000 : 0;
+      const tps = outputSpeed(e);
       const d = drawer('日志详情 · ' + (e.model || '请求'), (body) => {
         body.append(
           h('div', { class: 'inline' },

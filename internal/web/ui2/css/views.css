@@ -353,6 +353,67 @@
 .list .row:first-child { border-top: 0; }
 .list .row:hover { background: var(--surface-2); }
 
+/* 请求日志：表头 + 网格行，数值列右对齐，窄屏折叠为带标签的卡片行。 */
+.log-head, .log-row {
+  display: grid;
+  grid-template-columns: 96px 84px minmax(180px, 1fr) 122px 120px 96px 96px 104px;
+  column-gap: 10px;
+  padding: 10px 16px;
+}
+.log-head {
+  align-items: center;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line-2);
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+}
+.log-head .num { text-align: right; }
+.log-row { align-items: start; border-top: 1px solid var(--line-2); cursor: pointer; min-width: 0; }
+.log-head + .log-row { border-top: 0; }
+.log-row:hover { background: var(--surface-2); }
+.log-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.log-row > * { min-width: 0; }
+.log-time { color: var(--fg-2); font-size: var(--fs-2xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.log-proto { align-self: start; min-width: 0; overflow: hidden; }
+.log-proto .chip { display: inline-block; box-sizing: border-box; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 22px; vertical-align: top; }
+.log-model { min-width: 0; }
+.log-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.log-title .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-sub, .log-err { margin-top: 2px; font-size: var(--fs-s); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-sub { color: var(--faint); }
+.log-err { color: var(--red); }
+.log-num { align-self: start; text-align: right; font-size: var(--fs-s); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.log-num.muted { color: var(--faint); }
+.log-status { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+
+/* 5 张 KPI：宽屏一行，中屏 3+2，窄屏 2 列。 */
+.kpis.logs-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1400px) { .kpis.logs-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .kpis.logs-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* 工具栏在窄屏先缩搜索框，避免「自动刷新」单独掉到下一行。 */
+.log-search { flex: 0 1 240px; }
+@media (max-width: 1400px) { .log-search { flex-basis: 170px; } }
+@media (max-width: 760px) { .log-search { flex-basis: 100%; } }
+
+@media (max-width: 1400px) {
+  .log-head, .log-row { grid-template-columns: 96px minmax(140px, 1fr) 108px 104px 84px 84px 92px; column-gap: 8px; padding: 10px 14px; }
+  .log-head .log-proto, .log-row .log-proto { display: none; }
+}
+
+@media (max-width: 1150px) {
+  .log-head { display: none; }
+  .log-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 5px 12px; padding: 12px 14px; }
+  .log-row .log-proto { display: inline-flex; }
+  .log-model { flex: 1 1 60%; order: 1; }
+  .log-status { order: 2; margin-left: auto; }
+  .log-time { order: 3; }
+  .log-proto { order: 4; }
+  .log-lat, .log-tokens, .log-speed, .log-cost { order: 5; text-align: left; }
+  .log-row [data-label]::before { content: attr(data-label) " "; color: var(--faint); font-size: 11px; }
+}
+
 @media (max-width: 1200px) {
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .usage-top { grid-template-columns: 1fr; }
