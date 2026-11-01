@@ -22,6 +22,7 @@ const outputSpeed = (e) => {
   return out > 0 && decode > 0 ? (out / decode) * 1000 : 0;
 };
 const RANGES = [['today', '今日'], ['7d', '近 7 天'], ['30d', '近 30 天']];
+const PAGE_SIZE = 20;
 
 // 账本里的 err_type 是传输层类型（rate/auth/shape/other），错误正文才是具体原因；
 // 这里把两者合成用户能看懂的解释与下一步建议。
@@ -102,7 +103,7 @@ export default {
   subtitle: '持久化账本 · 错误解释与耗时、Token 明细',
 
   mount(host) {
-    const state = { range: '7d', rows: [], view: null, q: '', only: 'all', timer: 0, live: false, pricing: { currency: 'USD', usd_cny: 7.2 } };
+    const state = { range: '7d', rows: [], view: null, q: '', only: 'all', page: 0, timer: 0, live: false, pricing: { currency: 'USD', usd_cny: 7.2 } };
     host.append(skeleton(8));
     load();
 
@@ -151,19 +152,19 @@ export default {
         kpi('Token', fmtTokens(tokens), '缓存读 ' + fmtTokens(v.cache_read || 0)),
         kpi('费用', money(v.cost || 0), v.unpriced ? '未计价 ' + v.unpriced + ' 次' : '按当前价格表')));
 
-      const countChip = chip('显示 ' + rows.length + ' / 共 ' + calls + ' 条', 'plain');
+      const countChip = chip('共 ' + rows.length + ' 条', 'plain');
       const c = card('请求明细', { chips: [countChip] });
       const rangeBar = h('div', { class: 'tabs' },
         ...RANGES.map(([id, label]) => h('button', {
           class: 'tab' + (state.range === id ? ' on' : ''), type: 'button',
-          onclick: () => { if (state.range !== id) { state.range = id; load(); } },
+          onclick: () => { if (state.range !== id) { state.range = id; state.page = 0; load(); } },
         }, label)));
       const search = input({ placeholder: '搜索模型 / 渠道 / 账号 / 错误 / 会话…', value: state.q, label: '搜索日志' });
       search.classList.add('log-search');
-      search.addEventListener('input', () => { state.q = search.value; paintList(); });
+      search.addEventListener('input', () => { state.q = search.value; state.page = 0; paintList(); });
       const seg = h('div', { class: 'tabs' });
       for (const [id, label] of [['all', '全部'], ['ok', '成功'], ['error', '失败']]) {
-        seg.append(h('button', { class: 'tab' + (state.only === id ? ' on' : ''), type: 'button', onclick: () => { state.only = id; render(); } }, label));
+        seg.append(h('button', { class: 'tab' + (state.only === id ? ' on' : ''), type: 'button', onclick: () => { state.only = id; state.page = 0; render(); } }, label));
       }
       const live = h('button', { class: 'tab' + (state.live ? ' on' : ''), type: 'button', title: '每 5 秒刷新' }, state.live ? '自动刷新 · 开' : '自动刷新 · 关');
       live.addEventListener('click', () => {
@@ -187,7 +188,12 @@ export default {
       function paintList() {
         clear(box);
         const list = rows.filter(matches);
-        countChip.textContent = '显示 ' + list.length + ' / 共 ' + calls + ' 条';
+        const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+        if (state.page >= pages) state.page = pages - 1;
+        if (state.page < 0) state.page = 0;
+        const start = state.page * PAGE_SIZE;
+        const end = Math.min(start + PAGE_SIZE, list.length);
+        countChip.textContent = '共 ' + list.length + ' 条';
         if (!list.length) {
           box.append(empty(rows.length ? '没有符合条件的请求' : '还没有请求', rows.length ? '换一个筛选。' : '接入客户端并发一次请求后，这里会出现审计记录。'));
           return;
@@ -201,7 +207,7 @@ export default {
           h('span', { class: 'num' }, '输出速率'),
           h('span', { class: 'num' }, '费用'),
           h('span', { class: 'num' }, '状态')));
-        for (const e of list) {
+        for (const e of list.slice(start, end)) {
           const err = e.status !== 'ok';
           const inputTokens = promptTokens(e);
           const outTokens = Number(e.output_tokens) || 0;
@@ -230,6 +236,22 @@ export default {
               chip(err ? '失败 ' + (e.http_status || '') : '成功 ' + (e.http_status || ''), err ? 'red' : 'green'),
               iconBtn('external', '详情', (ev) => { ev.stopPropagation(); openDetail(e); })));
           box.append(node);
+        }
+        if (pages > 1) {
+          const go = (n) => {
+            if (n < 0 || n >= pages || n === state.page) return;
+            state.page = n;
+            paintList();
+            box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          };
+          box.append(h('div', { class: 'log-pager', role: 'navigation', 'aria-label': '日志分页' },
+            h('span', { class: 'meta' }, '显示 ' + (start + 1) + '–' + end + ' / 共 ' + list.length + ' 条'),
+            h('span', { class: 'grow' }),
+            btn('首页', { ghost: true, disabled: state.page === 0, onClick: () => go(0) }),
+            btn('上一页', { ghost: true, disabled: state.page === 0, onClick: () => go(state.page - 1) }),
+            h('span', { class: 'meta' }, '第 ' + (state.page + 1) + ' / ' + pages + ' 页'),
+            btn('下一页', { ghost: true, disabled: state.page >= pages - 1, onClick: () => go(state.page + 1) }),
+            btn('末页', { ghost: true, disabled: state.page >= pages - 1, onClick: () => go(pages - 1) })));
         }
       }
     }

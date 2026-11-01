@@ -386,6 +386,8 @@
 .log-num { align-self: start; text-align: right; font-size: var(--fs-s); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .log-num.muted { color: var(--faint); }
 .log-status { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.log-pager { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line-2); background: var(--card); }
+.log-pager .grow { flex: 1; }
 
 /* 5 张 KPI：宽屏一行，中屏 3+2，窄屏 2 列。 */
 .kpis.logs-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
@@ -412,6 +414,8 @@
   .log-proto { order: 4; }
   .log-lat, .log-tokens, .log-speed, .log-cost { order: 5; text-align: left; }
   .log-row [data-label]::before { content: attr(data-label) " "; color: var(--faint); font-size: 11px; }
+  .log-pager { flex-wrap: wrap; padding: 10px 14px; }
+  .log-pager .grow { display: none; }
 }
 
 @media (max-width: 1200px) {
