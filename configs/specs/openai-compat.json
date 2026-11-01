@@ -1,0 +1,24 @@
+{
+  "provider_id": "openai-compat",
+  "spec_version": "2026.10.26.2",
+  "base_url": "https://api.deepseek.com/v1",
+  "client_version": "1.0.0",
+  "headers_template": {
+    "X-Client-Version": "{{.Fingerprint.ClientVersion}}",
+    "X-Device-Id": "{{.Fingerprint.DeviceID}}"
+  },
+  "signature_rule": {
+    "algorithm": "none",
+    "payload_template": "{{.Method}}\n{{.Path}}\n{{.Timestamp}}",
+    "header_name": "X-Signature",
+    "timestamp_header": "X-Timestamp"
+  },
+  "models": {
+    "claude-4-sonnet": "deepseek-chat",
+    "deepseek-chat": "deepseek-chat",
+    "gpt-4o": "gpt-4o"
+  },
+  "endpoints": {
+    "chat": "/chat/completions"
+  }
+}

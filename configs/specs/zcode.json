@@ -1,0 +1,8 @@
+{
+  "provider_id": "zcode",
+  "spec_version": "2026.10.30.1",
+  "base_url": "https://api.z.ai/api/coding/paas/v4",
+  "endpoints": {
+    "chat": "/chat/completions"
+  }
+}

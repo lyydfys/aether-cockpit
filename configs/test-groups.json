@@ -1,0 +1,9 @@
+{
+  "addr": "127.0.0.1:7861",
+  "snapshot_path": "data/test-state.json",
+  "account_store_path": "data/test-accounts.json",
+  "quota_refresh_minutes": 1,
+  "model_groups": {
+    "auto/primary": ["mock-responses", "mock-native"]
+  }
+}

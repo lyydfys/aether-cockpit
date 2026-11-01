@@ -1,0 +1,68 @@
+# 运行期数据（账号凭证、会话快照、签到记录）
+data/
+bin/
+
+# 本机实际配置（含代理地址、API Key）
+cockpit.json
+
+# Local credentials and environment configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+
+# 构建产物
+*.exe
+*.test
+*.out
+build/bin/
+build/wailsjs/
+# Wails 资源随仓库提供（干净 clone 才能生成图标与打包）；安装器缓存不入库
+build/windows/*
+!build/windows/icon.ico
+!build/windows/info.json
+!build/windows/wails.exe.manifest
+!build/windows/installer/
+build/windows/installer/tmp/
+!build/windows/installer/project.nsi
+!build/windows/installer/wails_tools.nsh
+
+# 前端依赖（构建产物 internal/web/dist 必须提交：headless 构建不跑 npm）
+frontend/node_modules/
+frontend/.vite/
+
+# 本机验证、参考源码与临时目录（不入库）
+.verify-*/
+.smoke-data/
+.preview-dist/
+.playwright-cli/
+.qoder-credits/
+.ref/
+.workbuddy/
+*.tmp
+
+# 冒烟/审计临时产物：build/probe 里有账号加密副本，绝不能入库
+build/probe/
+build/src-*.txt
+# Full reference checkouts are research material, never application source.
+build/ref-*/
+node_modules/
+
+cmd/desktop/*.syso
+
+# 像素回归的临时 diff（基线入库，diff 不入库）
+docs/design/visual-diff/
+
+# 发布产物（仅根目录；internal/web/dist 已删除）
+/dist/
+
+# 本机验证截图与记录（含本机信息，不入库）
+docs/evidence/
+
+# Local audit snapshots can contain machine paths, process details, and account data.
+docs/STATUS-*.md
+
+# 内部交接、审计与设计过程材料（不随公开仓库发布）
+docs/internal/

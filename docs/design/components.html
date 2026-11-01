@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aether Cockpit · 组件与令牌</title>
+<!-- 直接引用 ui2 的真实样式：这份文档不会和产品漂移 -->
+<link rel="stylesheet" href="../../internal/web/ui2/css/tokens.css">
+<link rel="stylesheet" href="../../internal/web/ui2/css/base.css">
+<link rel="stylesheet" href="../../internal/web/ui2/css/components.css">
+<link rel="stylesheet" href="../../internal/web/ui2/css/views.css">
+<style>
+  /* 只写文档自身的排版，组件一律用产品类名 */
+  body { background: var(--bg); }
+  .doc { max-width: 1180px; margin: 0 auto; padding: 40px 32px 100px; display: grid; grid-template-columns: 184px minmax(0, 1fr); gap: 48px; }
+  .doc-nav { position: sticky; top: 24px; align-self: start; display: flex; flex-direction: column; gap: 2px; }
+  .doc-nav a { color: var(--muted); font-size: var(--fs-s); padding: 7px 10px; border-radius: var(--r-1); }
+  .doc-nav a:hover { background: var(--surface-2); color: var(--fg); }
+  .doc-nav .t { font: 11px/1.4 var(--mono); color: var(--faint); padding: 0 10px 8px; letter-spacing: .04em; }
+  .doc-main { min-width: 0; }
+  .doc-head { display: flex; align-items: flex-start; gap: 16px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+  .doc-head h1 { font-size: var(--fs-3xl); font-weight: 600; letter-spacing: -.02em; }
+  .doc-head p { color: var(--muted); margin-top: 6px; max-width: 62ch; }
+  .doc-head .right { margin-left: auto; display: flex; gap: 8px; }
+  section.doc-sec { padding-top: 44px; }
+  .sec-h { display: flex; align-items: baseline; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+  .sec-h h2 { font-size: var(--fs-l); font-weight: 600; }
+  .sec-h .n { font: 11px/1 var(--mono); color: var(--faint); }
+  .sec-h .note { margin-left: auto; font-size: var(--fs-s); color: var(--faint); }
+  .sec-p { color: var(--muted); font-size: var(--fs-s); margin: 12px 0 4px; max-width: 72ch; }
+
+  .sw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; margin-top: 16px; }
+  .sw { background: var(--card); padding: 10px; border: 1px solid var(--line); border-radius: var(--r-2); }
+  .sw i { display: block; height: 40px; border-radius: 6px; box-shadow: inset 0 0 0 1px rgba(16,24,40,.08); }
+  .sw b { display: block; margin-top: 8px; font: 11px/1.4 var(--mono); font-weight: 500; }
+  .sw span { display: block; font: 11px/1.4 var(--mono); color: var(--faint); }
+  .sw em { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); font-style: normal; }
+
+  .type-row { display: grid; grid-template-columns: 78px minmax(0, 1fr) 200px; gap: 20px; align-items: baseline; padding: 14px 0; border-bottom: 1px solid var(--line-2); }
+  .type-row .k { font: 11px/1.4 var(--mono); color: var(--faint); }
+  .type-row .u { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+
+  .space-row { display: flex; align-items: center; gap: 14px; padding: 8px 0; }
+  .space-row .b { height: 12px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 2px; }
+  .space-row .k { font: 11px/1 var(--mono); color: var(--faint); width: 96px; flex: none; }
+
+  .radius-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+  .radius-row div { width: 92px; height: 64px; background: var(--card); border: 1px solid var(--line-strong); display: grid; place-items: center; font: 11px/1 var(--mono); color: var(--muted); }
+
+  .spec { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--line-2); }
+  .spec .demo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+  .spec .meta { font-size: 11.5px; line-height: 1.65; color: var(--muted); }
+  .spec .meta code { font-family: var(--mono); font-size: 11px; color: var(--fg-2); background: var(--surface-2); padding: 1px 4px; border-radius: 4px; }
+  .col { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 14px; }
+  .two > div { background: var(--card); padding: 14px 16px; }
+  .two h4 { font-size: var(--fs-s); margin-bottom: 6px; }
+  .two ul { margin: 0; padding-left: 16px; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
+  .ok-t { color: var(--green); }
+  .no-t { color: var(--red); }
+
+  .focus-demo { display: inline-flex; height: 32px; align-items: center; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--r-2); outline: 2px solid var(--primary-1); outline-offset: 2px; font-size: var(--fs-m); }
+
+  .doc-foot { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--faint); line-height: 1.8; }
+  @media (max-width: 900px) {
+    .doc { grid-template-columns: 1fr; gap: 20px; padding: 24px 16px 60px; }
+    .doc-nav { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+    .doc-nav .t { display: none; }
+    .type-row, .spec { grid-template-columns: 1fr; gap: 8px; }
+    .two { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="doc">
+  <aside class="doc-nav">
+    <span class="t">组件与令牌</span>
+    <a href="#color">颜色</a>
+    <a href="#type">字阶</a>
+    <a href="#space">间距与圆角</a>
+    <a href="#action">动作</a>
+    <a href="#form">表单</a>
+    <a href="#data">数据展示</a>
+    <a href="#container">容器与浮层</a>
+    <a href="#state">加载与空态</a>
+    <a href="#rules">规范</a>
+    <a href="#a11y">可访问性</a>
+  </aside>
+
+  <main class="doc-main">
+    <header class="doc-head">
+      <div>
+        <h1>组件与令牌</h1>
+        <p>这份文档直接引用 <code>internal/web/ui2/css/*.css</code>，不是拷贝样式——改产品就是改文档，不会漂移。当前主题：<b id="themeNow">浅色</b>。</p>
+      </div>
+      <div class="right">
+        <button class="btn sm" id="themeBtn" type="button">切换深色</button>
+      </div>
+    </header>
+
+    <section class="doc-sec" id="color">
+      <div class="sec-h"><h2>颜色</h2><span class="n">tokens.css</span><span class="note">色值只允许出现在 tokens.css</span></div>
+      <p class="sec-p">灰阶 5 档，用途固定：<code>--fg</code> 标题与主数据、<code>--fg-2</code> 正文、<code>--muted</code> 次级说明、<code>--faint</code> 时间戳与单位、<code>--disabled</code> 仅限控件禁用态。下方数值由浏览器实时读取，切换主题会变。</p>
+      <div class="sw-grid" id="swatches"></div>
+    </section>
+
+    <section class="doc-sec" id="type">
+      <div class="sec-h"><h2>字阶</h2><span class="n">6 档</span><span class="note">正文 14 / 行高 1.6</span></div>
+      <p class="sec-p">11px 只用于时间戳与单位；12px 用于徽章与密集元信息；14px 是正文与控件；16px 是卡片标题；24px 页面标题；32px 只给 KPI 数值。中文不跟随拉丁做负字距。</p>
+      <div class="type-row"><div class="k">32 / 600</div><div style="font-size:32px;font-weight:600;line-height:1.1;letter-spacing:-.03em">278</div><div class="u"><code>--fs-2xl</code> · KPI 数值，等宽数字</div></div>
+      <div class="type-row"><div class="k">24 / 600</div><div style="font-size:24px;font-weight:600;line-height:1.28;letter-spacing:-.02em">账号与额度</div><div class="u"><code>--fs-3xl</code> · 页面标题，每页仅一个 h1</div></div>
+      <div class="type-row"><div class="k">16 / 600</div><div style="font-size:16px;font-weight:600">渠道健康</div><div class="u"><code>--fs-l</code> · 卡片标题（role=heading level 2）</div></div>
+      <div class="type-row"><div class="k">14 / 400</div><div style="font-size:14px">账号、模型与余量，一眼看到底</div><div class="u"><code>--fs-m</code> · 正文、控件、导航</div></div>
+      <div class="type-row"><div class="k">12 / 400</div><div style="font-size:12px;color:var(--muted)">剩余 84% · 11/02 20:27 重置</div><div class="u"><code>--fs-s</code> · 次级说明、徽章</div></div>
+      <div class="type-row"><div class="k">11 / 400</div><div style="font-size:11px;color:var(--faint)">2026/10/29 15:23</div><div class="u"><code>--fs-xs</code> · 时间戳、单位</div></div>
+    </section>
+
+    <section class="doc-sec" id="space">
+      <div class="sec-h"><h2>间距与圆角</h2><span class="n">4pt</span><span class="note">只用 4 的倍数</span></div>
+      <div style="margin-top:14px">
+        <div class="space-row"><span class="k">--sp-1 · 4</span><span class="b" style="width:4px"></span></div>
+        <div class="space-row"><span class="k">--sp-2 · 8</span><span class="b" style="width:8px"></span></div>
+        <div class="space-row"><span class="k">--sp-3 · 12</span><span class="b" style="width:12px"></span></div>
+        <div class="space-row"><span class="k">--sp-4 · 16</span><span class="b" style="width:16px"></span></div>
+        <div class="space-row"><span class="k">--sp-5 · 24</span><span class="b" style="width:24px"></span></div>
+        <div class="space-row"><span class="k">--sp-6 · 32</span><span class="b" style="width:32px"></span></div>
+        <div class="space-row"><span class="k">--sp-7 · 48</span><span class="b" style="width:48px"></span></div>
+      </div>
+      <div class="radius-row">
+        <div style="border-radius:var(--r-1)">r-1 · 8</div>
+        <div style="border-radius:var(--r-2)">r-2 · 10</div>
+        <div style="border-radius:var(--r-3)">r-3 · 12</div>
+        <div style="border-radius:var(--r-4)">r-4 · 16</div>
+        <div style="border-radius:var(--r-5)">r-5 · 24</div>
+        <div style="border-radius:999px">pill</div>
+      </div>
+      <p class="sec-p">卡片 16 / 控件 10 / 内嵌块 12 / 浮层 24；胶囊只给 chip 与分段条。海拔只有两级：卡片用 1px 描边，浮层才用阴影。</p>
+    </section>
+
+    <section class="doc-sec" id="action">
+      <div class="sec-h"><h2>动作</h2><span class="n">btn / icon-btn</span><span class="note">一行最多一个实心主按钮</span></div>
+      <div class="spec">
+        <div class="demo">
+          <button class="btn primary">主按钮</button>
+          <button class="btn">次按钮</button>
+          <button class="btn ghost">三级</button>
+          <button class="btn danger">危险</button>
+          <button class="btn" disabled>禁用</button>
+        </div>
+        <div class="meta"><code>.btn</code> + <code>.primary / .ghost / .danger</code><br>次按钮是 1px 描边方角，不再用胶囊；禁用态 45% 透明且不缩放。</div>
+      </div>
+      <div class="spec">
+        <div class="demo">
+          <button class="btn sm">小号</button>
+          <button class="btn sm on">已选</button>
+          <button class="icon-btn" aria-label="刷新"><svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3.5h-3.5"/></svg></button>
+          <button class="icon-btn primary" aria-label="添加"><svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></button>
+          <button class="icon-btn danger" aria-label="删除"><svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
+        </div>
+        <div class="meta"><code>.btn.sm</code> 26px，用于工具条；<code>.on</code> 是轻量选中态，不占用品牌蓝。图标按钮 30px、8px 方角，必须有 <code>aria-label</code>。</div>
+      </div>
+      <div class="spec">
+        <div class="demo">
+          <span class="chip">默认</span>
+          <span class="chip plain">中性</span>
+          <span class="chip green"><i class="dot"></i>就绪</span>
+          <span class="chip amber">冷却中</span>
+          <span class="chip red"><i class="dot"></i>已失效</span>
+        </div>
+        <div class="meta"><code>.chip</code> 22px / 6px 圆角；状态必须「颜色 + 文字」双编码，不能只靠颜色。</div>
+      </div>
+    </section>
+
+    <section class="doc-sec" id="form">
+      <div class="sec-h"><h2>表单</h2><span class="n">input / select / toggle / checkbox</span><span class="note">控件必须有名字</span></div>
+      <div class="spec">
+        <div class="demo" style="width:100%">
+          <input class="input" style="max-width:220px" placeholder="搜索账号、渠道、模型…" aria-label="示例输入">
+          <select class="select" style="max-width:150px" aria-label="示例下拉"><option>仅本机</option><option>局域网</option></select>
+          <textarea class="textarea" style="max-width:260px" placeholder="备注" aria-label="示例备注"></textarea>
+        </div>
+        <div class="meta">高度 34 / 圆角 10 / 1px 描边；聚焦时描边转品牌蓝并加 3px 柔光环。<code>placeholder</code> 不能替代标签。</div>
+      </div>
+      <div class="spec">
+        <div class="demo">
+          <button class="toggle on" role="switch" aria-checked="true" aria-label="示例开关"><i></i></button>
+          <button class="toggle" role="switch" aria-checked="false" aria-label="示例开关关"><i></i></button>
+          <label style="display:inline-flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" checked> 已选</label>
+          <label style="display:inline-flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox"> 未选</label>
+          <label style="display:inline-flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" checked disabled> 禁用</label>
+        </div>
+        <div class="meta">开关 36×20；复选框 16px / 4px 圆角，保留原生 <code>input</code>，可聚焦、空格切换。</div>
+      </div>
+    </section>
+
+    <section class="doc-sec" id="data">
+      <div class="sec-h"><h2>数据展示</h2><span class="n">kpi / meter / row</span><span class="note">数字用等宽数字</span></div>
+      <div class="spec">
+        <div class="demo" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;gap:12px">
+          <div class="kpi"><div class="k">可用账号</div><div class="v num">9</div><div class="d">6 个真实登录态 · 3 个测试渠道</div></div>
+          <div class="kpi"><div class="k">今日成功调用</div><div class="v num">272</div><div class="d">失败 6 · 成功率 97%</div></div>
+          <div class="kpi"><div class="k">今日 Token</div><div class="v num">31.8k</div><div class="d">缓存 12.1k · 成本 $0.00</div></div>
+        </div>
+        <div class="meta"><code>.kpi</code> 数值 32/600、行高 1.1；标签 12、说明 11。数值必须加 <code>.num</code>（tabular-nums）。</div>
+      </div>
+      <div class="spec">
+        <div class="demo" style="flex-direction:column;align-items:stretch;width:100%">
+          <div class="meter" style="margin-bottom:10px"><i style="width:84%"></i></div>
+          <div class="meter amber" style="margin-bottom:10px"><i style="width:38%"></i></div>
+          <div class="meter red"><i style="width:6%"></i></div>
+        </div>
+        <div class="meta"><code>.meter</code> 高 6 / 轨道 <code>--line</code>；口径统一为「剩余」：≤40% 琥珀、≤10% 红。0% 只剩轨道，属正常。</div>
+      </div>
+      <div class="spec">
+        <div class="demo" style="flex-direction:column;align-items:stretch;width:100%">
+          <div class="row"><span class="name">Antigravity · Claude</span><span class="grow"></span><span class="meta">剩余 84%</span></div>
+          <div class="row"><span class="name">Mock 原生渠道</span><span class="grow"></span><span class="meta">剩余 12%</span></div>
+        </div>
+        <div class="meta"><code>.row</code> 9px 纵向内边距，行间 1px 分隔；名称用 <code>--fg</code>，元信息用 <code>--faint</code>。</div>
+      </div>
+    </section>
+
+    <section class="doc-sec" id="container">
+      <div class="sec-h"><h2>容器与浮层</h2><span class="n">card / menu / toast</span><span class="note">卡片描边，浮层阴影</span></div>
+      <div class="spec">
+        <div class="demo" style="width:100%">
+          <section class="card" style="width:100%;max-width:420px">
+            <div class="card-h"><b>卡片标题</b><span class="chip plain">状态</span><span class="grow"></span><button class="btn sm">动作</button></div>
+            <div class="inset"><div class="row"><span class="name">内嵌块</span><span class="grow"></span><span class="meta">12px 圆角</span></div></div>
+          </section>
+        </div>
+        <div class="meta"><code>.card</code> 16px 圆角 + 1px 描边；<code>.inset</code> 用于卡内分组，背景 <code>--surface-2</code>。</div>
+      </div>
+      <div class="spec">
+        <div class="demo">
+          <div class="menu" style="position:static;box-shadow:var(--shadow-2)">
+            <button type="button">设置</button>
+            <button type="button" class="on">已选</button>
+            <div class="sep"></div>
+            <button type="button" class="danger">删除</button>
+          </div>
+          <div class="toast on" style="position:static;transform:none">已复制网关地址</div>
+        </div>
+        <div class="meta">菜单 12px 圆角、危险项标红并用分隔线隔开；Toast 只报结果，不承载需要操作的信息。</div>
+      </div>
+    </section>
+
+    <section class="doc-sec" id="state">
+      <div class="sec-h"><h2>加载与空态</h2><span class="n">skeleton / empty / error</span><span class="note">空态要给下一步</span></div>
+      <div class="spec">
+        <div class="demo" style="flex-direction:column;align-items:stretch;width:100%;gap:8px">
+          <div class="skeleton" style="width:78%"></div>
+          <div class="skeleton" style="width:62%"></div>
+          <div class="skeleton" style="width:44%"></div>
+        </div>
+        <div class="meta"><code>.skeleton</code> 1.2s 扫光；行数与真实内容接近，减少数据到达时的跳动。</div>
+      </div>
+      <div class="spec">
+        <div class="demo" style="width:100%">
+          <div class="empty" style="width:100%">
+            <b>还没有请求记录</b>
+            <div class="meta">发出第一个请求后，这里会画出曲线。</div>
+            <div style="margin-top:12px"><button class="btn sm">去接入一个渠道</button></div>
+          </div>
+        </div>
+        <div class="meta"><code>.empty</code> = 标题 + 一句解释 +（可选）一个下一步动作。不要只写「暂无数据」。</div>
+      </div>
+      <div class="spec">
+        <div class="demo" style="width:100%">
+          <div class="error-box" style="width:100%">读取失败：连接被拒绝 <button class="btn sm" style="margin-left:8px">重试</button></div>
+        </div>
+        <div class="meta"><code>.error-box</code> 说清「哪一步失败」并给重试，不用红色整页铺满。</div>
+      </div>
+    </section>
+
+    <section class="doc-sec" id="rules">
+      <div class="sec-h"><h2>规范</h2><span class="n">Do / Don't</span><span class="note">来自 2026-10-30 的返工</span></div>
+      <div class="two">
+        <div>
+          <h4 class="ok-t">这样做</h4>
+          <ul>
+            <li>一行最多一个实心主按钮，其余描边或纯文字</li>
+            <li>低频动作收进「更多」，危险项标红并加分隔线</li>
+            <li>筛选只更新状态，不重建工具条（否则输入框丢焦点）</li>
+            <li>数字加 tabular-nums，进度条统一「剩余」口径</li>
+            <li>空态给下一步动作；错误说清哪一步失败</li>
+            <li>新色值先进 tokens.css，再在别处 var()</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="no-t">不要这样</h4>
+          <ul>
+            <li>所有按钮都用胶囊，靠颜色区分主次</li>
+            <li>把构建时间、版本号放在每页标题栏</li>
+            <li>在不适用的页面渲染筛选控件</li>
+            <li>用 10–11px 承载正文，或用纯颜色表达状态</li>
+            <li>给整个 #app 加 aria-live</li>
+            <li>在 CSS 里直接写 #hex（lint 会拦）</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-sec" id="a11y">
+      <div class="sec-h"><h2>可访问性</h2><span class="n">AA</span><span class="note">由 scripts/ui-audit.mjs 守住</span></div>
+      <ul class="sec-p" style="line-height:1.9">
+        <li>正文对比度 ≥ 4.5:1；当前最低 <b>4.68:1</b>（三级灰压在灰底上），标题 16.7:1。</li>
+        <li>焦点环 2px 品牌蓝 + 2px 偏移，键盘可见、鼠标不打扰。Tab 第一站是「跳到主内容」。</li>
+        <li>图标按钮必须有 <code>aria-label</code>；表单控件必须有标签（label / aria-label）。</li>
+        <li>浮层：<code>role="dialog"</code> + 焦点陷阱 + Esc 关闭 + 关闭后焦点归位。</li>
+        <li>只用一个 <code>#status</code> 播报点，不把整页设成 live region。</li>
+        <li><code>prefers-reduced-motion</code> 下所有动画归零。</li>
+      </ul>
+      <div class="spec">
+        <div class="demo"><span class="focus-demo">聚焦态示例</span></div>
+        <div class="meta">焦点环用 <code>:focus-visible</code>，不要 <code>outline: none</code>。</div>
+      </div>
+    </section>
+
+    <footer class="doc-foot">
+      校验方式：<code>npm run ui:lint</code>（色值只允许在 tokens.css）、<code>npm run ui:audit</code>（对比度 / 溢出 / 命名 / 焦点）、<code>npm run ui-check</code>（冒烟）。
+      文档与产品共用同一份 CSS；若这里显示正常而产品不正常，说明产品页面写了局部覆盖。
+    </footer>
+  </main>
+</div>
+
+<script>
+  const SWATCHES = [
+    ['--primary-1', '品牌 / 主操作'], ['--primary-2', '主操作悬停'], ['--accent-soft', '选中底色'],
+    ['--fg', '标题 / 主数据'], ['--fg-2', '正文'], ['--muted', '次级说明'], ['--faint', '时间戳 / 单位'],
+    ['--line', '描边'], ['--line-2', '行分隔'], ['--bg', '页面底'], ['--card', '卡片'],
+    ['--surface-2', '内嵌块'], ['--green', '成功文字'], ['--green-fill', '成功填充'],
+    ['--red', '危险文字'], ['--red-fill', '危险填充'], ['--amber', '警告文字'], ['--amber-fill', '警告填充'],
+  ];
+  const root = document.documentElement;
+  const box = document.getElementById('swatches');
+  function hexOf(name) {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(' + name + ')';
+    document.body.append(probe);
+    const m = getComputedStyle(probe).color.match(/[\d.]+/g) || [];
+    probe.remove();
+    if (m.length < 3) return '—';
+    return '#' + m.slice(0, 3).map((v) => Number(v).toString(16).padStart(2, '0')).join('');
+  }
+  function paint() {
+    box.innerHTML = '';
+    for (const [name, use] of SWATCHES) {
+      const val = hexOf(name);
+      const el = document.createElement('div');
+      el.className = 'sw';
+      el.innerHTML = '<i style="background:var(' + name + ')"></i><b>' + name + '</b><span>' + val + '</span><em>' + use + '</em>';
+      box.append(el);
+    }
+    document.getElementById('themeNow').textContent = root.dataset.theme === 'dark' ? '深色' : '浅色';
+    document.getElementById('themeBtn').textContent = root.dataset.theme === 'dark' ? '切换浅色' : '切换深色';
+  }
+  document.getElementById('themeBtn').addEventListener('click', () => {
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    paint();
+  });
+  paint();
+</script>
+</body>
+</html>

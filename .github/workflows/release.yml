@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-amd64:
+    name: Build Windows amd64 release
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run Go static analysis
+        run: go vet ./...
+
+      - name: Run Go tests
+        run: go test ./... -count=1 -shuffle=on
+
+      - name: Install locked UI dependencies
+        run: npm ci
+
+      - name: Run UI tests and typecheck
+        shell: pwsh
+        run: |
+          npm run test:ui
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run ui:lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate release tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $metadata = Get-Content wails.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -cne "v$version") {
+            throw "Tag '$env:RELEASE_TAG' must match VERSION '$version' as v$version."
+          }
+          if ($metadata.info.productVersion -cne $version) {
+            throw "wails.json productVersion '$($metadata.info.productVersion)' must match VERSION '$version'."
+          }
+
+      - name: Build and package
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $buildTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $ldflags = "-s -w -X aether-cockpit/internal/core/gateway.BuildVersion=$version -X aether-cockpit/internal/core/gateway.BuildTime=$buildTime"
+          $packageName = "aether-cockpit-$version-windows-amd64"
+          $packageRoot = Join-Path $env:RUNNER_TEMP $packageName
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "release-assets"
+          New-Item -ItemType Directory -Force -Path $packageRoot, $artifactRoot | Out-Null
+
+          go run ./cmd/winres-icon
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -tags desktop,production -ldflags "-H windowsgui $ldflags" -o (Join-Path $packageRoot "AetherCockpit.exe") ./cmd/desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -ldflags $ldflags -o (Join-Path $packageRoot "aether-cockpit-cli.exe") ./cmd/cockpit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Copy-Item README.md, README.en.md, VERSION, CHANGELOG.md, NOTICE, LICENSE, PRIVACY.md, SECURITY.md, SUPPORT.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md -Destination $packageRoot
+          $docsRoot = Join-Path $packageRoot "docs"
+          New-Item -ItemType Directory -Force -Path $docsRoot | Out-Null
+          Copy-Item docs/README.md, docs/QUICKSTART.md, docs/FEATURES.md, docs/ADD_PROVIDER.md, docs/ARCHITECTURE.md, docs/FRONTEND.md, docs/DONATE.md -Destination $docsRoot
+          $imagesRoot = Join-Path $docsRoot "images"
+          New-Item -ItemType Directory -Force -Path $imagesRoot | Out-Null
+          Copy-Item docs/images/alipay.jpg, docs/images/wechat.jpg -Destination $imagesRoot
+          $readmeScreenshots = Join-Path $imagesRoot "screenshots"
+          New-Item -ItemType Directory -Force -Path $readmeScreenshots | Out-Null
+          Copy-Item docs/images/screenshots/*.png -Destination $readmeScreenshots
+          $licensesRoot = Join-Path $packageRoot "licenses"
+          New-Item -ItemType Directory -Force -Path $licensesRoot | Out-Null
+          Copy-Item internal/web/ui2/assets/fonts/OFL*.txt -Destination $licensesRoot
+          $installerRoot = Join-Path $packageRoot "installer"
+          New-Item -ItemType Directory -Force -Path $installerRoot | Out-Null
+          Copy-Item packaging/install.ps1, packaging/uninstall.ps1 -Destination $installerRoot
+
+          $binaryChecksums = Get-ChildItem $packageRoot -Filter *.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $binaryChecksums | Set-Content -Encoding ascii (Join-Path $packageRoot "SHA256SUMS.txt")
+
+          $zipPath = Join-Path $artifactRoot "$packageName.zip"
+          Compress-Archive -Path $packageRoot -DestinationPath $zipPath -CompressionLevel Optimal
+          $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$zipHash  $packageName.zip" | Set-Content -Encoding ascii (Join-Path $artifactRoot "SHA256SUMS.txt")
+
+      - name: Upload release assets for publishing
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub Release
+    needs: windows-amd64
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tag for release verification
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download release assets
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "release-assets"
+          $packageName = "aether-cockpit-$version-windows-amd64"
+          gh release create $env:RELEASE_TAG `
+            (Join-Path $artifactRoot "$packageName.zip") `
+            (Join-Path $artifactRoot "SHA256SUMS.txt") `
+            --title "Aether Cockpit $version" `
+            --generate-notes `
+            --verify-tag

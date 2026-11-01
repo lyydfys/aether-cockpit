@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go checks (Windows amd64)
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run static analysis
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test ./... -count=1 -shuffle=on
+
+      - name: Build CLI
+        shell: pwsh
+        run: go build -o (Join-Path $env:RUNNER_TEMP "aether-cockpit-cli.exe") ./cmd/cockpit
+
+      - name: Build desktop app
+        shell: pwsh
+        run: |
+          go run ./cmd/winres-icon
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -tags desktop,production -ldflags "-H windowsgui" -o "$env:RUNNER_TEMP\AetherCockpit.exe" ./cmd/desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  ui:
+    name: UI checks
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run UI unit tests
+        run: npm run test:ui
+
+      - name: Check UI types
+        run: npm run typecheck
+
+      - name: Lint UI design tokens
+        run: npm run ui:lint
+
+      - name: Check release metadata versions
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $metadata = Get-Content wails.json -Raw | ConvertFrom-Json
+          if ($metadata.info.productVersion -cne $version) {
+            throw "wails.json productVersion '$($metadata.info.productVersion)' must match VERSION '$version'."
+          }

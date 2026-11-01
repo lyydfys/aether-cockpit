@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a reproducible problem in Aether Cockpit.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, search existing issues. Never include API keys, OAuth tokens, account files, private endpoints, or unredacted logs.
+  - type: input
+    id: version
+    attributes:
+      label: Aether Cockpit version
+      description: Find this in Settings > About or run the CLI with -version.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows 11 x64
+        - Windows 10 x64
+        - Other (include details below)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest sequence that reproduces the problem. Redact account and provider data.
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove credentials, personal data, private URLs, and local usernames before attaching.
+    validations:
+      required: false

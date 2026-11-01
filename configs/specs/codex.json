@@ -1,0 +1,7 @@
+{
+  "provider_id": "codex",
+  "spec_version": "2026.10.27.1",
+  "endpoints": {
+    "chat": "/chat/completions"
+  }
+}

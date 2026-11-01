@@ -1,0 +1,29 @@
+{
+  "_comment": "复制为 data/clients.json 即可注册自定义 CLI 客户端（envfile 形态）。改完重启网关生效；路径必须是 ~/ 开头或绝对路径。",
+  "_comment_keys": "keys 里填该客户端实际读取的环境变量名；base_url_suffix 用于需要在地址后追加路径的客户端（如 Gemini 系用 /v1beta）。",
+  "clients": [
+    {
+      "id": "qwen_code",
+      "name": "Qwen Code",
+      "kind": "envfile",
+      "path": "~/.qwen/.env",
+      "note": "Qwen Code 是 Gemini CLI 的派生版，读 OPENAI_* 变量。",
+      "keys": {
+        "base_url": "OPENAI_BASE_URL",
+        "api_key": "OPENAI_API_KEY",
+        "model": "OPENAI_MODEL"
+      }
+    },
+    {
+      "id": "generic_cli",
+      "name": "任意 OpenAI 兼容 CLI（示例）",
+      "kind": "envfile",
+      "path": "~/.config/my-cli/.env",
+      "keys": {
+        "base_url": "OPENAI_BASE_URL",
+        "api_key": "OPENAI_API_KEY",
+        "base_url_suffix": ""
+      }
+    }
+  ]
+}
