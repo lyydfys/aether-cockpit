@@ -1,0 +1,297 @@
+/* Aether Cockpit · 设计令牌
+ *
+ * 单一事实源：本文件是唯一色值 / 字号 / 圆角 / 阴影 / 动效来源。
+ * 修订（2026-10-30）：
+ *   1. 字号基线 13 → 14，补 24 / 32 两档，11px 只留给时间戳与单位；
+ *   2. 圆角从「Material 气泡」收敛为「仪器」：8 / 10 / 12 / 16 / 24；
+ *   3. 描边 0.5px → 1px（0.5px 在 1x 屏会被取整成 1px，反而不稳定）；
+ *   4. 灰阶从 4 档扩到 5 档，正文对比度抬高；
+ *   5. 暗色卡片与背景拉开距离，品牌位不再用浅色块。
+ */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('../assets/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* 中文：随包内置的 Noto Sans SC 子集，由 scripts/build-font.py 生成（三个字重合计 1.6MB）。
+ *
+ * 之前汉字是交给系统字体的，结果是同一份设计在 Windows 是雅黑、macOS 是苹方、Linux 是 Noto，
+ * 字面高度和笔画粗细都不一样，还压不住雅黑没有 500 字重的问题。现在汉字有确定的字面。
+ *
+ * unicode-range 限定在 CJK 段：纯拉丁页面不会去取这三个文件；ASCII 一律走上面的 Inter。
+ * 子集覆盖 GB2312 一级汉字 + 仓库里出现过的全部字符，二级汉字（鑫、淼这类名字用字）
+ * 仍会回落到系统字体——要覆盖就改 build-font.py 的 LEVEL2 重跑。 */
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 400;
+  /* swap 而不是 block：汉字是全角等宽，换字不会引起任何重排，最多前一两帧字形略不同；
+     block 反而会让首帧出现「一段看不见的中文」，代价更大。 */
+  font-display: swap;
+  src: url('../assets/fonts/noto-sans-sc-400.woff2') format('woff2');
+  unicode-range: U+2000-206F, U+2E80-2EFF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../assets/fonts/noto-sans-sc-500.woff2') format('woff2');
+  unicode-range: U+2000-206F, U+2E80-2EFF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../assets/fonts/noto-sans-sc-600.woff2') format('woff2');
+  unicode-range: U+2000-206F, U+2E80-2EFF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+
+:root {
+  color-scheme: light;
+
+  /* ---- 间距：4pt ---- */
+  --sp-0: 0;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  /* ---- 圆角 ---- */
+  --r-1: 8px;
+  --r-2: 10px;
+  --r-3: 12px;
+  --r-4: 16px;
+  --r-5: 24px;
+  --r-pill: 999px;
+
+  /* ---- 字阶：12 / 14 / 16 / 18 / 20 / 24 / 32 / 40 ----
+   * 修订（2026-11-01）：
+   *   1. 11px 降级为「装饰专用」（--fs-2xs），只留给 kbd、图例、日历月份；
+   *      时间戳、单位、chip、表头一律 12px —— 11px 在 1x 屏只有 8 个物理像素高，不该承载语义；
+   *   2. 补 18px 卡片标题档：原来标题 16 与正文 14 只差 1.14 倍，层级只能靠字重硬撑；
+   *   3. 修 2xl / 3xl 命名反转（旧值 3xl=24 < 2xl=32），并补 40px 给 KPI 主数据。 */
+  --fs-2xs: 11px;
+  --fs-s: 12px;
+  --fs-m: 14px;
+  --fs-l: 16px;
+  --fs-l2: 18px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 32px;
+  --fs-4xl: 40px;
+  --lh-tight: 1.28;
+  --lh-body: 1.6;
+
+  /* ---- 动效 ---- */
+  --mo-fast: 120ms;
+  --mo-base: 180ms;
+  --mo-slow: 240ms;
+  --ease: cubic-bezier(.2, 0, 0, 1);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.4, 0, .2, 1);
+
+  --z-sticky: 10;
+  --z-float: 100;
+  --z-overlay: 1000;
+  --z-toast: 1100;
+
+  /* ---- 品牌与强调 ---- */
+  --primary-1: #1a73e8;
+  --primary-2: #175fc4;
+  --primary-soft: #e8f0fe;
+  --primary-grad: var(--primary-1);
+  --glow: 0 0 0 0 transparent;
+  --on-primary: #ffffff;
+  --on-danger: #ffffff;
+  --knob: #ffffff;
+  /* 单色品牌标在暗色下反相；浅色不动 */
+  --brand-filter: none;
+  --accent: #1a73e8;
+  --accent-strong: #17519c;
+  --accent-soft: #e8f0fe;
+
+  /* ---- 表面 ---- */
+  --bg: #f7f8fa;
+  --bg-grad: #f7f8fa;
+  --rail-bg: #ffffff;
+  --brand-plate: #ffffff;
+  --card: #ffffff;
+  --surface-2: #f1f3f6;
+  --pill: #f1f3f6;
+  --line: #dfe2e7;
+  --line-2: #ebedf1;
+  --line-strong: #c9ced6;
+
+  /* ---- 文本：5 档，逐档可测 ---- */
+  --fg: #17181b;        /* 15.9:1  标题、主数据 */
+  --fg-2: #3c4045;      /* 10.4:1  正文 */
+  --muted: #5b6067;     /*  6.2:1  次级说明 */
+  --faint: #666b73;     /*  4.8:1  时间戳、单位（灰底上仍过 AA） */
+  --disabled: #9aa0a8;  /*  仅灰控件，禁止用于正文 */
+
+  /* ---- 热力图色阶（唯一允许的非语义色） ---- */
+  --heat-0: #e4e6e9;
+  --heat-1: #b9d3f7;
+  --heat-2: #7fa9ea;
+  --heat-3: #4083dc;
+  --heat-4: #1a5fc0;
+
+  /* ---- 图表分类色板 ----
+   * 多序列图表必须有分类色，这不属于界面色系：界面依旧只有一种强调色，
+   * 这里只服务数据可视化。取值对齐 new-api（VChart / AntV 默认数据色板），
+   * 换主题不换色板——序列颜色是"身份"，跟着主题变会让图在切主题时读不出来。 */
+  --chart-1: #1664ff;
+  --chart-2: #1ac6ff;
+  --chart-3: #ff8a00;
+  --chart-4: #3cc780;
+  --chart-5: #7442d4;
+  --chart-6: #ffc400;
+  --chart-7: #304d77;
+  --chart-8: #b48deb;
+  --chart-9: #009488;
+  --chart-10: #ff7dda;
+
+  /* ---- 状态 ---- */
+  --green: #0f6b32;
+  --green-soft: #e5f3ea;
+  --green-fill: #1e9e52;
+  --red: #b3261e;
+  --red-soft: #fcebe9;
+  --red-fill: #d93a2b;
+  --amber: #8a5200;
+  --amber-soft: #fdf3e0;
+  --amber-fill: #e8a317;
+
+  /* ---- 海拔：卡片用描边，浮层才用阴影 ---- */
+  --card-shadow: 0 0 0 1px var(--line);
+  --card-shadow-hover: 0 0 0 1px var(--line-strong), 0 1px 2px rgba(16, 24, 40, .05);
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, .06), 0 0 0 1px rgba(16, 24, 40, .04);
+  --shadow-2: 0 12px 32px -8px rgba(16, 24, 40, .22), 0 2px 6px rgba(16, 24, 40, .06);
+  --focus-ring: rgba(26, 115, 232, .38);
+
+  /* 拉丁走 Inter、汉字走随包内置的 Noto Sans SC 子集；后面几档是兜底，
+     只在子集没覆盖到的生僻字（GB2312 二级汉字）上才会命中。 */
+  --font: 'Inter', 'Noto Sans SC', 'Microsoft YaHei UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei',
+    system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, monospace;
+  --code-font: var(--mono);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --primary-1: #8ab4f8;
+  --primary-2: #aecbfa;
+  --primary-soft: rgba(138, 180, 248, .14);
+  --on-primary: #10233f;
+  --on-danger: #2a0b08;
+  --knob: #ffffff;
+  --brand-filter: invert(1) brightness(1.25);
+  --accent: #8ab4f8;
+  --accent-strong: #c3dafc;
+  --accent-soft: rgba(138, 180, 248, .14);
+
+  --bg: #0f1115;
+  --bg-grad: #0f1115;
+  --rail-bg: #13161b;
+  --brand-plate: #1b1f26;
+  --card: #171a20;
+  --surface-2: #21252c;
+  --pill: #21252c;
+  --line: #2a2f37;
+  --line-2: #23272e;
+  --line-strong: #3b414b;
+
+  --fg: #e8eaee;
+  --fg-2: #cfd3da;
+  --muted: #a2a8b2;
+  --faint: #8b929c;
+  --disabled: #5f6670;
+
+  --heat-0: #262b33;
+  --heat-1: #1d3352;
+  --heat-2: #274c7d;
+  --heat-3: #3a6fb5;
+  --heat-4: #8ab4f8;
+
+  --green: #7fd39a;
+  --green-soft: rgba(127, 211, 154, .14);
+  --green-fill: #4cc27a;
+  --red: #f0a099;
+  --red-soft: rgba(240, 160, 153, .14);
+  --red-fill: #e5675c;
+  --amber: #e8c479;
+  --amber-soft: rgba(232, 196, 121, .14);
+  --amber-fill: #d9a53a;
+
+  --card-shadow: 0 0 0 1px var(--line);
+  --card-shadow-hover: 0 0 0 1px var(--line-strong), 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .35), 0 0 0 1px var(--line);
+  --shadow-2: 0 14px 36px -8px rgba(0, 0, 0, .6), 0 2px 8px rgba(0, 0, 0, .35);
+  --focus-ring: rgba(138, 180, 248, .45);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    color-scheme: dark;
+    --primary-1: #8ab4f8;
+    --primary-2: #aecbfa;
+    --primary-soft: rgba(138, 180, 248, .14);
+    --on-primary: #10233f;
+    /* 与显式 dark 块保持一致：这两处靠手工同步，漏一行就是一套界面两种结果 */
+    --on-danger: #2a0b08;
+    --brand-filter: invert(1) brightness(1.25);
+    --accent: #8ab4f8;
+    --accent-strong: #c3dafc;
+    --accent-soft: rgba(138, 180, 248, .14);
+
+    --bg: #0f1115;
+    --bg-grad: #0f1115;
+    --rail-bg: #13161b;
+    --brand-plate: #1b1f26;
+    --card: #171a20;
+    --surface-2: #21252c;
+    --pill: #21252c;
+    --line: #2a2f37;
+    --line-2: #23272e;
+    --line-strong: #3b414b;
+
+    --fg: #e8eaee;
+    --fg-2: #cfd3da;
+    --muted: #a2a8b2;
+    --faint: #8b929c;
+    --disabled: #5f6670;
+
+    --heat-0: #262b33;
+  --heat-1: #1d3352;
+  --heat-2: #274c7d;
+  --heat-3: #3a6fb5;
+  --heat-4: #8ab4f8;
+
+  --green: #7fd39a;
+    --green-soft: rgba(127, 211, 154, .14);
+    --green-fill: #4cc27a;
+    --red: #f0a099;
+    --red-soft: rgba(240, 160, 153, .14);
+    --red-fill: #e5675c;
+    --amber: #e8c479;
+    --amber-soft: rgba(232, 196, 121, .14);
+    --amber-fill: #d9a53a;
+
+    --card-shadow: 0 0 0 1px var(--line);
+    --card-shadow-hover: 0 0 0 1px var(--line-strong), 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .35), 0 0 0 1px var(--line);
+    --shadow-2: 0 14px 36px -8px rgba(0, 0, 0, .6), 0 2px 8px rgba(0, 0, 0, .35);
+    --focus-ring: rgba(138, 180, 248, .45);
+  }
+}

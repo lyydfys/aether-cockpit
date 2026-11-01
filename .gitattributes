@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.exe binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.db binary
+*.zstd binary
+
+# Windows PowerShell 脚本按 CRLF 检出（BOM 随文件保留）
+*.ps1 text eol=crlf

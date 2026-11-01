@@ -1,0 +1,384 @@
+// Package newprovider 是一个真实渠道的实现模板。
+//
+// 使用方法：
+//  1. 把本目录复制为 internal/providers/<你的渠道名>/，去掉 .tmpl 后缀；
+//  2. 改成你的 ProviderID / 域名 / 模型；
+//  3. 在 cmd/cockpit/main.go 里加一行匿名导入：
+//     _ "aether-cockpit/internal/providers/<你的渠道名>"
+//  4. 编译运行，管理界面会自动出现该渠道（前端零改动）。
+//
+// 你只需要实现三件事：
+//   - Manifest()：声明渠道能力，决定前端怎么渲染、路由怎么走；
+//   - ChatStream()：发请求 + 解流 + 吐出 IR 事件；
+//   - 可选能力：签到 / 配额 / 本机导入 / 刷新。
+//
+// 协议差异（OpenAI Responses 的事件树、Anthropic 的 content_block）
+// 全部由出站 transducer 处理，你不需要关心。
+package newprovider
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"aether-cockpit/internal/core/ir"
+	"aether-cockpit/internal/core/transport"
+	"aether-cockpit/internal/core/transport/wirecodec"
+	"aether-cockpit/internal/provider"
+)
+
+func init() {
+	provider.Register(&Provider{})
+}
+
+// Provider 是你的渠道实现。
+type Provider struct {
+	// 把易变的协议参数放这里，将来接远程热更新只需替换本结构体的来源。
+	spec Spec
+}
+
+// Spec 是该渠道的"策略"部分：域名、版本号、签名盐值等易变参数。
+// 把这些从代码里抽出来，上游升级时改 JSON 即可，不必重新发版。
+type Spec struct {
+	BaseURL       string
+	ClientVersion string
+	// HeadersTemplate 支持 {{.Fingerprint.DeviceID}} 等占位符。
+	HeadersTemplate map[string]string
+	// ChatPath 对话端点路径。
+	ChatPath string
+	// 各渠道特有的模型映射。
+	ModelMap map[string]string
+}
+
+func defaultSpec() Spec {
+	return Spec{
+		BaseURL:       "https://api.example.com",
+		ClientVersion: "1.0.0",
+		ChatPath:      "/v1/chat/completions",
+		HeadersTemplate: map[string]string{
+			"User-Agent":      "ExampleClient/{{.Fingerprint.ClientVersion}}",
+			"X-Device-Id":     "{{.Fingerprint.DeviceID}}",
+			"X-Machine-Id":    "{{.Fingerprint.MachineID}}",
+			"X-Client-Version": "{{.Fingerprint.ClientVersion}}",
+		},
+		ModelMap: map[string]string{
+			"claude-4-sonnet": "claude-sonnet-4-20250514",
+		},
+	}
+}
+
+// Manifest 声明渠道元数据。
+//
+// 字段怎么填，直接决定前端长什么样：
+//   - Tasks 决定"签到任务"表格有几行；
+//   - AuthFormSchema 决定"添加账号"表单有几个输入框；
+//   - Models 决定模型下拉列表；
+//   - RequiredMiddlewares 决定挂哪几个补偿中间件。
+func (p *Provider) Manifest() provider.ProviderManifest {
+	return provider.ProviderManifest{
+		ID:          "example",
+		DisplayName: "Example IDE",
+		Family:      "example",
+		RegionTag:   "CN", // 或 GLOBAL
+		BrandColor:  "#0EA5E9",
+		Description: "示例渠道：实现 ChatStream 即可获得完整的协议转换与工具调用能力。",
+
+		// 决定网络出口：CN 渠道务必 direct_force，否则会被异地登录风控。
+		NetworkPolicy: provider.NetPolicyDirectForce,
+
+		SupportedAuths: []provider.AuthMethod{
+			provider.AuthLocalImport,
+			provider.AuthManualInput,
+		},
+		AuthFormSchema: []provider.FormFieldSchema{
+			{Key: "access_token", Label: "Access Token", Type: "textarea", Required: true,
+				Help: "从客户端配置文件中提取"},
+		},
+
+		Tasks: []provider.TaskDefinition{
+			{TaskID: "daily_checkin", Title: "每日签到", CronDefault: "0 9 * * *"},
+		},
+
+		Models: []ir.ModelMeta{
+			{
+				ID:            "example/claude-4-sonnet",
+				UpstreamModel: "claude-sonnet-4-20250514",
+				DisplayName:   "Claude 4 Sonnet",
+				ContextWindow: 200000,
+				Capabilities:  ir.ModelCapabilities{ToolCall: true, Reasoning: true, Vision: true, Streaming: true},
+			},
+		},
+
+		// 若上游不支持原生 tools，加上 "xml_tool_call"；
+		// 若上游是有状态会话（要先进 conversation_id），加上 "stateful_session"；
+		// 若上游不接受 system 角色，加上 "system_role_merge"。
+		RequiredMiddlewares: []string{"stateful_session"},
+
+		Capabilities: provider.CapabilitySet{
+			Chat:    true,
+			CheckIn: true,
+			Quota:   true,
+		},
+	}
+}
+
+// ChatStream 是核心：把 IR 请求转成上游请求，再把上游流拆成 IR 事件。
+func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req *ir.UnifiedChatRequest) (<-chan ir.UnifiedStreamEvent, error) {
+	if env.HTTPClient == nil {
+		return nil, ir.NewAPIError(ir.ErrCodeInternal, "账号缺少 HTTP 客户端")
+	}
+
+	upstreamModel := req.UpstreamModel
+	if m, ok := p.spec.ModelMap[upstreamModel]; ok {
+		upstreamModel = m
+	}
+
+	// 上游若是"只认纯文本"的接口，用 ToSimpleMessages 一键退化。
+	// 若上游支持 tools，则直接用 req.Items / req.Tools 构造原生请求。
+	payload := map[string]any{
+		"model":    upstreamModel,
+		"stream":   true,
+		"messages": toOpenAIMessages(req),
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = toOpenAITools(req.Tools)
+	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
+	// 上游有状态会话：把网关算好的稳定指纹传过去，由上游决定复用还是新建。
+	if req.SessionKey != "" {
+		payload["session_key"] = req.SessionKey
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, ir.NewAPIError(ir.ErrCodeInternal, "请求序列化失败").WithCause(err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.spec.BaseURL+p.spec.ChatPath, bytes.NewReader(body))
+	if err != nil {
+		return nil, ir.NewAPIError(ir.ErrCodeInternal, "构造请求失败").WithCause(err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	if tok := env.GetCredential("access_token"); tok != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+tok)
+	}
+	// 按模板把账号指纹写进请求头：同一账号永远上报同一组设备标识。
+	transport.WithFingerprint(env.Fingerprint, p.spec.HeadersTemplate)(httpReq)
+
+	resp, err := env.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "上游连接失败").WithCause(err).WithRetryable(true)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, mapHTTPError(resp, env.ProviderID)
+	}
+
+	out := make(chan ir.UnifiedStreamEvent, 32)
+	go func() {
+		defer close(out)
+		defer resp.Body.Close()
+
+		// 按上游的线缆格式选解码器：
+		//   SSE  -> wirecodec.NewSSEDecoder
+		//   AWS  -> wirecodec.NewAWSEventStreamDecoder（Kiro 系二进制帧）
+		//   NDJSON -> wirecodec.NewNDJSONDecoder
+		dec := wirecodec.NewSSEDecoder(resp.Body)
+
+		for {
+			frame, err := dec.Next()
+			if err != nil {
+				// io.EOF 是正常结束；其他错误作为 EventError 抛出。
+				break
+			}
+			data := strings.TrimSpace(string(frame.Data))
+			if data == "" || data == "[DONE]" {
+				if data == "[DONE]" {
+					break
+				}
+				continue
+			}
+
+			// 解析上游 chunk。这里以 OpenAI 兼容格式为例，
+			// 换成该渠道的真实结构即可。
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content          string `json:"content"`
+						ReasoningContent string `json:"reasoning_content"`
+						ToolCalls        []struct {
+							Index    int    `json:"index"`
+							ID       string `json:"id"`
+							Function struct {
+								Name      string `json:"name"`
+								Arguments string `json:"arguments"`
+							} `json:"function"`
+						} `json:"tool_calls"`
+					} `json:"delta"`
+					FinishReason string `json:"finish_reason"`
+				} `json:"choices"`
+				Usage *struct {
+					PromptTokens     int `json:"prompt_tokens"`
+					CompletionTokens int `json:"completion_tokens"`
+					TotalTokens      int `json:"total_tokens"`
+				} `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue // 跳过无法解析的心跳帧
+			}
+
+			if chunk.Usage != nil {
+				emit(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: &ir.Usage{
+					InputTokens:  chunk.Usage.PromptTokens,
+					OutputTokens: chunk.Usage.CompletionTokens,
+					TotalTokens:  chunk.Usage.TotalTokens,
+				}})
+			}
+
+			for _, ch := range chunk.Choices {
+				if ch.Delta.ReasoningContent != "" {
+					emit(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventReasoningDelta, TextDelta: ch.Delta.ReasoningContent})
+				}
+				if ch.Delta.Content != "" {
+					emit(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventTextDelta, TextDelta: ch.Delta.Content})
+				}
+				for _, tc := range ch.Delta.ToolCalls {
+					if tc.Function.Name != "" {
+						// 有 name 说明是新工具调用的起点。
+						emit(ctx, out, ir.UnifiedStreamEvent{
+							Type:       ir.EventToolCallStart,
+							ToolCallID: tc.ID,
+							ToolName:   tc.Function.Name,
+						})
+					}
+					if tc.Function.Arguments != "" {
+						emit(ctx, out, ir.UnifiedStreamEvent{
+							Type:       ir.EventToolCallDelta,
+							ToolCallID: tc.ID,
+							ArgsDelta:  tc.Function.Arguments,
+						})
+					}
+				}
+				if ch.FinishReason != "" {
+					emit(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventDone, FinishReason: ch.FinishReason})
+					return
+				}
+			}
+		}
+
+		// 上游没发结束标记时兜底。
+		emit(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventDone, FinishReason: "stop"})
+	}()
+
+	return out, nil
+}
+
+// ExecuteTasks 实现签到能力。删掉这个方法即表示该渠道不支持签到，
+// 管理界面上的签到按钮会自动消失（靠能力接口探测，不需要额外开关）。
+func (p *Provider) ExecuteTasks(ctx context.Context, env *provider.AccountEnv, taskIDs []string) (*provider.CheckInReport, error) {
+	report := &provider.CheckInReport{Success: true}
+
+	for _, id := range taskIDs {
+		// 真实实现：用 env.HTTPClient 发签到请求。
+		// 注意串行 + 抖动，不要并发打卡。
+		report.Results = append(report.Results, provider.TaskResult{
+			TaskID:  id,
+			Success: true,
+			Points:  100,
+		})
+		report.EarnedPoints += 100
+	}
+	report.Message = fmt.Sprintf("签到完成 +%d", report.EarnedPoints)
+	return report, nil
+}
+
+// QueryQuota 实现配额查询。返回的 ExpiresAt 决定加权路由的临期优先级。
+func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*provider.QuotaStatus, error) {
+	return &provider.QuotaStatus{
+		Total:     1000,
+		Remaining: 800,
+		Unit:      "积分",
+	}, nil
+}
+
+// --- 辅助 ---
+
+// mapHTTPError 把上游状态码翻译成内核错误，决定是否换账号重试。
+func mapHTTPError(resp *http.Response, providerID string) error {
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return ir.NewAPIError(ir.ErrCodeUpstreamAuth, "上游凭证失效").WithProvider(providerID).WithStatus(401)
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return ir.NewAPIError(ir.ErrCodeUpstreamRateLimit, "上游限流").WithProvider(providerID).WithRetryable(true).WithStatus(429)
+	case resp.StatusCode >= 500:
+		return ir.NewAPIError(ir.ErrCodeUpstreamFailed, fmt.Sprintf("上游 %d", resp.StatusCode)).
+			WithProvider(providerID).WithRetryable(true).WithStatus(502)
+	default:
+		return ir.NewAPIError(ir.ErrCodeUpstreamFailed, fmt.Sprintf("上游返回 %d", resp.StatusCode)).
+			WithProvider(providerID).WithStatus(502)
+	}
+}
+
+func emit(ctx context.Context, out chan<- ir.UnifiedStreamEvent, ev ir.UnifiedStreamEvent) {
+	select {
+	case out <- ev:
+	case <-ctx.Done():
+	}
+}
+
+// toOpenAIMessages 把 IR 转成上游要的 messages 数组。
+func toOpenAIMessages(req *ir.UnifiedChatRequest) []map[string]any {
+	msgs := make([]map[string]any, 0, len(req.Items)+1)
+	if req.Instructions != "" {
+		msgs = append(msgs, map[string]any{"role": "system", "content": req.Instructions})
+	}
+	for _, it := range req.Items {
+		switch it.Type {
+		case ir.ItemTypeMessage:
+			msgs = append(msgs, map[string]any{"role": it.Role, "content": it.Text})
+		case ir.ItemTypeReasoning:
+			// 上游若支持 reasoning_content 就带上，否则丢弃。
+			if it.Text != "" {
+				msgs = append(msgs, map[string]any{"role": "assistant", "content": it.Text, "reasoning_content": it.Text})
+			}
+		case ir.ItemTypeFunctionCall:
+			msgs = append(msgs, map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id":       it.CallID,
+					"type":     "function",
+					"function": map[string]any{"name": it.Name, "arguments": it.Arguments},
+				}},
+			})
+		case ir.ItemTypeFunctionCallOutput:
+			msgs = append(msgs, map[string]any{
+				"role":         "tool",
+				"tool_call_id": it.CallID,
+				"content":      it.Output,
+			})
+		}
+	}
+	return msgs
+}
+
+func toOpenAITools(tools []ir.UnifiedToolSpec) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		fn := map[string]any{"name": t.Name, "description": t.Description}
+		if len(t.Parameters) > 0 {
+			var schema any
+			if err := json.Unmarshal(t.Parameters, &schema); err == nil {
+				fn["parameters"] = schema
+			}
+		}
+		out = append(out, map[string]any{"type": "function", "function": fn})
+	}
+	return out
+}

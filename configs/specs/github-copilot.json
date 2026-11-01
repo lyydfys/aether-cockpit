@@ -1,0 +1,14 @@
+{
+  "provider_id": "github-copilot",
+  "spec_version": "2026.10.30.1",
+  "base_url": "https://api.githubcopilot.com",
+  "endpoints": {
+    "chat": "/chat/completions"
+  },
+  "headers_template": {
+    "Copilot-Integration-Id": "vscode-chat",
+    "Editor-Version": "vscode/1.99.0",
+    "X-Initiator": "agent",
+    "User-Agent": "GitHubCopilotChat/0.26.7"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "_comment": "复制为 cockpit.json 后按需修改。所有字段均可省略。",
+  "addr": "127.0.0.1:7860",
+  "api_key": "",
+  "global_proxy": "socks5://127.0.0.1:7890",
+  "snapshot_path": "data/state.json",
+  "sqlite_path": "data/state.db",
+  "account_store_path": "data/accounts.json",
+  "state_ttl_minutes": 120,
+  "max_records": 2000,
+  "first_byte_timeout_seconds": 60,
+  "max_attempts": 3,
+  "max_concurrent_per_account": 8,
+  "rpm_per_account": 0,
+  "quota_refresh_minutes": 30,
+  "token_refresh_minutes": 10,
+  "token_refresh_lead_minutes": 30,
+  "disable_fast_path": false,
+  "spec_dir": "configs/specs",
+  "spec_remote_url": "",
+  "spec_update_minutes": 10,
+
+  "_comment_model_groups": "虚拟模型聚合组：客户端固定用一个模型名，网关按链依次尝试。某渠道额度耗尽或 429 时自动切下一个，客户端无需改配置。链内顺序即优先级。",
+  "model_groups": {
+    "auto/claude-sonnet": ["mock-responses", "mock-native", "mock-weak"],
+    "auto/free": ["mock-weak", "mock-native"]
+  }
+}
