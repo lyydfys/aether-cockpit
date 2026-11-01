@@ -1,6 +1,9 @@
 package antigravity
 
 import (
+	"os"
+	"strings"
+
 	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/provider"
 )
@@ -73,19 +76,35 @@ var manifestModels = []ir.ModelMeta{
 
 // Manifest 声明渠道元数据与登录方式。
 func (p *Provider) Manifest() provider.ProviderManifest {
+	clientID := strings.TrimSpace(os.Getenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID"))
+	clientSecret := strings.TrimSpace(os.Getenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET"))
+	auths := []provider.AuthMethod{provider.AuthLocalImport}
+	var oauth *provider.OAuthConfig
+	if clientID != "" && clientSecret != "" {
+		auths = append(auths, provider.AuthOAuthPKCE)
+		oauth = &provider.OAuthConfig{
+			AuthorizeURL: "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL:     tokenEndpoint,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			Scopes:       oauthScopes,
+			RedirectPath: "/api/auth/callback/antigravity",
+			ExtraAuthParams: map[string]string{
+				"access_type": "offline",
+				"prompt":      "consent",
+			},
+		}
+	}
+	auths = append(auths, provider.AuthManualInput)
 	return provider.ProviderManifest{
-		ID:            "antigravity",
-		DisplayName:   "Antigravity",
-		Family:        "antigravity",
-		RegionTag:     "GLOBAL",
-		BrandColor:    "#F59E0B",
-		Description:   "Antigravity 渠道（Google Cloud Code Assist）。支持从本机客户端凭据管理器导入，或 Google OAuth / 手动令牌登录；模型可用 antigravity/<模型名>。",
-		NetworkPolicy: provider.NetPolicyProxyFirst,
-		SupportedAuths: []provider.AuthMethod{
-			provider.AuthLocalImport,
-			provider.AuthOAuthPKCE,
-			provider.AuthManualInput,
-		},
+		ID:             "antigravity",
+		DisplayName:    "Antigravity",
+		Family:         "antigravity",
+		RegionTag:      "GLOBAL",
+		BrandColor:     "#F59E0B",
+		Description:    "Antigravity 渠道（Google Cloud Code Assist）。支持从本机客户端凭据管理器导入，或 Google OAuth / 手动令牌登录；模型可用 antigravity/<模型名>。",
+		NetworkPolicy:  provider.NetPolicyProxyFirst,
+		SupportedAuths: auths,
 		AuthFormSchema: []provider.FormFieldSchema{
 			{
 				Key: "access_token", Label: "Access Token", Type: "password", Required: true,
@@ -103,18 +122,7 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 				Help:        "留空时首次请求会自动调用 loadCodeAssist 发现",
 			},
 		},
-		OAuth: &provider.OAuthConfig{
-			AuthorizeURL: "https://accounts.google.com/o/oauth2/v2/auth",
-			TokenURL:     tokenEndpoint,
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			Scopes:       oauthScopes,
-			RedirectPath: "/oauth-callback",
-			ExtraAuthParams: map[string]string{
-				"access_type": "offline",
-				"prompt":      "consent",
-			},
-		},
+		OAuth:               oauth,
 		Models:              manifestModels,
 		RequiredMiddlewares: []string{"stateful_session"},
 		Capabilities: provider.CapabilitySet{

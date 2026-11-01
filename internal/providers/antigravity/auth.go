@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -24,11 +25,8 @@ import (
 	"aether-cockpit/internal/provider"
 )
 
-// Antigravity 的公开客户端参数。这些值与官方客户端一致，属于公开信息。
+// Antigravity OAuth client credentials are provided by the user.
 const (
-	clientID     = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-	clientSecret = "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"
-
 	tokenEndpoint = "https://oauth2.googleapis.com/token"
 	dailyBaseURL  = "https://daily-cloudcode-pa.googleapis.com"
 
@@ -37,6 +35,21 @@ const (
 
 	tokenSafetyWindow = 5 * time.Minute
 )
+
+func antigravityOAuthClientCredentials(env *provider.AccountEnv) (string, string, error) {
+	clientID := strings.TrimSpace(env.GetCredential("oauth_client_id"))
+	clientSecret := strings.TrimSpace(env.GetCredential("oauth_client_secret"))
+	if clientID == "" {
+		clientID = strings.TrimSpace(os.Getenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID"))
+	}
+	if clientSecret == "" {
+		clientSecret = strings.TrimSpace(os.Getenv("AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET"))
+	}
+	if clientID == "" || clientSecret == "" {
+		return "", "", fmt.Errorf("Antigravity token refresh requires oauth_client_id/oauth_client_secret or AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID/AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET")
+	}
+	return clientID, clientSecret, nil
+}
 
 var oauthScopes = []string{
 	"https://www.googleapis.com/auth/cloud-platform",
@@ -75,6 +88,10 @@ func (p *Provider) ensureAccessToken(ctx context.Context, env *provider.AccountE
 
 // refreshAccessToken 使用 refresh_token 换新 access_token，并写回账号。
 func (p *Provider) refreshAccessToken(ctx context.Context, env *provider.AccountEnv, refreshToken string) error {
+	clientID, clientSecret, err := antigravityOAuthClientCredentials(env)
+	if err != nil {
+		return ir.NewAPIError(ir.ErrCodeUpstreamAuth, err.Error()).WithProvider("antigravity")
+	}
 	form := url.Values{}
 	form.Set("client_id", clientID)
 	form.Set("client_secret", clientSecret)

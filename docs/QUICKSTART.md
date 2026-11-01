@@ -48,6 +48,7 @@ powershell -ExecutionPolicy Bypass -File installer/install.ps1 -AutoStart   # �
 - **数据目录**：默认 `./data`；设置环境变量 `AETHER_DATA_DIR=D:\AetherData` 可整体搬迁（桌面端与无头 CLI 都生效）。
 - **更新检查**：「设置 → 关于 → 重新检查」会读取环境变量 `AETHER_UPDATE_URL` 指向的 JSON 清单（`{"version","url","notes","published_at","sha256","size"}`）；未配置时如实提示"未配置更新源"。清单带 `sha256` 时可用「下载更新」把更新包下载到 `AETHER_DOWNLOAD_DIR`（默认用户 Downloads）并校验；只下载，不自动替换运行中的程序。
 - **日志**：`data/logs/aether.log`，单文件 5 MB 滚动，保留一份历史；panic 会连同堆栈写入。
+- **Google OAuth 刷新**：Antigravity 与 Gemini CLI 账号刷新需要你自己的 OAuth 客户端凭据。Antigravity 使用 `AETHER_ANTIGRAVITY_OAUTH_CLIENT_ID` 和 `AETHER_ANTIGRAVITY_OAUTH_CLIENT_SECRET`；Gemini CLI 使用 `AETHER_GEMINI_CLI_OAUTH_CLIENT_ID` 和 `AETHER_GEMINI_CLI_OAUTH_CLIENT_SECRET`，也可在账号凭据中设置 `oauth_client_id` 与 `oauth_client_secret`。Antigravity 的 OAuth 登录按钮只会在客户端凭据已配置时显示。凭据不随仓库发布；已导入且未过期的访问令牌仍可使用，到期刷新前请配置客户端。
 - **构建工具链**：`go.mod` 固定 `toolchain go1.27.3`（修复了 go1.27.0 的 11 个标准库漏洞）；首次构建会自动拉取该工具链。
 
 ## 6. 常见问题
