@@ -63,10 +63,10 @@ export function icon(name, size = 16, stroke = 1.5) {
 const BRAND = `
 <path fill="#1A73E8" d="M54,20 C35.22,20 20,33.43 20,50 C20,59.39 24.87,67.76 32.22,73.19 L28,88 L43.55,83.33 C46.86,84.45 50.36,85 54,85 C72.78,85 88,71.57 88,55 C88,38.43 72.78,20 54,20 Z"/>
 <path fill="#FFFFFF" d="M54,34 L57,47 L70,50 L57,53 L54,66 L51,53 L38,50 L51,47 Z"/>
-<path fill="#CCFFFFFF" d="M36,34.5 A3.5,3.5 0,1 1,36,41.5 A3.5,3.5 0,1 1,36,34.5 Z"/>
-<path fill="#CCFFFFFF" d="M72,58.5 A3.5,3.5 0,1 1,72,65.5 A3.5,3.5 0,1 1,72,58.5 Z"/>
-<path fill="#80FFFFFF" d="M42,65.5 A2.5,2.5 0,1 1,42,70.5 A2.5,2.5 0,1 1,42,65.5 Z"/>
-<path fill="#80FFFFFF" d="M66,34 A2,2 0,1 1,66,38 A2,2 0,1 1,66,34 Z"/>
+<path fill="#CCFFFF" d="M36,34.5 A3.5,3.5 0,1 1,36,41.5 A3.5,3.5 0,1 1,36,34.5 Z"/>
+<path fill="#CCFFFF" d="M72,58.5 A3.5,3.5 0,1 1,72,65.5 A3.5,3.5 0,1 1,72,58.5 Z"/>
+<path fill="#80FFFF" d="M42,65.5 A2.5,2.5 0,1 1,42,70.5 A2.5,2.5 0,1 1,42,65.5 Z"/>
+<path fill="#80FFFF" d="M66,34 A2,2 0,1 1,66,38 A2,2 0,1 1,66,34 Z"/>
 <circle cx="77" cy="75" r="11" fill="#FFFFFF" stroke="#13A99B" stroke-width="1.7"/>
 <path d="M72.5 75 H81.5" fill="none" stroke="#1A73E8" stroke-width="2.2" stroke-linecap="round"/>
 <circle cx="72.5" cy="75" r="2.1" fill="#13A99B"/>
