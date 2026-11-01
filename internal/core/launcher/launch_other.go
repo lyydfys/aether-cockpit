@@ -19,3 +19,7 @@ func startGuiDetached(exe string, args []string, env []string) (int, error) {
 func killTree(pid int) error {
 	return errors.New("应用多开目前仅支持 Windows（macOS / Linux 支持在规划中）")
 }
+
+// processAlive 非 Windows 占位：多开/进程探测依赖 Windows tasklist。
+// 返回 false 表示无法确认存活，让调用方失败关闭，而不是把未启动当成功。
+func processAlive(pid int) bool { return false }

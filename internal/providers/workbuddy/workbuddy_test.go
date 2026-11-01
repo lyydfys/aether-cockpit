@@ -36,8 +36,11 @@ func TestManifest(t *testing.T) {
 		if m.ID != tc.id || m.Family != "workbuddy" {
 			t.Fatalf("%s manifest = %+v", tc.id, m)
 		}
-		if !m.Capabilities.Chat || !m.Capabilities.LocalImport {
-			t.Fatalf("%s 能力位 = %+v", tc.id, m.Capabilities)
+		if !m.Capabilities.Chat {
+			t.Fatalf("%s Chat 能力 = %+v", tc.id, m.Capabilities)
+		}
+		if m.Capabilities.LocalImport != localImportSupported {
+			t.Fatalf("%s LocalImport = %v, want %v", tc.id, m.Capabilities.LocalImport, localImportSupported)
 		}
 		if len(m.Models) != tc.models {
 			t.Fatalf("%s 模型数 = %d, want %d", tc.id, len(m.Models), tc.models)
@@ -400,6 +403,9 @@ func TestParseLocalAuthNicknameFallback(t *testing.T) {
 }
 
 func TestParseLocalAuthSealedEnvelope(t *testing.T) {
+	if !localImportSupported {
+		t.Skip("本机登录态解密仅 Windows")
+	}
 	raw := []byte(`{
 	  "auth": {"accessToken": {"suite": "aes-256-gcm", "ciphertext": "c2VhbGVk"}},
 	  "account": {"uid": "uid-1", "nickname": "账号"}
@@ -422,6 +428,9 @@ func TestParseLocalAuthSealedEnvelope(t *testing.T) {
 }
 
 func TestDiscoverLocalAccountsFromLocalAppData(t *testing.T) {
+	if !localImportSupported {
+		t.Skip("本机登录态导入仅 Windows")
+	}
 	dir := t.TempDir()
 	authDir := filepath.Join(dir, "CodeBuddyExtension", "Data", "Public", "auth")
 	if err := os.MkdirAll(authDir, 0o700); err != nil {
@@ -453,6 +462,9 @@ func TestDiscoverLocalAccountsFromLocalAppData(t *testing.T) {
 }
 
 func TestDiscoverLocalAccountsMissing(t *testing.T) {
+	if !localImportSupported {
+		t.Skip("本机登录态导入仅 Windows")
+	}
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 
 	p := newProvider(intlProfile)

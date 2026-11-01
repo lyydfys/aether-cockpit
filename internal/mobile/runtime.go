@@ -1,4 +1,9 @@
-package mobilebridge
+// Package mobile owns the process-wide mobile gateway lifecycle.
+//
+// This slice serves only the anonymous /healthz endpoint. Gateway wiring,
+// persistence and Flush are added by later slices; Flush must not exist as a
+// no-op success before there is state to flush.
+package mobile
 
 import (
 	"context"
@@ -20,17 +25,23 @@ const (
 	StateFailed   = "failed"
 )
 
-// Config is the narrow lifecycle input for the Android host. DataDir is owned by
-// the host; the runtime never derives a path from the process environment.
-type Config struct {
+// RuntimeConfig is the single lifecycle input for the mobile runtime. DataDir
+// is owned by the Android host; the runtime never derives it from the process
+// environment or the current working directory.
+type RuntimeConfig struct {
 	DataDir    string `json:"dataDir"`
 	ListenHost string `json:"listenHost"`
 	Port       int    `json:"port"`
-	Platform   string `json:"platform"`
+	// AdminSessionKey and CallerKeyRequired are carried for the Stage 2
+	// management-auth layer. This slice serves only /healthz, so neither is
+	// enforced here; the key is never logged.
+	AdminSessionKey   string `json:"adminSessionKey,omitempty"`
+	CallerKeyRequired bool   `json:"callerKeyRequired,omitempty"`
+	Platform          string `json:"platform"`
 }
 
-// Status is the JSON contract shared with the host ABI.
-type Status struct {
+// RuntimeStatus is the JSON contract shared with the host ABI.
+type RuntimeStatus struct {
 	State     string `json:"state"`
 	Addr      string `json:"addr,omitempty"`
 	StartedAt int64  `json:"startedAt,omitempty"`
@@ -59,7 +70,8 @@ type Runtime struct {
 
 // Start validates the host-owned path, binds 127.0.0.1 only and returns only
 // after the listener is accepting. Port 0 asks the system for a free port.
-func Start(ctx context.Context, cfg Config) (*Runtime, error) {
+// iOS is a separate milestone and is rejected until its host exists.
+func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	if cfg.DataDir == "" {
 		return nil, &StartError{Code: "data_dir_required", Err: errors.New("data dir is required")}
 	}
@@ -110,10 +122,10 @@ func Start(ctx context.Context, cfg Config) (*Runtime, error) {
 	return rt, nil
 }
 
-func (r *Runtime) Status() Status {
+func (r *Runtime) Status() RuntimeStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return Status{State: r.state, Addr: r.addr, StartedAt: r.startedAt, ErrorCode: r.errorCode}
+	return RuntimeStatus{State: r.state, Addr: r.addr, StartedAt: r.startedAt, ErrorCode: r.errorCode}
 }
 
 // Stop shuts the listener down and waits for Serve to return, so a successful
