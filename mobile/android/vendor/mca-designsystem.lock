@@ -1,0 +1,15 @@
+# Pinned MCA design-system artifact consumed by Aether Cockpit Mobile.
+# Two clean publishes from sourceRevision produced byte-identical files.
+coordinate=com.muyuchat.mca:designsystem:0.1.0
+repository=mca-maven
+artifactBase=com/muyuchat/mca/designsystem/0.1.0
+license=MIT
+sourceProject=MCA
+sourceBranch=release/designsystem-0.1.0
+sourceRevision=950f92c2a5b42cad47a257bc5c14f79ef678def7
+publishedAtUtc=2026-11-01T17:35:09Z
+reproducible=true
+aarSha256=edbe669391c2e721fb21113b96880d8696ce0006ff8b0cf6ac89784846f452c0
+pomSha256=700ef8bc3c85ee4ca1844b43dd27c02a0e3e74ea71a45b1374e5db167fbf9818
+moduleSha256=1ad7af0f2b20016e9354b6c30b211acb4b57f4f04ed9ca55d870a4b037b45d4c
+sourcesSha256=e3d750df1efe8a5ed3545d4053de509233514b1736adb22c37b85dba881be96f

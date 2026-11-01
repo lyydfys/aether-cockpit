@@ -1,0 +1,5 @@
+*.aar binary
+*.jar binary
+*.pom binary
+*.module binary
+*.xml binary
