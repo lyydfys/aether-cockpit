@@ -148,6 +148,7 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 			LocalInject: localInjectSupported,
 			Refresh:     true,
 			CheckIn:     true,
+			Quota:       true,
 		},
 	}
 }
