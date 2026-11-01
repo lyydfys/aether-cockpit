@@ -16,6 +16,7 @@ import (
 	"time"
 	"unsafe"
 
+	"aether-cockpit/internal/mobile"
 	"aether-cockpit/internal/mobilebridge"
 )
 
@@ -29,14 +30,14 @@ func nativeBridgeVersion(buffer *C.char, capacity C.int) C.int {
 
 var bridge struct {
 	mu sync.Mutex
-	rt *mobilebridge.Runtime
+	rt *mobile.Runtime
 }
 
 //export nativeStart
 func nativeStart(configJSON *C.char, out *C.char, capacity C.int) C.int {
 	if configJSON == nil {
-		return writeResult(out, capacity, encodeStatus(mobilebridge.Status{
-			State:     mobilebridge.StateFailed,
+		return writeResult(out, capacity, encodeStatus(mobile.RuntimeStatus{
+			State:     mobile.StateFailed,
 			ErrorCode: "invalid_config",
 		}))
 	}
@@ -54,31 +55,31 @@ func nativeStop(out *C.char, capacity C.int) C.int {
 }
 
 func start(configJSON string) string {
-	var cfg mobilebridge.Config
+	var cfg mobile.RuntimeConfig
 	decoder := json.NewDecoder(strings.NewReader(configJSON))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
-		return encodeStatus(mobilebridge.Status{State: mobilebridge.StateFailed, ErrorCode: "invalid_config"})
+		return encodeStatus(mobile.RuntimeStatus{State: mobile.StateFailed, ErrorCode: "invalid_config"})
 	}
 
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 	if bridge.rt != nil {
 		status := bridge.rt.Status()
-		if status.State == mobilebridge.StateRunning ||
-			status.State == mobilebridge.StateStarting ||
-			status.State == mobilebridge.StateStopping {
+		if status.State == mobile.StateRunning ||
+			status.State == mobile.StateStarting ||
+			status.State == mobile.StateStopping {
 			return encodeStatus(status)
 		}
 	}
-	rt, err := mobilebridge.Start(context.Background(), cfg)
+	rt, err := mobile.Start(context.Background(), cfg)
 	if err != nil {
 		code := "start_failed"
-		var startErr *mobilebridge.StartError
+		var startErr *mobile.StartError
 		if errors.As(err, &startErr) {
 			code = startErr.Code
 		}
-		return encodeStatus(mobilebridge.Status{State: mobilebridge.StateFailed, ErrorCode: code})
+		return encodeStatus(mobile.RuntimeStatus{State: mobile.StateFailed, ErrorCode: code})
 	}
 	bridge.rt = rt
 	return encodeStatus(rt.Status())
@@ -88,7 +89,7 @@ func currentStatus() string {
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 	if bridge.rt == nil {
-		return encodeStatus(mobilebridge.Status{State: mobilebridge.StateStopped})
+		return encodeStatus(mobile.RuntimeStatus{State: mobile.StateStopped})
 	}
 	return encodeStatus(bridge.rt.Status())
 }
@@ -98,7 +99,7 @@ func stop() string {
 	rt := bridge.rt
 	bridge.mu.Unlock()
 	if rt == nil {
-		return encodeStatus(mobilebridge.Status{State: mobilebridge.StateStopped})
+		return encodeStatus(mobile.RuntimeStatus{State: mobile.StateStopped})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -110,7 +111,7 @@ func stop() string {
 	return encodeStatus(status)
 }
 
-func encodeStatus(status mobilebridge.Status) string {
+func encodeStatus(status mobile.RuntimeStatus) string {
 	data, err := json.Marshal(status)
 	if err != nil {
 		return `{"state":"failed","errorCode":"encode_failed"}`
