@@ -14,8 +14,11 @@ import (
 
 func testConfig(t *testing.T) RuntimeConfig {
 	t.Helper()
+	base := t.TempDir()
 	return RuntimeConfig{
-		DataDir:    filepath.Join(t.TempDir(), "aether"),
+		DataDir:    filepath.Join(base, "aether"),
+		CacheDir:   filepath.Join(base, "files-cache"),
+		TempDir:    filepath.Join(base, "cache-tmp"),
 		ListenHost: "127.0.0.1",
 		Port:       0,
 		Platform:   "android",
@@ -58,8 +61,17 @@ func TestStartHealthStop(t *testing.T) {
 	if st.State != StateRunning || st.Addr == "" {
 		t.Fatalf("status = %+v", st)
 	}
-	if info, err := os.Stat(cfg.DataDir); err != nil || !info.IsDir() {
-		t.Fatalf("data dir %s: %v", cfg.DataDir, err)
+	paths := rt.Paths()
+	for _, dir := range []string{paths.DataDir, paths.UsageDir, paths.CacheDir, paths.TempDir} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("dir %s: %v", dir, err)
+		}
+	}
+	if want := filepath.Join(cfg.DataDir, "state.db"); paths.StateDB != want {
+		t.Fatalf("StateDB = %q, want %q", paths.StateDB, want)
+	}
+	if _, err := os.Stat(paths.StateDB); !os.IsNotExist(err) {
+		t.Fatalf("state.db must not be created before the state layer: %v", err)
 	}
 	if got := getHealth(t, st.Addr); got != `{"status":"ok"}` {
 		t.Fatalf("health = %q", got)
@@ -135,6 +147,29 @@ func TestStartRejectsInvalidPort(t *testing.T) {
 		if !errors.As(err, &se) || se.Code != "invalid_port" {
 			t.Fatalf("port %d err = %v, want invalid_port", port, err)
 		}
+	}
+}
+
+func TestStartRejectsInvalidPaths(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*RuntimeConfig)
+	}{
+		{"empty-cache", func(c *RuntimeConfig) { c.CacheDir = "" }},
+		{"empty-temp", func(c *RuntimeConfig) { c.TempDir = "" }},
+		{"relative-cache", func(c *RuntimeConfig) { c.CacheDir = "relative-cache" }},
+		{"duplicate-roots", func(c *RuntimeConfig) { c.CacheDir = c.TempDir }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			tc.mutate(&cfg)
+			_, err := Start(context.Background(), cfg)
+			var se *StartError
+			if !errors.As(err, &se) || se.Code != "invalid_paths" {
+				t.Fatalf("err = %v, want invalid_paths", err)
+			}
+		})
 	}
 }
 
