@@ -1071,6 +1071,9 @@ func vscodeUserDir(home string) string {
 		}
 		return filepath.Join(base, "Code", "User")
 	}
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(home, "Library", "Application Support", "Code", "User")
+	}
 	return filepath.Join(home, ".config", "Code", "User")
 }
 

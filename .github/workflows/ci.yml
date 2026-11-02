@@ -39,6 +39,10 @@ jobs:
         shell: pwsh
         run: go build -o (Join-Path $env:RUNNER_TEMP "aether-cockpit-cli.exe") ./cmd/cockpit
 
+      - name: Cross-build core for macOS
+        shell: bash
+        run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ./cmd/cockpit ./internal/core/... ./internal/providers/...
+
       - name: Build desktop app
         shell: pwsh
         run: |

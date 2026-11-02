@@ -87,7 +87,8 @@ export function createShell({ navigate }) {
       else window.runtime.WindowMaximise();
     };
     const max = tbBtn('maximize', '最大化', toggleMax);
-    const close = tbBtn('x', '关闭', () => window.runtime.Quit());
+    // macOS 的红色关闭按钮只关窗，应用继续留在菜单栏/托盘；Windows 保持退出。
+    const close = tbBtn('x', '关闭', () => isMac ? window.runtime.WindowHide() : window.runtime.Quit());
     max.classList.add('tb-max');
     max.replaceChildren(icon('maximize', 12, 1.1), icon('restore', 12, 1.1));
     max.firstChild.classList.add('i-max');

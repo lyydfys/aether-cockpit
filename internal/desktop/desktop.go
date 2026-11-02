@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,9 @@ func (a *App) switchPort(addr string) (string, error) {
 
 // Run 启动桌面端，阻塞直到用户退出。
 func Run() {
+	// 必须在 logging/apppaths 读取路径之前完成：macOS .app 的工作目录是
+	// /，不能沿用 Windows 便携版的 ./data。
+	preparePlatform()
 	if cleanup, err := logging.Setup(logging.DefaultPath()); err == nil {
 		defer cleanup()
 	} else {
@@ -119,6 +123,7 @@ func Run() {
 	cfg := gateway.Config{
 		Addr:             "127.0.0.1:7860",
 		DesktopApp:       true,
+		Platform:         platformCapabilities(),
 		SnapshotPath:     apppaths.Data("state.json"),
 		SQLitePath:       apppaths.Data("state.db"),
 		AccountStorePath: apppaths.Data("accounts.json"),
@@ -197,8 +202,17 @@ func Run() {
 		// 无边框 + 自绘标题栏：Windows 上是 44px 一体式标题栏（拖拽区 + 窗口控制），
 		// 原生菜单由标题栏「⋯」与托盘菜单接管，避免标题栏下面再压一条菜单条。
 		Frameless: true,
+		Menu:      platformMenu(app),
 		AssetServer: &assetserver.Options{
 			Handler: host,
+		},
+		OnBeforeClose: func(ctx context.Context) bool {
+			if runtime.GOOS == "darwin" {
+				// macOS 关窗只隐藏，网关和菜单栏继续运行；真正退出走 ⌘Q/托盘。
+				wailsruntime.WindowHide(ctx)
+				return true
+			}
+			return false
 		},
 		OnStartup: func(ctx context.Context) {
 			app.ctx = ctx

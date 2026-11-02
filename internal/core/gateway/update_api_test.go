@@ -342,3 +342,20 @@ func TestGitHubAssetDownloadRejectsForeignHost(t *testing.T) {
 		t.Fatal("令牌被发送到了非配置主机")
 	}
 }
+
+func TestPickGitHubAssetByOS(t *testing.T) {
+	assets := []githubAsset{
+		{Name: "aether-cockpit-0.2.0-windows-amd64.zip"},
+		{Name: "aether-cockpit-0.2.0-macos-universal.zip"},
+		{Name: "aether-cockpit-0.2.0.exe"},
+	}
+	if got := pickGitHubAsset(assets, "darwin"); got == nil || !strings.Contains(got.Name, "macos") {
+		t.Fatalf("darwin 应选 macos zip: %+v", got)
+	}
+	if got := pickGitHubAsset(assets, "windows"); got == nil || !strings.Contains(got.Name, "windows") {
+		t.Fatalf("windows 应选 windows zip: %+v", got)
+	}
+	if got := pickGitHubAsset([]githubAsset{{Name: "aether-cockpit-0.2.0-windows-amd64.zip"}}, "darwin"); got != nil {
+		t.Fatalf("darwin 不应回退到 Windows 包: %+v", got)
+	}
+}

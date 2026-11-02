@@ -2,6 +2,13 @@
 
 ## 未发布
 
+### macOS 桌面（预览）
+
+- 新增 macOS 平台启动层：数据目录落到 `~/Library/Application Support/AetherCockpit`、登录 shell PATH 合并、单实例锁、菜单栏托盘与标准 App/Edit 菜单、LaunchAgent 登录自启。
+- Claude Code / Codex CLI 一键启动改为 Terminal.app 新窗口，并通过临时脚本回收真实 PID；桌面端多开按独立进程组启动。
+- 更新检查按平台选择资产：macOS 只接受 `macos/darwin/osx/universal` 包，不再把 Windows zip 当成 mac 更新；没有对应包时退回下载页。
+- 复用现有 ui2 前端与 Wails 壳；新增 `desktop-macos.yml` 在 macOS runner 构建 unsigned universal `.app`，正式分发仍需签名与公证。
+
 ### 应用启动
 
 - 识别 Microsoft Store / MSIX 版 Claude 桌面端：读取包清单里的 AUMID 并经 `shell:AppsFolder` 激活，不再把已安装的 Claude 误报为“不可用”。

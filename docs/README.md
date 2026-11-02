@@ -18,6 +18,7 @@
 | [新增渠道](ADD_PROVIDER.md) | Provider、spec、协议映射与本机导入扩展 |
 | [架构说明](ARCHITECTURE.md) | 模块边界、请求路径、路由与持久化设计 |
 | [前端说明](FRONTEND.md) | 管理界面结构与本地开发 |
+| [macOS 桌面构建](MACOS.md) | 平台适配、Wails 构建与当前限制 |
 | [贡献指南](../CONTRIBUTING.md) | 工具链、检查命令、提交与 PR 流程 |
 | [安全政策](../SECURITY.md) | 漏洞报告和凭证/日志处理要求 |
 

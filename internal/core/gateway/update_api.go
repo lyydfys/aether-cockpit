@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -254,9 +255,12 @@ func (g *Gateway) mergeGitHubUpdate(ctx context.Context, client *http.Client, re
 	payload["published_at"] = rel.PublishedAt
 	payload["available"] = compareVersions(latest, BuildVersion) > 0
 
-	asset := pickGitHubAsset(rel.Assets)
+	asset := pickGitHubAsset(rel.Assets, runtime.GOOS)
 	if asset == nil {
 		payload["downloadable"] = false
+		if runtime.GOOS == "darwin" {
+			payload["reason"] = "当前 Release 没有 macOS 安装包"
+		}
 		return
 	}
 	payload["downloadable"] = true
@@ -335,30 +339,47 @@ func fetchGitHubRelease(ctx context.Context, client *http.Client, repo, token, a
 	}
 }
 
-func pickGitHubAsset(assets []githubAsset) *githubAsset {
-	zipBest, zipAny, exe := -1, -1, -1
+// pickGitHubAsset 按目标平台挑安装包。不能把 Windows zip 当成 macOS 更新：
+// 下载入口只负责校验和保存，用户拿到错误平台包才会真正踩坑。
+func pickGitHubAsset(assets []githubAsset, goos string) *githubAsset {
+	contains := func(name string, parts ...string) bool {
+		for _, p := range parts {
+			if strings.Contains(name, p) {
+				return true
+			}
+		}
+		return false
+	}
+	zipFirst, zipAny, exe := -1, -1, -1
 	for i := range assets {
 		name := strings.ToLower(assets[i].Name)
 		switch {
 		case strings.HasSuffix(name, ".zip"):
-			if strings.Contains(name, "windows") || strings.Contains(name, "win-") ||
-				strings.Contains(name, "amd64") || strings.Contains(name, "x64") {
-				if zipBest < 0 {
-					zipBest = i
-				}
-			} else if zipAny < 0 {
+			match := false
+			switch goos {
+			case "darwin":
+				match = contains(name, "macos", "darwin", "osx", "universal")
+			case "windows":
+				match = contains(name, "windows", "win-", "amd64", "x64")
+			default:
+				match = true
+			}
+			if match && zipFirst < 0 {
+				zipFirst = i
+			}
+			if zipAny < 0 {
 				zipAny = i
 			}
-		case strings.HasSuffix(name, ".exe"):
+		case goos == "windows" && strings.HasSuffix(name, ".exe"):
 			if exe < 0 {
 				exe = i
 			}
 		}
 	}
 	switch {
-	case zipBest >= 0:
-		return &assets[zipBest]
-	case zipAny >= 0:
+	case zipFirst >= 0:
+		return &assets[zipFirst]
+	case goos == "" && zipAny >= 0:
 		return &assets[zipAny]
 	case exe >= 0:
 		return &assets[exe]

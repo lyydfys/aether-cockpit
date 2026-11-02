@@ -1,8 +1,8 @@
 package desktop
 
 import (
-	_ "embed"
 	"fmt"
+	"runtime"
 
 	systray "github.com/energye/systray"
 	"github.com/wailsapp/wails/v2/pkg/menu"
@@ -25,8 +25,11 @@ func (a *App) runTray() {
 }
 
 func (a *App) onTrayReady() {
-	systray.SetIcon(makeTrayIcon())
-	systray.SetTitle("Aether Cockpit")
+	setTrayIcon()
+	if runtime.GOOS != "darwin" {
+		// macOS 菜单栏不放长标题，图标 + tooltip 即可，避免挤占状态栏。
+		systray.SetTitle("Aether Cockpit")
+	}
 	systray.SetTooltip("Aether Cockpit · 本地算力网关 " + a.addr)
 
 	// energye/systray 用回调式 API：每个菜单项注册自己的 Click 处理。
@@ -85,6 +88,9 @@ func (a *App) stopTray() {
 // buildAppMenu 构造应用菜单（macOS 菜单栏 / Windows 窗口菜单）。
 func buildAppMenu(a *App) *menu.Menu {
 	m := menu.NewMenu()
+	// macOS 需要标准 App/Edit 菜单（关于、隐藏、⌘Q、复制粘贴）。
+	m.Append(menu.AppMenu())
+	m.Append(menu.EditMenu())
 
 	file := m.AddSubmenu("文件")
 	file.Append(menu.Text("复制网关地址", keys.CmdOrCtrl("c"), func(_ *menu.CallbackData) {
@@ -106,9 +112,11 @@ func buildAppMenu(a *App) *menu.Menu {
 	return m
 }
 
-//go:embed tray.ico
-var trayIconICO []byte
-
-// makeTrayIcon 返回 MAC 品牌 ICO（与 build/windows/icon.ico 同源）。
-// Windows 托盘要求 ICO 字节，PNG 不会被识别。
-func makeTrayIcon() []byte { return trayIconICO }
+// platformMenu 只在 macOS 安装应用菜单；Windows 继续用自绘标题栏与托盘，
+// 避免给窗口再压一条原生菜单。
+func platformMenu(a *App) *menu.Menu {
+	if runtime.GOOS == "darwin" {
+		return buildAppMenu(a)
+	}
+	return nil
+}

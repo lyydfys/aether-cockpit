@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"aether-cockpit/internal/core/clients"
-	"aether-cockpit/internal/core/executil"
 )
 
 // 一键启动前的接入：把「本网关」写进客户端的正常用户配置。
@@ -197,16 +195,4 @@ func backupLauncherFile(path string) error {
 		_ = os.Remove(matches[i])
 	}
 	return nil
-}
-
-// processRunning 用 tasklist 判断某个应用是否已经在运行（桌面端配置需要
-// 重启后才重新读取）。
-func processRunning(image string) bool {
-	cmd := exec.Command("tasklist", "/FI", "IMAGENAME eq "+image, "/NH")
-	executil.Hide(cmd)
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(image))
 }
