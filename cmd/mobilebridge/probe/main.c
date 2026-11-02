@@ -18,6 +18,8 @@ typedef int (*stop_fn)(char *, int);
 
 static const char *CONFIG =
     "{\"dataDir\":\"/data/local/tmp/aether-mobilebridge/data\","
+    "\"cacheDir\":\"/data/local/tmp/aether-mobilebridge/cache\","
+    "\"tempDir\":\"/data/local/tmp/aether-mobilebridge/tmp\","
     "\"listenHost\":\"127.0.0.1\",\"port\":0,\"platform\":\"android\"}";
 
 static void load_symbol(void *handle, const char *name, void *target, size_t target_size) {
