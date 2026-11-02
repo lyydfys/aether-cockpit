@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"aether-cockpit/internal/core/apppaths"
 )
 
 const (
@@ -26,10 +28,13 @@ const (
 )
 
 // RuntimeConfig is the single lifecycle input for the mobile runtime. DataDir
-// is owned by the Android host; the runtime never derives it from the process
-// environment or the current working directory.
+// is <noBackupFilesDir>/aether, CacheDir is <filesDir>/aether/cache and TempDir
+// is <cacheDir>/aether/tmp; all are absolute and host-provided. The runtime
+// never derives them from the process environment or working directory.
 type RuntimeConfig struct {
 	DataDir    string `json:"dataDir"`
+	CacheDir   string `json:"cacheDir"`
+	TempDir    string `json:"tempDir"`
 	ListenHost string `json:"listenHost"`
 	Port       int    `json:"port"`
 	// AdminSessionKey and CallerKeyRequired are carried for the Stage 2
@@ -66,6 +71,7 @@ type Runtime struct {
 	errorCode string
 	server    *http.Server
 	done      chan struct{}
+	paths     apppaths.Paths
 }
 
 // Start validates the host-owned path, binds 127.0.0.1 only and returns only
@@ -88,8 +94,14 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	if cfg.Platform != "android" {
 		return nil, &StartError{Code: "unsupported_platform", Err: fmt.Errorf("platform %q is not supported", cfg.Platform)}
 	}
-	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
-		return nil, &StartError{Code: "data_dir_failed", Err: err}
+	paths, err := apppaths.NewPaths(cfg.DataDir, cfg.CacheDir, cfg.TempDir)
+	if err != nil {
+		return nil, &StartError{Code: "invalid_paths", Err: err}
+	}
+	for _, dir := range []string{paths.DataDir, paths.UsageDir, paths.CacheDir, paths.TempDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, &StartError{Code: "data_dir_failed", Err: err}
+		}
 	}
 
 	lc := net.ListenConfig{}
@@ -114,6 +126,7 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		startedAt: time.Now().Unix(),
 		server:    &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second},
 		done:      make(chan struct{}),
+		paths:     paths,
 	}
 	go func() {
 		defer close(rt.done)
@@ -126,6 +139,11 @@ func (r *Runtime) Status() RuntimeStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return RuntimeStatus{State: r.state, Addr: r.addr, StartedAt: r.startedAt, ErrorCode: r.errorCode}
+}
+
+// Paths returns the immutable host-provided path set owned by this runtime.
+func (r *Runtime) Paths() apppaths.Paths {
+	return r.paths
 }
 
 // Stop shuts the listener down and waits for Serve to return, so a successful

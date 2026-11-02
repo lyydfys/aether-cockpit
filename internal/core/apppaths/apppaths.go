@@ -1,5 +1,8 @@
-// Package apppaths 统一 data 目录解析：环境变量 AETHER_DATA_DIR 可整体搬迁，
-// 未设置时保持便携默认（当前目录的 data/）。
+// Package apppaths 统一桌面/headless 的 data 目录解析：环境变量 AETHER_DATA_DIR
+// 可整体搬迁，未设置时保持便携默认（当前目录的 data/）。
+//
+// 移动运行时不得使用 Base/Data；它使用 NewPaths 返回的不可变 Paths，由 Android
+// host 显式注入 noBackup/files/cache 根目录。
 package apppaths
 
 import (
