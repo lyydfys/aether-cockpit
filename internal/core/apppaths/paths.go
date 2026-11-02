@@ -10,12 +10,13 @@ import (
 //
 // DataDir is <noBackupFilesDir>/aether, CacheDir is <filesDir>/aether/cache and
 // TempDir is <cacheDir>/aether/tmp. All roots are absolute; the runtime derives
-// StateDB and UsageDir under DataDir and never falls back to Base() or the
-// process working directory.
+// StateDB, UsageDir and LogPath under DataDir and never falls back to Base() or
+// the process working directory.
 type Paths struct {
 	DataDir  string
 	StateDB  string
 	UsageDir string
+	LogPath  string
 	CacheDir string
 	TempDir  string
 }
@@ -53,6 +54,7 @@ func NewPaths(dataDir, cacheDir, tempDir string) (Paths, error) {
 		DataDir:  cleanData,
 		StateDB:  filepath.Join(cleanData, "state.db"),
 		UsageDir: filepath.Join(cleanData, "usage"),
+		LogPath:  filepath.Join(cleanData, "logs", "aether.log"),
 		CacheDir: cleanCache,
 		TempDir:  cleanTemp,
 	}, nil
