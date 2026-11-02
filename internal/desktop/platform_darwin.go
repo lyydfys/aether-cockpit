@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"aether-cockpit/internal/core/gateway"
 )
 
 // preparePlatform 处理 macOS .app 与命令行启动的差异：
@@ -65,17 +63,6 @@ func lastNonEmptyLine(s string) string {
 		}
 	}
 	return ""
-}
-
-// platformCapabilities 关闭 Windows 专属能力；本地客户端探测保留。
-func platformCapabilities() *gateway.PlatformCapabilities {
-	return &gateway.PlatformCapabilities{
-		WSL:                 false,
-		WindowsAutoImport:   false,
-		LocalSessions:       true,
-		KeepAwake:           false,
-		CLIProcessDiscovery: true,
-	}
 }
 
 func mergeSearchPath(current, extra string) string {

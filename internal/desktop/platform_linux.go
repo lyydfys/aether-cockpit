@@ -7,19 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"aether-cockpit/internal/core/gateway"
 )
-
-func platformCapabilities() *gateway.PlatformCapabilities {
-	return &gateway.PlatformCapabilities{
-		WSL:                 false,
-		WindowsAutoImport:   false,
-		LocalSessions:       true,
-		KeepAwake:           false,
-		CLIProcessDiscovery: true,
-	}
-}
 
 func preparePlatform() {
 	if strings.TrimSpace(os.Getenv("AETHER_DATA_DIR")) != "" {

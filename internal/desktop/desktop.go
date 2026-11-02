@@ -123,7 +123,6 @@ func Run() {
 	cfg := gateway.Config{
 		Addr:             "127.0.0.1:7860",
 		DesktopApp:       true,
-		Platform:         platformCapabilities(),
 		SnapshotPath:     apppaths.Data("state.json"),
 		SQLitePath:       apppaths.Data("state.db"),
 		AccountStorePath: apppaths.Data("accounts.json"),
