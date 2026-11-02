@@ -39,16 +39,22 @@ func DesktopApps() []DesktopApp {
 func detectDesktopApps() []DesktopApp {
 	out := make([]DesktopApp, 0, 2)
 
-	// Claude 桌面端：安装后注册 claude:// 协议；用它启动会自动复用已开实例。
+	// Claude 桌面端：传统安装包注册 claude:// 协议；Microsoft Store/MSIX
+	// 安装的包把协议写在包清单里，不落 HKCU，必须用 AUMID 激活。
 	if claudeExe := claudeDesktopExe(); hasClaudeProtocol() {
 		out = append(out, DesktopApp{
 			ID: "claude_desktop", Name: "Claude 桌面端", Available: true,
 			Target: "claude://", Executable: claudeExe, Note: "使用当前用户目录与登录态",
 		})
+	} else if target, exe := claudeMSIXTarget(); target != "" {
+		out = append(out, DesktopApp{
+			ID: "claude_desktop", Name: "Claude 桌面端", Available: true,
+			Target: target, Executable: exe, Note: "Microsoft Store 安装；使用当前用户目录与登录态",
+		})
 	} else {
 		out = append(out, DesktopApp{
 			ID: "claude_desktop", Name: "Claude 桌面端", Available: false,
-			Reason: "未检测到 claude:// 协议或 Claude 桌面端安装",
+			Reason: "未检测到 claude:// 协议或 Claude 桌面端安装（含 Microsoft Store 版）",
 		})
 	}
 
@@ -90,10 +96,66 @@ func claudeDesktopExe() string {
 }
 
 func hasClaudeProtocol() bool {
-	cmd := exec.Command("reg", "query", `HKCU\Software\Classes\claude\shell\open\command`)
+	for _, key := range []string{
+		`HKCU\Software\Classes\claude\shell\open\command`,
+		`HKCR\claude\shell\open\command`,
+		`HKLM\Software\Classes\claude\shell\open\command`,
+	} {
+		cmd := exec.Command("reg", "query", key)
+		executil.Hide(cmd)
+		out, err := cmd.CombinedOutput()
+		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// claudeMSIXTarget 读取 Microsoft Store 版 Claude 的 AUMID 与安装目录。
+// 包清单里的 Application Id 可能是 Claude，也可能随版本变化，所以从
+// AppxManifest 里按可执行文件名查，而不是硬编码 "!Claude"。
+func claudeMSIXTarget() (target, exe string) {
+	const script = `$p = Get-AppxPackage Claude | Select-Object -First 1
+if (-not $p) { exit 1 }
+$m = Get-AppxPackageManifest $p
+$a = $m.Package.Applications.Application | Where-Object { $_.Executable -like '*Claude.exe' } | Select-Object -First 1
+if (-not $a) { $a = $m.Package.Applications.Application | Select-Object -First 1 }
+if (-not $a) { exit 1 }
+Write-Output ($p.PackageFamilyName + '!' + $a.Id)
+Write-Output $p.InstallLocation`
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	executil.Hide(cmd)
-	out, err := cmd.CombinedOutput()
-	return err == nil && len(strings.TrimSpace(string(out))) > 0
+	out, err := cmd.Output()
+	if err != nil {
+		return "", ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return "", ""
+	}
+	family := strings.TrimSpace(lines[0])
+	install := strings.TrimSpace(strings.Join(lines[1:], " "))
+	return claudeMSIXTargetFrom(family, install)
+}
+
+// claudeMSIXTargetFrom 是 claudeMSIXTarget 的纯解析部分，便于单测。
+func claudeMSIXTargetFrom(family, install string) (target, exe string) {
+	family = strings.TrimSpace(family)
+	install = strings.TrimSpace(install)
+	if family == "" || !strings.Contains(family, "!") {
+		return "", ""
+	}
+	target = `shell:AppsFolder\` + family
+	for _, rel := range []string{
+		filepath.Join("app", "Claude.exe"),
+		"Claude.exe",
+	} {
+		p := filepath.Join(install, rel)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return target, p
+		}
+	}
+	return target, ""
 }
 
 func codexDesktopTarget() (target, exe string) {
@@ -156,6 +218,9 @@ func LaunchDesktopApp(id string) error {
 		}
 		switch id {
 		case "claude_desktop":
+			if strings.HasPrefix(app.Target, "shell:") {
+				return startGUI("explorer.exe", app.Target)
+			}
 			return startGUI("rundll32.exe", "url.dll,FileProtocolHandler", app.Target)
 		case "codex_desktop":
 			if strings.HasPrefix(app.Target, "shell:") {

@@ -2,6 +2,10 @@
 
 ## 未发布
 
+### 应用启动
+
+- 识别 Microsoft Store / MSIX 版 Claude 桌面端：读取包清单里的 AUMID 并经 `shell:AppsFolder` 激活，不再把已安装的 Claude 误报为“不可用”。
+
 ### 安全与正确性
 
 - 修复：只开启脱敏规则、未开启 privacy_mask 时，Responses 流式直通会绕过脱敏；Fast-Path 现在同时检查 privacy 与 redact 引擎。
