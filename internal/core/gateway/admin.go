@@ -348,6 +348,9 @@ func (g *Gateway) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		// QuotaError 是最近一次额度读取失败的原因，账号卡直接展示，
 		// 用户不用去翻日志猜为什么没有数字。
 		QuotaError string `json:"quota_error,omitempty"`
+		// QuotaSupported=false 表示该渠道根本没有额度接口：页面应明确
+		// 显示“不支持额度窗口”，而不是留一块加载失败的空白。
+		QuotaSupported bool `json:"quota_supported"`
 	}
 
 	// 同渠道、同身份/同主密钥的账号视为重复：排序后第一个为基准，
@@ -359,9 +362,14 @@ func (g *Gateway) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			AccountSnapshot: e.Snapshot(),
 			CheckinToday:    g.checkinToday(e.AccountID),
 		}
-		if p, ok := provider.Get(e.ProviderID); ok && checkinSupported(p) {
-			v.CheckinSupported = true
-			v.Checkin = g.todayCheckinCard(e.AccountID)
+		if p, ok := provider.Get(e.ProviderID); ok {
+			if m := p.Manifest(); m.Capabilities.Quota {
+				v.QuotaSupported = true
+			}
+			if checkinSupported(p) {
+				v.CheckinSupported = true
+				v.Checkin = g.todayCheckinCard(e.AccountID)
+			}
 		}
 		if msg, _ := g.quotaFailure(e.AccountID); msg != "" {
 			v.QuotaError = msg

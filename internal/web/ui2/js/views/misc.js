@@ -16,6 +16,24 @@ export const agents = {
         const st = await api.get('state');
         const list = st.agents || [];
         if (!list.length) { host.append(empty('没有检测到 agent', '安装 Claude Code / Codex CLI 等后刷新。')); return; }
+        let drift = {};
+        try { drift = await api.get('drift') || {}; } catch { /* 漂移检测失败不影响接入列表 */ }
+        const driftIds = Object.keys(drift);
+        if (driftIds.length) {
+          host.append(h('div', { class: 'row', style: 'align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--amber);border-radius:8px' },
+            h('span', { class: 'name' }, '检测到 ' + driftIds.length + ' 个 Agent 的配置已被外部改动'),
+            h('span', { class: 'meta' }, driftIds.slice(0, 6).join('、') + (driftIds.length > 6 ? '…' : '')),
+            h('span', { class: 'grow' }),
+            btn('重新写入', { primary: true, onClick: async () => {
+              try {
+                const out = await api.post('drift/apply', { ids: driftIds });
+                const n = (out.applied || []).length;
+                const failed = Object.keys(out.errors || {});
+                toast(n ? '已重新写入 ' + n + ' 个 Agent' : (failed.length ? '写入失败：' + out.errors[failed[0]] : '没有需要写入的配置'));
+                await load();
+              } catch (e) { toast('写入失败：' + (e.message || e)); }
+            } })));
+        }
         const grid = h('div', { class: 'grid-2' });
         await Promise.all(list.map(async (a) => {
           const c = card(a.name || a.id);

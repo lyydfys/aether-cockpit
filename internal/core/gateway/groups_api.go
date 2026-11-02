@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -35,6 +36,7 @@ type routingGroupDef struct {
 	Chain    []string
 	Routing  string
 	Pick     string
+	Affinity string
 	Auto     bool
 	Fast     []string
 	Off      []string
@@ -64,22 +66,56 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// groupStrategyFor 把页面上的路由方式映射到内核策略。
-func groupStrategyFor(routing string) string {
+// groupStrategySupport 把页面上的路由方式映射到内核策略。
+//
+// 第二个返回值表示该方式是否真的被内核实现。free/weight/cheap/fastest
+// 这类尚未接入路由器的选项不能静默伪装成 priority：调用方必须把它
+// 作为 warning 返回给页面，或拒绝保存。
+func groupStrategySupport(routing string) (string, bool) {
 	switch routing {
 	case "rotate":
-		return GroupStrategyRotate
-	case "usage":
-		return GroupStrategyPace
-	case "pace":
-		return GroupStrategyPace
+		return GroupStrategyRotate, true
+	case "usage", "pace":
+		return GroupStrategyPace, true
 	case "fast":
-		return GroupStrategyFast
+		return GroupStrategyFast, true
 	case "", "smart":
-		return GroupStrategySmart
-	default: // order / free / weight / manual
-		return GroupStrategyPriority
+		return GroupStrategySmart, true
+	case "order", "manual":
+		// order 就是 priority；manual 额外用 pick 把指定渠道移到链首。
+		return GroupStrategyPriority, true
+	default: // free / weight / cheap / fastest / ...
+		return GroupStrategyPriority, false
 	}
+}
+
+func groupStrategyFor(routing string) string {
+	strategy, _ := groupStrategySupport(routing)
+	return strategy
+}
+
+// routingWarnings 返回页面必须展示的“配置未生效”提示。
+// 这些字段只存在于旧配置或导入数据里，内核从未读取。
+func routingWarnings(def routingGroupDef) []string {
+	var out []string
+	if _, ok := groupStrategySupport(def.Routing); !ok && def.Routing != "" {
+		out = append(out, fmt.Sprintf("路由方式 %q 尚未实现，当前按优先级链执行", def.Routing))
+	}
+	if def.Affinity != "" {
+		out = append(out, fmt.Sprintf("组级亲和 %q 尚未实现，已忽略（渠道级亲和仍生效）", def.Affinity))
+	}
+	if len(def.Levels) > 0 || len(def.Match) > 0 || len(def.Weights) > 0 || len(def.Rules) > 0 ||
+		len(def.Fast) > 0 || len(def.Off) > 0 {
+		out = append(out, "levels / match / weights / rules / fast / off 尚未接入路由器，已忽略")
+	}
+	for _, m := range def.Members {
+		if !strings.Contains(m, "/") {
+			if _, ok := provider.Get(m); !ok {
+				out = append(out, fmt.Sprintf("成员 %q 不是渠道模型，嵌套组尚未支持，已忽略", m))
+			}
+		}
+	}
+	return out
 }
 
 func routingLabelFor(strategy string) string {
@@ -388,9 +424,15 @@ func (g *Gateway) buildGroups() map[string]any {
 				}
 			}
 		}
+		routingForView := def.Routing
+		if _, ok := groupStrategySupport(routingForView); !ok {
+			// 旧配置里的 weight/free 等不再回显，避免页面继续展示未实现选项。
+			routingForView = "order"
+		}
 		gm := map[string]any{
 			"id": def.ID, "name": def.Name, "members": members, "memberInfo": infos,
-			"routing": def.Routing, "ready": ready, "auto": def.Auto,
+			"routing": routingForView, "routingEffective": groupStrategyFor(def.Routing),
+			"warnings": routingWarnings(def), "ready": ready, "auto": def.Auto,
 		}
 		if def.Pick != "" {
 			gm["pick"] = def.Pick
@@ -403,24 +445,6 @@ func (g *Gateway) buildGroups() map[string]any {
 		}
 		if def.Unlists {
 			gm["unlists"] = true
-		}
-		if len(def.Fast) > 0 {
-			gm["fast"] = def.Fast
-		}
-		if len(def.Off) > 0 {
-			gm["off"] = def.Off
-		}
-		if len(def.Levels) > 0 {
-			gm["levels"] = def.Levels
-		}
-		if len(def.Match) > 0 {
-			gm["match"] = def.Match
-		}
-		if len(def.Weights) > 0 {
-			gm["weights"] = def.Weights
-		}
-		if len(def.Rules) > 0 {
-			gm["rules"] = def.Rules
 		}
 		groups = append(groups, gm)
 	}

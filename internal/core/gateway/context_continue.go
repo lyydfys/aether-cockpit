@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/provider"
 )
 
@@ -82,6 +83,49 @@ func shrinkResponsesInput(raw []byte, keepTail int) ([]byte, int, bool) {
 		return nil, 0, false
 	}
 	return out, dropped, true
+}
+
+// isContextOverflowAPIError 判断 IR 路径的 provider 错误是否是上下文超限。
+// 多数渠道把它映射成 bad_request；这里只认消息里的明确措辞，避免把普通
+// 400 也当成超限去裁剪。
+func isContextOverflowAPIError(ae *ir.APIError) bool {
+	if ae == nil {
+		return false
+	}
+	text := strings.ToLower(ae.Message)
+	if c := ae.Cause(); c != nil {
+		text += " " + strings.ToLower(c.Error())
+	}
+	for _, hint := range contextOverflowHints {
+		if strings.Contains(text, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+// shrinkUnifiedRequest 裁掉较早的对话，保留 instructions 与最近 keepTail 条。
+// 裁剪点前进到下一个 user 消息，避免把 tool_call 与 tool_result 拆散。
+func shrinkUnifiedRequest(req *ir.UnifiedChatRequest, keepTail int) (*ir.UnifiedChatRequest, int, bool) {
+	if req == nil || keepTail <= 0 || len(req.Items) <= keepTail {
+		return nil, 0, false
+	}
+	cut := len(req.Items) - keepTail
+	for cut < len(req.Items) {
+		if req.Items[cut].Role == "user" {
+			break
+		}
+		cut++
+	}
+	if cut >= len(req.Items) {
+		cut = len(req.Items) - keepTail
+	}
+	if cut <= 0 {
+		return nil, 0, false
+	}
+	cp := req.Clone()
+	cp.Items = cp.Items[cut:]
+	return cp, cut, true
 }
 
 // countResponseItems 统计 input 条目数（用于回填审计日志）。

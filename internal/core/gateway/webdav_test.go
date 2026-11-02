@@ -136,8 +136,15 @@ func TestWebDAVPushPullRoundTrip(t *testing.T) {
 		Addr:         "127.0.0.1:7860",
 		SettingsPath: filepath.Join(t.TempDir(), "settings.json"),
 	})
+	enc, err := encryptPassphrase("roundtrip pass")
+	if err != nil {
+		t.Fatal(err)
+	}
 	g.settingsMu.Lock()
-	g.settings.WebDAV = &WebDAVConfig{URL: srv.URL, Username: "user", Password: "pass"}
+	g.settings.Sync = &SyncConfig{
+		Kind: "webdav", PassphraseEnc: enc,
+		WebDAV: &WebDAVConfig{URL: srv.URL, Username: "user", Password: "pass"},
+	}
 	g.settingsMu.Unlock()
 
 	// --- push ---
@@ -160,8 +167,12 @@ func TestWebDAVPushPullRoundTrip(t *testing.T) {
 	}
 
 	// 上传的备份不应包含 WebDAV 配置（明文密码不上云）。
+	plain, err := openBackup(d.putBody, "roundtrip pass")
+	if err != nil {
+		t.Fatalf("远端备份应能用口令解开: %v", err)
+	}
 	var pushedBundle backupBundle
-	if err := json.Unmarshal(d.putBody, &pushedBundle); err != nil {
+	if err := json.Unmarshal(plain, &pushedBundle); err != nil {
 		t.Fatal(err)
 	}
 	if pushedBundle.Settings == nil || pushedBundle.Settings.WebDAV != nil {
@@ -274,8 +285,15 @@ func TestStartWebDAVAutoPushRuns(t *testing.T) {
 	defer srv.Close()
 
 	g := New(Config{SettingsPath: filepath.Join(t.TempDir(), "settings.json")})
+	enc, err := encryptPassphrase("auto push pass")
+	if err != nil {
+		t.Fatal(err)
+	}
 	g.settingsMu.Lock()
-	g.settings.WebDAV = &WebDAVConfig{URL: srv.URL}
+	g.settings.Sync = &SyncConfig{
+		Kind: "webdav", PassphraseEnc: enc,
+		WebDAV: &WebDAVConfig{URL: srv.URL},
+	}
 	g.settingsMu.Unlock()
 
 	stop := g.StartWebDAVAutoPush(context.Background(), 10*time.Millisecond)

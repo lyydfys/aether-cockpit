@@ -22,7 +22,7 @@ import (
 // 文件格式：magic(7) | salt(16) | nonce(12) | AES-256-GCM 密文。
 const (
 	sealMagic    = "AETHER1"
-	sealKDFIters = 120000
+	sealKDFIters = 600000
 )
 
 // pbkdf2SHA256 是标准 PBKDF2-HMAC-SHA256（RFC 8018）。
@@ -53,10 +53,11 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 	return out[:keyLen]
 }
 
-// sealBackup 用口令加密备份；空口令原样返回（兼容旧的明文备份）。
+// sealBackup 用口令加密备份。云同步/导出必须带口令：
+// 明文上传会把设置、Library、Spec 直接暴露给远端存储。
 func sealBackup(plain []byte, passphrase string) ([]byte, error) {
 	if passphrase == "" {
-		return plain, nil
+		return nil, errors.New("备份必须设置口令；明文备份不再允许上传")
 	}
 	salt := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {

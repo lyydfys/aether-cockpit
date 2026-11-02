@@ -1,5 +1,20 @@
 # 更新日志
 
+## 未发布
+
+### 安全与正确性
+
+- 修复：只开启脱敏规则、未开启 privacy_mask 时，Responses 流式直通会绕过脱敏；Fast-Path 现在同时检查 privacy 与 redact 引擎。
+- 云同步备份强制口令（至少 8 位），不再允许空口令明文上传；PBKDF2 迭代从 120k 提升到 600k，设置页新增口令输入与加密状态提示。
+- 路由组不再把 `weight/free/levels/match/rules/fast/off/affinity` 静默当作 priority：保存时移除未实现字段，`/api/groups` 与保存响应返回 `routingEffective` 和 `warnings`；旧配置会明确提示“尚未实现，已忽略”。
+- 账号卡区分“额度读取失败”和“渠道不支持额度”：不支持的渠道显示“该渠道不支持额度窗口”，不再留空白。
+- 配置漂移支持一键写回：新增 `POST /api/drift/apply`，Agent 页出现漂移提示与“重新写入”按钮。
+- 上下文超限自动续接扩展到 IR 路径：`/v1/messages`、Chat 与走 IR 的 Responses 也会裁剪较早消息后重试一次，并回填 `trimmed_items`。
+
+### 测试
+
+- 新增回归测试：Fast-Path 脱敏绕过、路由组未实现字段、账号额度能力标记、IR 上下文续接、备份口令强制、WebDAV 自动推送密封。
+
 ## 0.1.7（2026-11-02）
 
 ### Gemini CLI OAuth

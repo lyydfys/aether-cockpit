@@ -58,7 +58,7 @@ func defFromPayload(p groupPayload, id string) routingGroupDef {
 	members := dedupeStrings(p.Members)
 	def := routingGroupDef{
 		ID: id, Name: strings.TrimSpace(p.Name), Members: members,
-		Chain: chainFromMembers(members), Routing: p.Routing, Pick: p.Pick,
+		Chain: chainFromMembers(members), Routing: p.Routing, Pick: p.Pick, Affinity: p.Affinity,
 		Fast: p.Fast, Off: p.Off, Levels: p.Levels, Match: p.Match,
 		Weights: p.Weights, Rules: p.Rules, Disabled: p.Disabled, Hidden: p.Hidden, Unlists: p.Unlists,
 	}
@@ -91,33 +91,22 @@ func (g *Gateway) persistGroup(def routingGroupDef, oldID string) error {
 	if len(def.Chain) == 0 {
 		return fmt.Errorf("至少选择一个成员模型")
 	}
+	// 只持久化内核真正读取的字段。未实现的 weight/free/levels/match/rules/
+	// fast/off/affinity 不再写回，避免“保存成功但永远不生效”的假象。
+	strategy, supported := groupStrategySupport(def.Routing)
+	effectiveRouting := def.Routing
+	if !supported && effectiveRouting != "" {
+		effectiveRouting = "order"
+	}
 	obj := map[string]any{
 		"chain":    def.Chain,
-		"strategy": groupStrategyFor(def.Routing),
+		"strategy": strategy,
 		"name":     def.Name,
 		"members":  def.Members,
-		"routing":  def.Routing,
+		"routing":  effectiveRouting,
 	}
 	if def.Pick != "" {
 		obj["pick"] = def.Pick
-	}
-	if len(def.Fast) > 0 {
-		obj["fast"] = def.Fast
-	}
-	if len(def.Off) > 0 {
-		obj["off"] = def.Off
-	}
-	if len(def.Levels) > 0 {
-		obj["levels"] = def.Levels
-	}
-	if len(def.Match) > 0 {
-		obj["match"] = def.Match
-	}
-	if len(def.Weights) > 0 {
-		obj["weights"] = def.Weights
-	}
-	if len(def.Rules) > 0 {
-		obj["rules"] = def.Rules
 	}
 	if def.Disabled {
 		obj["disabled"] = true
@@ -232,7 +221,12 @@ func (g *Gateway) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 			fail(http.StatusInternalServerError, "保存失败: "+err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, g.buildGroups())
+		resp := g.buildGroups()
+		if warnings := routingWarnings(def); len(warnings) > 0 {
+			// 保存时立即回告：这些字段没有进内核，已从持久化配置里移除。
+			resp["warnings"] = warnings
+		}
+		writeJSON(w, http.StatusOK, resp)
 
 	case "delete":
 		var body struct {
@@ -348,8 +342,7 @@ func (g *Gateway) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 		}
 		shared, _ := json.Marshal(map[string]any{"aether_group": map[string]any{
 			"name": target.Name, "members": target.Members, "routing": target.Routing,
-			"pick": target.Pick, "fast": target.Fast, "off": target.Off,
-			"weights": target.Weights, "rules": target.Rules, "match": target.Match,
+			"pick": target.Pick,
 		}})
 		writeJSON(w, http.StatusOK, map[string]any{"shared": string(shared)})
 

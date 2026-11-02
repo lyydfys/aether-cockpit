@@ -49,6 +49,11 @@ func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.P
 	if required, _ := g.privacyState(); required {
 		return false
 	}
+	// 脱敏规则是独立引擎：只开 masking 而没开 privacy_mask 时，同样不能直通，
+	// 否则 redact 中间件没有机会解析并替换请求体里的敏感串。
+	if g.redactEngine().Enabled() {
+		return false
+	}
 
 	// 轻量探针：只取判断所需的最小字段，不构造完整 IR。
 	// 这正是 Fast-Path 的价值——连解析都省掉。

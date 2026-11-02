@@ -190,12 +190,19 @@ func (g *Gateway) handleDavSyncSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(body.Passphrase) != "" {
+		if len([]rune(body.Passphrase)) < 8 {
+			fail(http.StatusBadRequest, "备份口令至少 8 个字符")
+			return
+		}
 		enc, err := encryptPassphrase(body.Passphrase)
 		if err != nil {
 			fail(http.StatusInternalServerError, "口令保存失败: "+err.Error())
 			return
 		}
 		sc.PassphraseEnc = enc
+	} else if sc.PassphraseEnc == "" {
+		fail(http.StatusBadRequest, "云同步必须设置至少 8 位备份口令；明文备份不再允许上传")
+		return
 	}
 	g.settings.Sync = sc
 	// 兼容旧的 WebDAV 设置页：kind=webdav 时同步写回。

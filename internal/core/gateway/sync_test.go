@@ -39,6 +39,30 @@ func TestSealBackupRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSealBackupRequiresPassphrase 锁住 P2：新备份不允许明文上传。
+func TestSealBackupRequiresPassphrase(t *testing.T) {
+	if _, err := sealBackup([]byte(`{"k":"v"}`), ""); err == nil {
+		t.Fatal("空口令必须拒绝，不能回退到明文")
+	}
+}
+
+// TestDavSyncSaveRequiresPassphrase 锁住保存入口：没有口令的云同步配置不能落盘。
+func TestDavSyncSaveRequiresPassphrase(t *testing.T) {
+	g := &Gateway{settingsPath: filepath.Join(t.TempDir(), "settings.json")}
+	body := `{"kind":"s3","url":"s3://bucket/backups","user":"AK","password":"SK"}`
+	rec := httptest.NewRecorder()
+	g.handleDavSyncSave(rec, httptest.NewRequest("POST", "/api/davsync/save", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("无口令保存应 400，得到 %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "口令") {
+		t.Fatalf("错误信息应说明口令要求: %s", rec.Body.String())
+	}
+	if g.settings.Sync != nil {
+		t.Fatal("无口令配置不应写入 settings")
+	}
+}
+
 // AWS 官方 SigV4 示例（GET Object，含 Range 头）。
 // https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html
 func TestSignV4AgainstAWSVector(t *testing.T) {

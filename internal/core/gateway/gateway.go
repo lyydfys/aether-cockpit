@@ -703,6 +703,7 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/provider/unfetch", g.handleProviderUnfetch)
 	m.HandleFunc("GET /api/lanes", g.handleLanes)
 	m.HandleFunc("GET /api/drift", g.handleDrift)
+	m.HandleFunc("POST /api/drift/apply", g.handleDriftApply)
 	m.HandleFunc("POST /api/provider/on", g.handleProviderSwitch)
 	m.HandleFunc("POST /api/provider/off", g.handleProviderSwitch)
 	m.HandleFunc("POST /api/providers/arrange", g.handleProvidersArrange)
@@ -1575,6 +1576,26 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			attemptedThisPass = true
 			tryStart := time.Now()
 			ch, err := g.openStream(ctx, h, env, work, tm)
+
+			// 上下文超限自动续接：同一账号裁掉较早的对话后重试一次。
+			// Fast-Path 有同样逻辑（context_continue.go）；这里补 IR 路径，
+			// 覆盖 /v1/messages、Chat 与走 IR 的 Responses。
+			if err != nil {
+				ae := ir.AsAPIError(err).WithProvider(b.ProviderID)
+				if isContextOverflowAPIError(ae) {
+					if trimmed, dropped, ok := shrinkUnifiedRequest(work, contextKeepTailItems); ok {
+						trimmed.Meta["context_trimmed"] = true
+						if retryCh, retryErr := g.openStream(ctx, h, env, trimmed, tm); retryErr == nil {
+							log.Printf("[CONTINUE] %s 上下文超限，裁剪 %d 条较早消息后重试成功", b.ProviderID, dropped)
+							ch, err = retryCh, nil
+							work = trimmed
+							entry.TrimmedItems = dropped
+						} else {
+							err = retryErr
+						}
+					}
+				}
+			}
 
 			if err != nil {
 				release()

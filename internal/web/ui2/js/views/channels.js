@@ -48,7 +48,7 @@ export default {
         // 首帧的额度窗口可能还在后台读，补一次
         if (!state.late) {
           state.late = true;
-          setTimeout(() => { if (host.isConnected && state.accounts.some((a) => !((a.quota && a.quota.windows) || []).length)) load(); }, 3000);
+          setTimeout(() => { if (host.isConnected && state.accounts.some((a) => a.quota_supported !== false && !((a.quota && a.quota.windows) || []).length)) load(); }, 3000);
         }
       } catch (e) {
         clear(host);
@@ -253,7 +253,9 @@ export default {
           h('div', { class: 'row-h' }, h('span', { class: 'lbl' }, '积分余额'), h('span', { class: 'pct', style: 'color:var(--green)' }, creditsText)),
           h('div', { class: 'reset' }, '积分制渠道 · 没有重置窗口' + (readAt ? ' · 读于 ' + readAt : ''))));
       } else {
-        inset.append(h('div', { class: 'acct-empty' }, a.quota_error ? ('额度读取失败：' + a.quota_error) : ((a.quota && a.quota.message) || '这个账号没有可读的额度窗口。')));
+        inset.append(h('div', { class: 'acct-empty' }, a.quota_supported === false
+          ? '该渠道不支持额度窗口'
+          : (a.quota_error ? ('额度读取失败：' + a.quota_error) : ((a.quota && a.quota.message) || '这个账号没有可读的额度窗口。'))));
       }
       // 只有真的读到了积分才占一行；「可用 AI 积分 —」在 6 张卡上重复 6 次，是纯噪音
       if (!balanceOnly && creditsText !== '—') {

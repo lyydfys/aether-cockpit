@@ -508,11 +508,13 @@ export default {
       const endpoint = input({ value: v.endpoint || '', placeholder: 'S3 Endpoint（可选）' });
       const region = input({ value: v.region || '', placeholder: 'S3 Region（可选）' });
       const auto = input({ type: 'number', value: v.auto ? String(v.auto) : '0', placeholder: '每 N 分钟自动上传，0=关' });
+      const phrase = input({ type: 'password', placeholder: v.passphraseSet ? '已设置，留空保留' : '至少 8 位，用于加密云端备份' });
       const extra = h('div', { style: 'display:flex;flex-direction:column;gap:12px' });
       const status = h('div', { class: 'meta' });
       function paintStatus(view) {
         const bits = [];
         bits.push(view.on ? '已配置 ' + view.kind : '未配置');
+        bits.push(view.passphraseSet ? '口令已加密' : '未设口令');
         if (view.remote) bits.push('远端 ' + view.remote);
         if (view.last) bits.push('上次 ' + fmtDate(Math.floor(view.last / 1000), true));
         if (view.bytes) bits.push(fmtBytes(view.bytes));
@@ -524,6 +526,7 @@ export default {
         extra.append(field('地址', url), field('账号', user), field('密钥', pass));
         if (kind.value === 'github') extra.append(field('分支', branch));
         if (kind.value === 's3') extra.append(field('Endpoint', endpoint), field('Region', region));
+        extra.append(field('备份口令', phrase), h('div', { class: 'meta' }, '口令只保存在本机，不会上传；忘记口令将无法从云端恢复。'));
         extra.append(field('自动上传间隔（分钟）', auto));
       }
       paint();
@@ -549,7 +552,10 @@ export default {
             } catch (e) { toast('上传失败：' + (e.message || e)); }
           } }),
           btn('保存', { onClick: async () => {
-            const body = { kind: kind.value, url: url.value.trim(), user: user.value.trim(), password: pass.value };
+            const phraseValue = phrase.value.trim();
+            if (!v.passphraseSet && phraseValue.length < 8) { toast('云同步必须设置至少 8 位备份口令'); return; }
+            if (phraseValue && phraseValue.length < 8) { toast('口令至少 8 个字符'); return; }
+            const body = { kind: kind.value, url: url.value.trim(), user: user.value.trim(), password: pass.value, passphrase: phraseValue };
             if (kind.value === 'github') body.branch = branch.value.trim();
             if (kind.value === 's3') { body.endpoint = endpoint.value.trim(); body.region = region.value.trim(); }
             try {
@@ -557,6 +563,8 @@ export default {
               await api.post('davsync/auto', { minutes: Number(auto.value) || 0 });
               paintStatus(out);
               pass.value = '';
+              phrase.value = '';
+              v.passphraseSet = out.passphraseSet;
               toast('已保存');
             } catch (e) { toast('保存失败：' + (e.message || e)); }
           } })));
