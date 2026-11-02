@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,12 +17,13 @@ func testConfig(t *testing.T) RuntimeConfig {
 	t.Helper()
 	base := t.TempDir()
 	return RuntimeConfig{
-		DataDir:    filepath.Join(base, "aether"),
-		CacheDir:   filepath.Join(base, "files-cache"),
-		TempDir:    filepath.Join(base, "cache-tmp"),
-		ListenHost: "127.0.0.1",
-		Port:       0,
-		Platform:   "android",
+		DataDir:         filepath.Join(base, "aether"),
+		CacheDir:        filepath.Join(base, "files-cache"),
+		TempDir:         filepath.Join(base, "cache-tmp"),
+		ListenHost:      "127.0.0.1",
+		Port:            0,
+		Platform:        "android",
+		AdminSessionKey: "do-not-log",
 	}
 }
 
@@ -73,6 +75,12 @@ func TestStartHealthStop(t *testing.T) {
 	if _, err := os.Stat(paths.StateDB); !os.IsNotExist(err) {
 		t.Fatalf("state.db must not be created before the state layer: %v", err)
 	}
+	if want := filepath.Join(cfg.DataDir, "logs", "aether.log"); paths.LogPath != want {
+		t.Fatalf("LogPath = %q, want %q", paths.LogPath, want)
+	}
+	if info, err := os.Stat(paths.LogPath); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("log file %s: %v", paths.LogPath, err)
+	}
 	if got := getHealth(t, st.Addr); got != `{"status":"ok"}` {
 		t.Fatalf("health = %q", got)
 	}
@@ -86,6 +94,21 @@ func TestStartHealthStop(t *testing.T) {
 	}
 	if err := rt.Stop(context.Background()); err != nil {
 		t.Fatalf("second Stop: %v", err)
+	}
+	logData, err := os.ReadFile(paths.LogPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	logText := string(logData)
+	for _, want := range []string{"mobile runtime started", "mobile runtime stopped"} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("log missing %q: %s", want, logText)
+		}
+	}
+	for _, forbidden := range []string{cfg.AdminSessionKey, cfg.DataDir} {
+		if strings.Contains(logText, forbidden) {
+			t.Fatalf("log leaked %q: %s", forbidden, logText)
+		}
 	}
 	if _, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
 		t.Fatalf("old listener %s still accepts", addr)

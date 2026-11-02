@@ -10,6 +10,7 @@ PACKAGES=(
   ./cmd/mobilebridge
   ./internal/core/launcher
   ./internal/core/apppaths
+  ./internal/core/logging
   ./internal/providers/workbuddy
 )
 

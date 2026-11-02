@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"aether-cockpit/internal/core/apppaths"
+	"aether-cockpit/internal/core/logging"
 )
 
 const (
@@ -72,6 +74,7 @@ type Runtime struct {
 	server    *http.Server
 	done      chan struct{}
 	paths     apppaths.Paths
+	closeLog  func()
 }
 
 // Start validates the host-owned path, binds 127.0.0.1 only and returns only
@@ -110,6 +113,12 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		return nil, &StartError{Code: "listen_failed", Err: err}
 	}
 
+	closeLog, logErr := logging.Setup(paths.LogPath)
+	if logErr != nil {
+		_ = ln.Close()
+		return nil, &StartError{Code: "log_setup_failed", Err: logErr}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -127,11 +136,13 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		server:    &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second},
 		done:      make(chan struct{}),
 		paths:     paths,
+		closeLog:  closeLog,
 	}
 	go func() {
 		defer close(rt.done)
 		_ = rt.server.Serve(ln)
 	}()
+	log.Printf("mobile runtime started")
 	return rt, nil
 }
 
@@ -176,6 +187,13 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	r.state = StateStopped
 	r.addr = ""
 	r.startedAt = 0
+	closeLog := r.closeLog
+	r.closeLog = nil
 	r.mu.Unlock()
+
+	log.Printf("mobile runtime stopped")
+	if closeLog != nil {
+		closeLog()
+	}
 	return err
 }
