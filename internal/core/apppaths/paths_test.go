@@ -24,6 +24,9 @@ func TestNewPathsDerivesMobilePaths(t *testing.T) {
 	if want := filepath.Join(data, "usage"); paths.UsageDir != want {
 		t.Fatalf("UsageDir = %q, want %q", paths.UsageDir, want)
 	}
+	if want := filepath.Join(data, "logs", "aether.log"); paths.LogPath != want {
+		t.Fatalf("LogPath = %q, want %q", paths.LogPath, want)
+	}
 }
 
 func TestNewPathsRejectsEmptyRoot(t *testing.T) {
