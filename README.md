@@ -146,6 +146,19 @@ Aether Cockpit 是本机网关，不是托管代理服务。默认只绑定回�
 
 渠道目录、路由策略与用量视图的设计参考了 [aether](https://github.com/aether/aether)（MIT）与 [relay-panel](https://github.com/Aether/relay-panel)（LGPL-3.0）。感谢两个项目的作者与贡献者。
 
+## 赞助支持
+
+如果这个项目帮到了你，欢迎点一个 Star、分享项目，或通过收款码支持持续开发与维护。赞助完全自愿，不影响任何功能。
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/alipay.jpg" alt="支付宝收款码" width="200" /><br/>支付宝</td>
+    <td align="center"><img src="docs/images/wechat.jpg" alt="微信支付收款码" width="200" /><br/>微信支付</td>
+  </tr>
+</table>
+
+其他支持方式见[赞助支持](docs/DONATE.md)。
+
 ## 许可证
 
 本项目使用 [Apache License 2.0](LICENSE)。第三方组件的归属信息见 [NOTICE](NOTICE)。
