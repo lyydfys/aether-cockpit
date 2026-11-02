@@ -10,6 +10,7 @@ declare global {
     WindowMaximise(): void;
     WindowUnmaximise(): void;
     WindowMinimise(): void;
+    WindowHide(): void;
     Quit(): void;
   }
   interface Window {
