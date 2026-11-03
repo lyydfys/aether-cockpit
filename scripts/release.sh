@@ -44,9 +44,12 @@ echo "== 构建桌面端 =="
 go build -tags desktop,production -ldflags "$LDF_GUI" -o "$DIR/AetherCockpit.exe" ./cmd/desktop
 echo "== 构建无头 CLI =="
 go build -ldflags "$LDF" -o "$DIR/aether-cockpit-cli.exe" ./cmd/cockpit
+# MCP 桥：让 agent 把网关的媒体能力当工具用（客户端拉起，随包分发）。
+echo "== 构建 MCP 桥 =="
+go build -ldflags "$LDF" -o "$DIR/aether-mcp.exe" ./cmd/aether-mcp
 
 cp README.md README.en.md VERSION CHANGELOG.md NOTICE LICENSE PRIVACY.md SECURITY.md SUPPORT.md CONTRIBUTING.md CODE_OF_CONDUCT.md "$DIR/"
-cp docs/README.md docs/QUICKSTART.md docs/FEATURES.md docs/ADD_PROVIDER.md docs/ARCHITECTURE.md docs/FRONTEND.md docs/DONATE.md "$DIR/docs/"
+cp docs/README.md docs/QUICKSTART.md docs/FEATURES.md docs/ADD_PROVIDER.md docs/ARCHITECTURE.md docs/FRONTEND.md docs/DONATE.md docs/CLI.md "$DIR/docs/"
 mkdir -p "$DIR/docs/images"
 cp docs/images/alipay.jpg docs/images/wechat.jpg "$DIR/docs/images/"
 mkdir -p "$DIR/docs/images/screenshots"

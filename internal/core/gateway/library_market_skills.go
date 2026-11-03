@@ -90,14 +90,42 @@ func marketGitHubRaw() string {
 	return defaultGitHubRaw
 }
 
+// applyMarketGitHubAuth 给 GitHub API 请求带上可选令牌。
+//
+// 为什么需要：未认证的 GitHub API 限流是 60 次/小时，技能市场一次搜索 +
+// 若干次 tree 请求就能把配额吃光，用户看到的是"市场突然打不开"。带 token
+// 后是 5000 次/小时。令牌来源优先级：设置里的 update_token（用户已经在
+// 更新检查里配过）→ 环境变量 AETHER_GITHUB_TOKEN。
+func applyMarketGitHubAuth(req *http.Request, token string) {
+	req.Header.Set("User-Agent", "aether-cockpit/market")
+	if strings.TrimSpace(token) == "" {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+}
+
+// marketGitHubToken 取本次请求用的令牌（可为空）。
+func (g *Gateway) marketGitHubToken() string {
+	if v := strings.TrimSpace(os.Getenv("AETHER_GITHUB_TOKEN")); v != "" {
+		return v
+	}
+	g.settingsMu.Lock()
+	defer g.settingsMu.Unlock()
+	return strings.TrimSpace(g.settings.UpdateToken)
+}
+
 func fetchSkillSearch(ctx context.Context, api, q string) ([]skillMarketItem, error) {
+	return fetchSkillSearchWith(ctx, api, q, "")
+}
+
+func fetchSkillSearchWith(ctx context.Context, api, q, token string) ([]skillMarketItem, error) {
 	u := api + "?q=" + url.QueryEscape(strings.TrimSpace(q))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "aether-cockpit/market")
+	applyMarketGitHubAuth(req, token)
 	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -153,7 +181,7 @@ type githubTreeCache struct {
 	m  map[string]githubTreeEntry
 }
 
-func (c *githubTreeCache) skillPaths(ctx context.Context, apiBase, source string) ([]string, error) {
+func (c *githubTreeCache) skillPaths(ctx context.Context, apiBase, source, token string) ([]string, error) {
 	c.mu.Lock()
 	if c.m == nil {
 		c.m = map[string]githubTreeEntry{}
@@ -169,7 +197,7 @@ func (c *githubTreeCache) skillPaths(ctx context.Context, apiBase, source string
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "aether-cockpit/market")
+	applyMarketGitHubAuth(req, token) // token 为空时只设 UA/无鉴权，行为与原来一致
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -220,8 +248,8 @@ func pickSkillPath(paths []string, id string) string {
 	return best
 }
 
-func fetchSkillContentWith(ctx context.Context, cache *githubTreeCache, apiBase, rawBase, source, id string) (string, error) {
-	paths, err := cache.skillPaths(ctx, apiBase, source)
+func fetchSkillContentWith(ctx context.Context, cache *githubTreeCache, apiBase, rawBase, source, id, token string) (string, error) {
+	paths, err := cache.skillPaths(ctx, apiBase, source, token)
 	if err != nil {
 		return "", err
 	}
@@ -258,12 +286,12 @@ func (g *Gateway) importMarketSkill(ctx context.Context, source, id string, agen
 	if ok && item.Name != "" {
 		name = item.Name
 	}
-	content, err := fetchSkillContentWith(ctx, &g.githubTrees, marketGitHubAPI(), marketGitHubRaw(), source, id)
+	content, err := fetchSkillContentWith(ctx, &g.githubTrees, marketGitHubAPI(), marketGitHubRaw(), source, id, g.marketGitHubToken())
 	if err != nil {
 		return library.SkillEntry{}, nil, err
 	}
 	skillPath := ""
-	if paths, err := g.githubTrees.skillPaths(ctx, marketGitHubAPI(), source); err == nil {
+	if paths, err := g.githubTrees.skillPaths(ctx, marketGitHubAPI(), source, g.marketGitHubToken()); err == nil {
 		skillPath = pickSkillPath(paths, id)
 	}
 	entry, err := g.library.SaveSkill(library.SkillEntry{

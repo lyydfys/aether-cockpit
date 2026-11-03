@@ -88,11 +88,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -ldflags $ldflags -o (Join-Path $packageRoot "aether-cockpit-cli.exe") ./cmd/cockpit
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -ldflags $ldflags -o (Join-Path $packageRoot "aether-mcp.exe") ./cmd/aether-mcp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           Copy-Item README.md, README.en.md, VERSION, CHANGELOG.md, NOTICE, LICENSE, PRIVACY.md, SECURITY.md, SUPPORT.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md -Destination $packageRoot
           $docsRoot = Join-Path $packageRoot "docs"
           New-Item -ItemType Directory -Force -Path $docsRoot | Out-Null
-          Copy-Item docs/README.md, docs/QUICKSTART.md, docs/FEATURES.md, docs/ADD_PROVIDER.md, docs/ARCHITECTURE.md, docs/FRONTEND.md, docs/DONATE.md -Destination $docsRoot
+          Copy-Item docs/README.md, docs/QUICKSTART.md, docs/FEATURES.md, docs/ADD_PROVIDER.md, docs/ARCHITECTURE.md, docs/FRONTEND.md, docs/DONATE.md, docs/CLI.md -Destination $docsRoot
           $imagesRoot = Join-Path $docsRoot "images"
           New-Item -ItemType Directory -Force -Path $imagesRoot | Out-Null
           Copy-Item docs/images/alipay.jpg, docs/images/wechat.jpg -Destination $imagesRoot

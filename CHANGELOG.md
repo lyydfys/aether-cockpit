@@ -1,5 +1,29 @@
 # 更新日志
 
+## 未发布
+
+### 云同步：三路合并（数据丢失级修复）
+
+- 配置同步从"整包覆盖"改为**三路合并**：本机留底稿，推送时比较「底稿 / 本机 / 远端」，只有一边改过就取那一边；两边都改过则**保留本机值**，远端值写进 `data/sync/conflicts-<时间>.json` 留档。此前两台机器同时改设置，后推的会把先推的整份盖掉——配置静默消失。
+- 上传走**条件写**：WebDAV 用 `If-Match`、GitHub 用 sha；版本不符就重新取远端、重新合并、再写一次（只重试一次，连续冲突说明对端在高频写入）。S3 对象存储没有条件 PUT，会标记 `Blind` 下次重新合并，但仍先合并再写。
+- 新增**跨进程锁**（`sync-state.json.lock`，带 PID 与 TTL）：GUI 与 CLI 同时同步不再互相覆盖；进程崩溃后锁自动过期。
+- 新增 part 级摘要（settings/specs/accounts_meta/library/icons）：内容没变时跳过上传。
+- 合并结果会落回本机——只影响"本机没动过"的字段，因此不会覆盖用户刚改的设置。
+
+### 命令行
+
+- `aether-cockpit-cli` 不再只能"起一个网关"：新增子命令 `status` / `providers` / `usage [--csv]` / `quota` / `alerts` / `sessions` / `backup export|import`。它们打本机 `/api/*`（回环免鉴权），行为与桌面界面完全一致，也能对**已在运行**的实例操作。`serve` 与无参数调用保持原有行为。
+
+### MCP 桥
+
+- 新增 `aether-mcp`：stdio MCP server，把网关的媒体能力包装成 `aether_image` / `aether_video` 两个工具，agent（Claude Code / Codex / 任意 MCP 客户端）可以把网关当工具用。此前只有 HTTP 端点，agent 调不到。
+- 该进程由**客户端**拉起，网关本体仍是单二进制、零外挂进程。
+- 打包与发布流程一并带上 `aether-mcp.exe`（校验和自动包含）。
+
+### 文档
+
+- 新增 `docs/CLI.md`：CLI 子命令、MCP 接入示例（Claude Code / Codex）、云同步合并语义。
+
 ## 0.1.8（2026-11-04）
 
 ### 会话删除与回收站

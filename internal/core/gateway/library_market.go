@@ -353,7 +353,7 @@ func (g *Gateway) handleLibraryMarket(w http.ResponseWriter, r *http.Request) {
 		items, ok := g.skillCache.get(q)
 		if !ok {
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-			fetched, err := fetchSkillSearch(ctx, skillsAPIBase(), q)
+			fetched, err := fetchSkillSearchWith(ctx, skillsAPIBase(), q, g.marketGitHubToken())
 			cancel()
 			if err != nil {
 				writeJSON(w, http.StatusOK, map[string]any{

@@ -51,14 +51,14 @@ func TestFetchSkillContent(t *testing.T) {
 	defer raw.Close()
 
 	var cache githubTreeCache
-	content, err := fetchSkillContentWith(context.Background(), &cache, tree.URL, raw.URL, "acme/skills", "code-review")
+	content, err := fetchSkillContentWith(context.Background(), &cache, tree.URL, raw.URL, "acme/skills", "code-review", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if content == "" || skillDescription(content) != "code review skill" {
 		t.Fatalf("content = %q desc=%q", content, skillDescription(content))
 	}
-	if _, err := fetchSkillContentWith(context.Background(), &cache, tree.URL, raw.URL, "acme/skills", "missing"); err == nil {
+	if _, err := fetchSkillContentWith(context.Background(), &cache, tree.URL, raw.URL, "acme/skills", "missing", ""); err == nil {
 		t.Fatal("找不到技能应报错")
 	}
 }

@@ -200,7 +200,7 @@ func (g *Gateway) probeGitHubSkills(ctx context.Context, source string) (string,
 	if err != nil {
 		return "", nil, err
 	}
-	paths, err := g.githubTrees.skillPaths(ctx, marketGitHubAPI(), repo)
+	paths, err := g.githubTrees.skillPaths(ctx, marketGitHubAPI(), repo, g.marketGitHubToken())
 	if err != nil {
 		return "", nil, err
 	}

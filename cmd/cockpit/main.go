@@ -55,6 +55,11 @@ import (
 )
 
 func main() {
+	// 子命令先于 flag 解析：`aether-cockpit-cli status` 这类调用不该因为
+	// 缺少网关必需参数而报错，它们只是打本机 /api/*（回环免鉴权）。
+	if runCLI(os.Args[1:]) {
+		return
+	}
 	registerDevMock()
 
 	var (

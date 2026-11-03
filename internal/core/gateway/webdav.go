@@ -101,6 +101,23 @@ func davMKCOL(client *http.Client, cfg *WebDAVConfig, base *url.URL, dir string)
 	}
 }
 
+// davEnsureDirs 逐段 MKCOL 建出文件所在目录（最后一段是文件本身，跳过）。
+// davPut 与条件写共用，避免两处各写一份建目录逻辑。
+func davEnsureDirs(client *http.Client, cfg *WebDAVConfig, base *url.URL, full string) error {
+	segs := strings.Split(strings.Trim(full, "/"), "/")
+	dir := ""
+	for _, seg := range segs[:max(len(segs)-1, 0)] {
+		if seg == "" {
+			continue
+		}
+		dir += "/" + seg
+		if err := davMKCOL(client, cfg, base, dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // davPut 上传 data 到远端 <cfg.URL>/<name>。
 // 先对远端路径逐段 MKCOL 建目录，再 PUT（Basic Auth、application/json）。
 // 非 2xx 返回带状态码的错误。
@@ -113,16 +130,8 @@ func davPut(cfg *WebDAVConfig, name string, data []byte) error {
 
 	// 逐段建目录：最后一段是文件本身，跳过。
 	full := davJoinPath(base.Path, name)
-	segs := strings.Split(strings.Trim(full, "/"), "/")
-	dir := ""
-	for _, seg := range segs[:max(len(segs)-1, 0)] {
-		if seg == "" {
-			continue
-		}
-		dir += "/" + seg
-		if err := davMKCOL(client, cfg, base, dir); err != nil {
-			return err
-		}
+	if err := davEnsureDirs(client, cfg, base, full); err != nil {
+		return err
 	}
 
 	u := *base
