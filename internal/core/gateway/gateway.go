@@ -286,10 +286,14 @@ type Gateway struct {
 	privacyErr atomic.Pointer[string]
 
 	// usage 用量聚合存储（nil = 禁用统计）。
-	usage      *usageStore
-	quotaHist  *quotaHistStore
-	portSwitch atomic.Pointer[func(addr string) (string, error)]
-	mmLogins   *miniMaxLoginStore
+	usage *usageStore
+	// keyQuota 是网关密钥的用量计数器（内存增量 + 在途预留）。
+	// 限额判定走它而不是逐次翻账本：账本单日有条数上限，会漏算。
+	keyQuota     *quotaTracker
+	keyQuotaOnce sync.Once
+	quotaHist    *quotaHistStore
+	portSwitch   atomic.Pointer[func(addr string) (string, error)]
+	mmLogins     *miniMaxLoginStore
 
 	// wsActive 是当前打开的 Responses WebSocket 连接数（上限见 responses_ws.go）。
 	wsActive atomic.Int32
@@ -456,6 +460,9 @@ func New(cfg Config) *Gateway {
 		// 额度读数历史：曲线上要能看到昨天的读数，落盘在同目录。
 		g.quotaHist = newQuotaHistory(filepath.Join(filepath.Dir(p), "quota-history.json"))
 	}
+	// 密钥限额计数器始终存在：即使禁用统计，限额也要能判（禁用时没有账本，
+	// 就用纯内存计数，重启后清零——这是"没有历史可种"的必然结果）。
+	g.keyQuota = newQuotaTracker()
 	g.deps = pipeline.Deps{State: st, Redact: g.redactEngine(), Rewrite: g.rewriteEngine()}
 
 	// 库存储。留空沿用桌面便携默认 data/library.json；移动端注入沙箱路径。
@@ -807,6 +814,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/provider/unfetch", g.handleProviderUnfetch)
 	m.HandleFunc("GET /api/lanes", g.handleLanes)
 	m.HandleFunc("GET /api/drift", g.handleDrift)
+	// 额度提醒：窗口快到期但还剩很多 / 快用完 / 已用尽。
+	m.HandleFunc("GET /api/alerts", g.handleQuotaAlerts)
 	m.HandleFunc("POST /api/drift/apply", g.handleDriftApply)
 	m.HandleFunc("POST /api/provider/on", g.handleProviderSwitch)
 	m.HandleFunc("POST /api/provider/off", g.handleProviderSwitch)
@@ -1128,6 +1137,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("GET /api/icons/{name}", g.handleIconGet)
 	m.HandleFunc("POST /api/privacy-model", g.handlePrivacyModel)
 	m.HandleFunc("GET /api/sessions/stats", g.handleSessionsStats)
+	// 会话「在终端重开」：生成 resume 命令并在新终端窗口里跑起来。
+	m.HandleFunc("POST /api/sessions/terminal", g.handleSessionTerminal)
 	m.HandleFunc("GET /api/context", g.handleContextEmpty)
 	m.HandleFunc("GET /api/tune", g.handleTuneEmpty)
 	m.HandleFunc("POST /api/tune/{path...}", g.handleTuneAction)
@@ -1199,19 +1210,34 @@ func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
 		// 网关密钥（任何来源都可用）：归因 + 限额。
 		if k, ok := g.callerKeys.match(token); ok {
 			key := g.callerKeys.get(k.ID)
-			if over, msg := g.callerKeyOverLimit(k.ID, key.Limit); over {
-				ae := ir.NewAPIError(ir.ErrCodeUpstreamRateLimit, msg).WithStatus(http.StatusTooManyRequests)
+			// 限额判定：先预留额度再放行。
+			// 只判"已用 ≥ 上限"是不够的——100 个并发请求会同时看到同一个
+			// "未超限"快照，然后一起烧掉上限的 100 倍。预留把在途请求也算进
+			// "已用"，并发突发因此不会穿透硬上限。
+			res, allowed, why := g.reserveCallerKey(k.ID, key.Limit, r)
+			if !allowed {
+				// 被拒不写账本的话，"今天被限流拒了多少次"根本查不到。
+				g.noteRejectedRequest(k.ID, why, r)
+				ae := ir.NewAPIError(ir.ErrCodeUpstreamRateLimit, why).WithStatus(http.StatusTooManyRequests)
 				transducer.WriteError(w, ir.ProtocolOpenAIChat, ae)
 				return
 			}
+			if res != nil {
+				// 成功路径由用量结算 settle（用实际值替换预留）；
+				// 这里兜底 release，覆盖"没走到结算就返回"的所有分支。
+				defer g.keyQuota.release(res)
+			}
 			// 每分钟请求数上限：滑窗 60 秒，与 token/费用窗口独立。
 			if key.Limit != nil && key.Limit.RPM > 0 && !g.callerKeys.allowRPM(k.ID, key.Limit.RPM, time.Now()) {
+				g.noteRejectedRequest(k.ID, "超过每分钟请求数上限", r)
 				ae := ir.NewAPIError(ir.ErrCodeUpstreamRateLimit,
 					fmt.Sprintf("密钥每分钟请求数超过上限（%d/分钟）", key.Limit.RPM)).WithStatus(http.StatusTooManyRequests)
 				transducer.WriteError(w, ir.ProtocolOpenAIChat, ae)
 				return
 			}
-			next(w, r.WithContext(withCallerKey(r.Context(), k)))
+			ctx := withCallerKey(r.Context(), k)
+			ctx = withReservation(ctx, res)
+			next(w, r.WithContext(ctx))
 			return
 		}
 		// 本机回环受信任（与 aether 一致）；带密钥的请求已在上面归因。

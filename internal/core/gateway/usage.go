@@ -121,6 +121,10 @@ func (s *usageStore) record(cell usageCell) {
 	c.InputTokens += cell.InputTokens
 	c.OutputTokens += cell.OutputTokens
 	c.CachedTokens += cell.CachedTokens
+	// 这一行曾经漏了：只有"当天第一次落格"时才带上 cache write，
+	// 之后同一格子的每次请求都丢掉它。Anthropic 的 cache write 单价是
+	// input 的 1.25 倍，漏掉等于用量页的 token 与费用系统性偏低。
+	c.CacheCreate += cell.CacheCreate
 	c.ReasoningTokens += cell.ReasoningTokens
 	c.DurationMS += cell.DurationMS
 	c.FirstByteMS += cell.FirstByteMS
@@ -668,6 +672,18 @@ func (g *Gateway) withUsageRecorder(ctx context.Context, ch <-chan ir.UnifiedStr
 			base.DurationMS = time.Since(start).Milliseconds()
 			if g.usage != nil {
 				g.usage.record(base)
+			}
+			// 限额计数器：用实际 token 用量替换在途预留。这一步不能省——
+			// 省了就等于"预留了但永远不结算"，额度只会越来越紧。
+			// 费用不在这里记：它由账本按价格表算出来后单独累加
+			// （见 ledger 的 record 路径），保证两边口径一致。
+			if g.keyQuota != nil && base.CallerKey != "" {
+				tokens := base.InputTokens + base.OutputTokens + base.CachedTokens + base.CacheCreate
+				if res := reservationFrom(ctx); res != nil {
+					g.keyQuota.settle(res, tokens, 0)
+				} else {
+					g.keyQuota.add(base.CallerKey, tokens, 0)
+				}
 			}
 			if env != nil {
 				env.NoteLatency(firstByteMS, base.OutputTokens, base.DurationMS)

@@ -144,9 +144,8 @@ func (g *Gateway) sessionViewOf(s sessions.Session, prices map[string]ModelPrice
 		return v.Models[i].Input+v.Models[i].Output > v.Models[j].Input+v.Models[j].Output
 	})
 	v.Priced = !v.Unpriced
-	if s.Agent == "claude-code" {
-		v.Resume = "claude --resume " + s.ID
-	}
+	// 三个已支持客户端都给重开命令（与 manage 端点用同一套模板）。
+	v.Resume = resumeCommand(s.Agent, s.ID)
 	if withPath {
 		v.Path = s.Path
 	}

@@ -366,7 +366,17 @@ export default {
         // 用 anchor 直接下载（服务端已带 Content-Disposition）：window.open 在桌面端
         // 会先开一个空白 WebView 窗口再触发下载，等于多弹一次窗。
         btn('下载 Markdown', { onClick: () => h('a', { href: mdURL }).click() }));
-      if (s.resume) actions.append(btn('复制恢复命令', { onClick: () => navigator.clipboard.writeText(s.resume).then(() => toast('已复制'), () => toast('复制失败')) }));
+      if (s.resume) {
+        // 「在终端重开」是会话页的核心闭环：看完 → 接着干。
+        // 复制命令只是备用路径（终端不可用、或想在别的机器上继续）。
+        actions.append(btn('在终端重开', { primary: true, onClick: async () => {
+          try {
+            await api.post('sessions/terminal', { agent: s.agent, id: s.id, cwd: s.cwd || '' });
+            toast('已在新终端里打开');
+          } catch (e) { toast('打开失败：' + (e.message || e) + '（可改用「复制恢复命令」）'); }
+        } }));
+        actions.append(btn('复制恢复命令', { onClick: () => navigator.clipboard.writeText(s.resume).then(() => toast('已复制'), () => toast('复制失败')) }));
+      }
       body.append(actions);
       const usageBox = h('div');
       body.append(usageBox);

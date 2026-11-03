@@ -821,6 +821,10 @@ func (p *ledgerPending) finalize(g *Gateway, entry *RequestLog, trace *traceRout
 	entry.Priced = r.Priced
 	entry.PricingModel = r.PricingModel
 	g.ledger.add(r)
+	// 费用限额也走计数器：账本里算出来的成本是唯一权威口径。
+	if g.keyQuota != nil && r.CallerKey != "" && r.Cost > 0 {
+		g.keyQuota.addCost(r.CallerKey, r.Cost)
+	}
 }
 
 // snapshot 返回轨迹的副本（避免读写竞态）。

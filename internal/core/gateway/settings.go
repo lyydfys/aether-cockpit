@@ -157,6 +157,9 @@ type runtimeSettings struct {
 	// 与手动停用分开存：手动的不会被自动恢复，自动的会在账号恢复额度后
 	// 由后台巡检清掉（见 provider_health.go）。
 	AutoDisabledProviders map[string]AutoDisableState `json:"auto_disabled_providers,omitempty"`
+	// QuotaAlerts 是额度提醒的去重状态（每个告警键记录上次的类型与时间）。
+	// 落盘是为了重启后不把已经报过的提醒再刷一遍。
+	QuotaAlerts map[string]quotaAlertState `json:"quota_alerts,omitempty"`
 	// ProviderOrder 是渠道页的展示/优先级顺序。
 	ProviderOrder []string `json:"provider_order,omitempty"`
 	// ProviderBalances 是渠道自定义余额接口（aether 的 balanceURL / balancePath）。

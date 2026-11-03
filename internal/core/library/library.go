@@ -143,6 +143,10 @@ type Store struct {
 	SkillHow string            `json:"skill_how,omitempty"`
 	AgentHow map[string]string `json:"agent_how,omitempty"`
 
+	// Applied 记"我方写过什么"：键是 kind|name|agent，值是写入内容的摘要。
+	// 删除时只遍历这份清单——用户自己手写的同名条目不在集合里，不会被误删。
+	Applied map[string]AppliedEntry `json:"applied,omitempty"`
+
 	// hookMu 串行化 hooks 文件的读-改-写。
 	hookMu sync.Mutex
 

@@ -156,10 +156,8 @@ func (g *Gateway) handleSessionsManage(w http.ResponseWriter, r *http.Request) {
 
 	list := make([]map[string]any, 0, len(byAgent[agent]))
 	for _, s := range byAgent[agent] {
-		resume := ""
-		if s.Agent == "claude-code" && s.Path != "" {
-			resume = "claude --resume " + s.ID
-		}
+		// resume 覆盖扫描器支持的全部三个客户端（原来只给 Claude Code 拼）。
+		resume := resumeCommand(s.Agent, s.ID)
 		list = append(list, map[string]any{
 			"id": s.ID, "agent": s.Agent,
 			"title": s.Title, "name": s.Title,

@@ -149,6 +149,10 @@ func main() {
 	// 渠道健康巡检：账号全灭自动下线，额度恢复后再自动上线。
 	stopHealth := gw.StartProviderHealthWatch(rootCtx, time.Minute)
 	defer stopHealth()
+	// 额度提醒巡检：窗口快到期但还剩很多时提醒（花钱买的额度别作废），
+	// 以及"快用完了"的告警。5 分钟一轮，落盘去重。
+	stopQuotaAlerts := gw.StartQuotaAlertWatch(rootCtx, 5*time.Minute)
+	defer stopQuotaAlerts()
 
 	// WebDAV 备份自动推送：未配置或 auto_push_minutes<=0 时是空操作，可无条件启动。
 	stopWebDAVPush := gw.StartWebDAVAutoPush(rootCtx, gw.WebDAVAutoPushInterval())

@@ -34,6 +34,11 @@ export default {
         state.data = { runtime, settings, keys: keys.keys || keys.caller_keys || [], clients: clients.clients || [], health, ver, providers: providers.providers || providers || [], gateway: providers.gateway || {} };
         state.status = status || { entries: [] };
         render();
+        // 额度提醒：窗口快到期但还剩很多 / 快用完。后台取，不阻塞首屏。
+        api.get('alerts').then((r) => {
+          state.alerts = (r && r.alerts) || [];
+          if (host.isConnected && state.alerts.length) render();
+        }).catch(() => {});
         // 版本探测要扫描本机 CLI，实测 5s+；放到后台，不阻塞首屏
         api.get('agents/cli').then((r) => {
           state.agents = r.agents || {};
@@ -75,6 +80,24 @@ export default {
       const lan = !!(gw.lan || d.settings.lan);
       const keyMasked = d.settings.api_key || '';
 
+      // 额度提醒：订阅窗口"快到期但还剩很多"是最容易白扔钱的一条，
+      // 放在首页最上面，比藏在用量页深处有用得多。
+      const alerts = state.alerts || [];
+      if (alerts.length) {
+        const box = h('div', { style: 'display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--amber);border-radius:8px;margin-bottom:10px' });
+        box.append(h('div', { class: 'inline', style: 'gap:8px' },
+          h('span', { class: 'name' }, '额度提醒'),
+          chip(String(alerts.length) + ' 条', 'plain'),
+          h('span', { class: 'grow' }),
+          btn('去用量页', { ghost: true, onClick: () => ctx.navigate('usage') })));
+        for (const a of alerts.slice(0, 3)) {
+          box.append(h('div', { class: 'row', style: 'gap:8px' },
+            chip(a.kind === 'expiring' ? '即将重置' : (a.kind === 'exhausted' ? '已用尽' : '额度偏低'),
+              a.kind === 'expiring' ? 'amber' : 'red'),
+            h('span', { class: 'meta', style: 'flex:1' }, a.message || '')));
+        }
+        host.append(box);
+      }
       const service = card('API 服务', { chips: [chip('实例网关'), dotChip(d.health.status === 'ok' ? '运行中' : '未就绪', d.health.status === 'ok' ? 'green' : 'red')] });
       service.head.append(h('span', { style: 'flex:1' }));
       service.head.append(btn('复制接入片段', { onClick: () => copyText(snippet()) }));

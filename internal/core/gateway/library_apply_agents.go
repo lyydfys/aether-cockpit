@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -142,6 +143,16 @@ func (g *Gateway) applyAgentSet(kind, name string, want []string) ([]string, []m
 	wantSet := toSet(want)
 	problems := []map[string]any{}
 	fail := func(agent string, err error) {
+		// "不是本工具写入的"不是失败，而是一次**有意的跳过**：
+		// 用户自己在配置里手写了同名条目，我们没有资格删它。
+		// 报成错误会让人以为移除坏了，报成普通失败又会被当成噪音。
+		if errors.Is(err, errNotOurs) {
+			problems = append(problems, map[string]any{
+				"agent": agent, "skipped": true,
+				"reason": "这条不是 Aether Cockpit 写入的，已保留，未删除",
+			})
+			return
+		}
 		problems = append(problems, map[string]any{"agent": agent, "error": err.Error()})
 	}
 	addedOK, removedOK := map[string]bool{}, map[string]bool{}
@@ -205,8 +216,12 @@ func (g *Gateway) addAgentTo(kind, name, agent string, want map[string]bool) err
 		snap := g.library.List()
 		for _, m := range snap.MCPServers {
 			if m.Name == name {
-				_, err := g.library.ApplyMCPTo(home, m.ID, target)
-				return err
+				if _, err := g.library.ApplyMCPTo(home, m.ID, target); err != nil {
+					return err
+				}
+				// 记账：以后移除时只删这条，不会波及用户手写的同名条目。
+				g.library.NoteApplied(kind, name, base, mcpConfigHash(m))
+				return nil
 			}
 		}
 		return fmt.Errorf("库中没有这个 MCP 服务器: %s", name)
@@ -227,8 +242,11 @@ func (g *Gateway) addAgentTo(kind, name, agent string, want map[string]bool) err
 			if sk.Name == name {
 				// WSL 目标一律拷贝：9p 上的目录符号链接不可靠（客户端也未必跟随）。
 				link := !isWSL && g.library.EffectiveSkillHow(target) == library.SkillHowLink
-				_, err := g.library.ApplySkillAsTo(home, sk.ID, target, link)
-				return err
+				if _, err := g.library.ApplySkillAsTo(home, sk.ID, target, link); err != nil {
+					return err
+				}
+				g.library.NoteApplied(kind, name, base, library.HashContent(sk.Name, sk.Content))
+				return nil
 			}
 		}
 		return fmt.Errorf("库中没有这个技能: %s", name)
@@ -241,7 +259,11 @@ func (g *Gateway) addAgentTo(kind, name, agent string, want map[string]bool) err
 		if err != nil {
 			return err
 		}
-		return g.library.ApplyHookTo(home, *h, base)
+		if err := g.library.ApplyHookTo(home, *h, base); err != nil {
+			return err
+		}
+		g.library.NoteApplied(kind, name, base, library.HashContent(h.Name, h.Event, h.Command))
+		return nil
 	case "subagents":
 		home, base, err := g.libraryTargetFor(agent)
 		if err != nil {
@@ -253,8 +275,11 @@ func (g *Gateway) addAgentTo(kind, name, agent string, want map[string]bool) err
 		snap := g.library.List()
 		for _, a := range snap.Agents {
 			if a.Name == name {
-				_, err := g.library.ApplyAgentTo(home, a.ID, "claude")
-				return err
+				if _, err := g.library.ApplyAgentTo(home, a.ID, "claude"); err != nil {
+					return err
+				}
+				g.library.NoteApplied(kind, name, base, library.HashContent(a.Name, a.Description, a.Content))
+				return nil
 			}
 		}
 		return fmt.Errorf("库中没有这个子代理: %s", name)
@@ -263,13 +288,27 @@ func (g *Gateway) addAgentTo(kind, name, agent string, want map[string]bool) err
 }
 
 func (g *Gateway) removeAgentFrom(kind, name, agent string, want map[string]bool) error {
+	// 只删自己写过的：查不到下发记录就直接拒绝。
+	// 这一步是"写一次多端同步"的安全底线——用户的同名条目不在清单里。
+	base := agent
+	if home, b, err := g.libraryTargetFor(agent); err == nil {
+		_ = home
+		base = b
+	}
+	if owned, _ := g.library.OwnedBy(kind, name, base); !owned {
+		return errNotOurs
+	}
 	switch kind {
 	case "servers":
 		home, base, err := g.libraryTargetFor(agent)
 		if err != nil {
 			return err
 		}
-		return removeHomeMCPServer(home, base, name)
+		if err := removeHomeMCPServer(home, base, name); err != nil {
+			return err
+		}
+		g.library.ForgetApplied(kind, name, base)
+		return nil
 	case "skills":
 		home, base, err := g.libraryTargetFor(agent)
 		if err != nil {
@@ -279,7 +318,11 @@ func (g *Gateway) removeAgentFrom(kind, name, agent string, want map[string]bool
 			if want[agent] {
 				return nil
 			}
-			return g.library.RemoveAppliedSkillTo(home, name, "claude")
+			if err := g.library.RemoveAppliedSkillTo(home, name, "claude"); err != nil {
+				return err
+			}
+			g.library.ForgetApplied(kind, name, base)
+			return nil
 		}
 		if !sharedSkillAgents[base] {
 			return fmt.Errorf("%s 不支持技能下发", agent)
@@ -296,7 +339,11 @@ func (g *Gateway) removeAgentFrom(kind, name, agent string, want map[string]bool
 				return nil
 			}
 		}
-		return g.library.RemoveAppliedSkillTo(home, name, "agents")
+		if err := g.library.RemoveAppliedSkillTo(home, name, "agents"); err != nil {
+			return err
+		}
+		g.library.ForgetApplied(kind, name, base)
+		return nil
 	case "hooks":
 		h := g.library.Hook(name)
 		if h == nil {
@@ -306,15 +353,31 @@ func (g *Gateway) removeAgentFrom(kind, name, agent string, want map[string]bool
 		if err != nil {
 			return err
 		}
-		return g.library.RemoveHookTo(home, *h, base)
+		if err := g.library.RemoveHookTo(home, *h, base); err != nil {
+			return err
+		}
+		g.library.ForgetApplied(kind, name, base)
+		return nil
 	case "subagents":
 		home, base, err := g.libraryTargetFor(agent)
 		if err != nil {
 			return err
 		}
-		return g.library.RemoveAppliedAgentTo(home, name, base)
+		if err := g.library.RemoveAppliedAgentTo(home, name, base); err != nil {
+			return err
+		}
+		g.library.ForgetApplied(kind, name, base)
+		return nil
 	}
 	return fmt.Errorf("未知类型: %s", kind)
+}
+
+// errNotOurs 表示"这个条目不是本工具写入的"，删除时应当跳过。
+var errNotOurs = errors.New("not written by aether")
+
+// mcpConfigHash 生成一条 MCP 配置的稳定摘要，用于下发记账。
+func mcpConfigHash(m library.MCPEntry) string {
+	return library.HashContent(m.Name, string(m.Config))
 }
 
 // removeHomeMCPServer 只从指定 Agent 的全局 MCP 配置里删除该服务器。

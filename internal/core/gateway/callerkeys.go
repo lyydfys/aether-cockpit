@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -293,30 +294,25 @@ func (s *callerKeyStore) reveal(id string) (string, bool) {
 	return secret, secret != ""
 }
 
-// usageFor 汇总某密钥在窗口内的用量（从逐请求账本读）。
+// usageFor 汇总某密钥在窗口内的用量。
+//
+// 走内存计数器而不是逐次翻账本：账本单日上限 5000 条，高流量日会丢最旧的
+// 记录（于是"已用"偏小、硬上限被穿透）；而且每次请求都把 30 天从磁盘读
+// 一遍，热路径代价随历史线性增长。
+//
+// 计数器是空的时候先用账本种一次，这样重启不会把"今天已用"清零。
 func (g *Gateway) callerKeyUsage(id string, limit *callerKeyLimit) (tokens int64, cost float64) {
-	if g.ledger == nil || id == "" {
+	if id == "" {
 		return 0, 0
 	}
-	since := time.Now().AddDate(0, 0, -1)
-	if limit != nil {
-		switch {
-		case limit.Period == "hours" && limit.Hours > 0:
-			since = time.Now().Add(-time.Duration(limit.Hours) * time.Hour)
-		case limit.Period == "days" && limit.Days > 0:
-			since = time.Now().AddDate(0, 0, -limit.Days)
-		}
+	quota := g.keyQuotaTracker()
+	if g.ledger != nil {
+		from := time.Now().AddDate(0, 0, -ledgerMaxDays).Format("2006-01-02")
+		to := time.Now().Format("2006-01-02")
+		quota.seed(id, g.ledger.records(from, to))
 	}
-	from := since.Format("2006-01-02")
-	to := time.Now().Format("2006-01-02")
-	for _, r := range g.ledger.records(from, to) {
-		if r.CallerKey != id || r.T < since.UnixMilli() {
-			continue
-		}
-		tokens += r.In + r.Out + r.CacheRead + r.CacheWrite
-		cost += r.Cost
-	}
-	return tokens, cost
+	tk, c := quota.spent(id, limit)
+	return int64(tk), c
 }
 
 // allowRPM 记一次请求并判断是否超过每分钟上限。
@@ -354,7 +350,7 @@ func (s *callerKeyStore) resetRPM(id string) {
 	s.mu.Unlock()
 }
 
-// overLimit 报告该密钥是否已超出窗口上限。
+// overLimit 报告该密钥是否已超出窗口上限（只读判断，不含在途预留）。
 func (g *Gateway) callerKeyOverLimit(id string, limit *callerKeyLimit) (bool, string) {
 	if limit == nil {
 		return false, ""
@@ -367,6 +363,41 @@ func (g *Gateway) callerKeyOverLimit(id string, limit *callerKeyLimit) (bool, st
 		return true, "该网关密钥的费用已到上限"
 	}
 	return false, ""
+}
+
+// estimateReservation 估算一次请求要占多少额度。
+//
+// 口径（对齐 aether 的 budget.go）：请求体字节数 / 4 当作输入 token，
+// 再加一份"平均输出"兜底。宁可估高一点——硬上限的方向是宁可早拒，
+// 不可穿透；请求结束时用实际值替换（settle），估高不会造成长期偏差。
+func estimateReservation(r *http.Request) float64 {
+	const avgOutputTokens = 1024
+	size := r.ContentLength
+	if size <= 0 {
+		// 分块编码（stream:true 的客户端常见）时拿不到长度，给一个保守中位数。
+		size = 4096
+	}
+	return float64(size)/4 + avgOutputTokens
+}
+
+// reserveCallerKey 为一次请求预留额度，超限时返回 (nil, false, 原因)。
+//
+// 返回的 reservation 必须交给调用方 release（成功路径由用量结算 settle）。
+func (g *Gateway) reserveCallerKey(id string, limit *callerKeyLimit, r *http.Request) (*reservation, bool, string) {
+	if limit == nil || (limit.Tokens <= 0 && limit.Cost <= 0) {
+		return nil, true, ""
+	}
+	// 先种一次历史，否则重启后第一次判定会以为"今天还没用"。
+	_, _ = g.callerKeyUsage(id, limit)
+	res, ok := g.keyQuotaTracker().tryReserve(id, limit, estimateReservation(r), 0)
+	if ok {
+		return res, true, ""
+	}
+	msg := "该网关密钥的用量已到上限"
+	if limit.Cost > 0 {
+		msg = "该网关密钥的费用已到上限"
+	}
+	return nil, false, msg
 }
 
 // servesModel 报告密钥是否允许该模型。
