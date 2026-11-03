@@ -262,6 +262,9 @@ func (gen *otlpGen) export(batch []RequestLog) {
 		code, ra, raSet, perr := gen.post(u, body)
 		retryAfter, retryAfterSet = ra, raSet
 		if perr == nil && code >= 200 && code <= 299 {
+			// traces 发成功后补一次 metrics：同一批数据，两个信号。
+			// 指标失败不影响 traces，也不重试（趋势图缺一个点比拖慢退出重要得多）。
+			gen.exportMetrics(batch)
 			return
 		}
 		if perr != nil {
@@ -367,6 +370,8 @@ type otlpAnyValue struct {
 	BoolValue   *bool  `json:"boolValue,omitempty"`
 	// IntValue 按 proto3 JSON 惯例编码为十进制字符串。
 	IntValue string `json:"intValue,omitempty"`
+	// DoubleValue 是浮点属性（费用）。proto3 JSON 里 doubleValue 仍是数字。
+	DoubleValue *float64 `json:"doubleValue,omitempty"`
 }
 
 type otlpKeyValue struct {
@@ -424,6 +429,11 @@ func otlpBoolAttr(k string, v bool) otlpKeyValue {
 	return otlpKeyValue{Key: k, Value: otlpAnyValue{BoolValue: &v}}
 }
 
+// otlpFloatAttr 是 double 属性（费用这类小数值）。
+func otlpFloatAttr(k string, v float64) otlpKeyValue {
+	return otlpKeyValue{Key: k, Value: otlpAnyValue{DoubleValue: &v}}
+}
+
 // buildSpan 把一条审计记录编码成一个 SERVER span。
 func buildSpan(entry RequestLog) otlpSpan {
 	start := entry.Time
@@ -461,6 +471,54 @@ func buildSpan(entry RequestLog) otlpSpan {
 		attrs = append(attrs, otlpIntAttr("items", int64(entry.Items)))
 	}
 	attrs = append(attrs, otlpBoolAttr("fast_path", entry.FastPath))
+
+	// token 与费用：只写日志里没有这些字段的话，接 Langfuse / Tempo 时
+	// 只能看到"某个模型被调了一次"，看不到花了多少——这正是导出最想要的。
+	//
+	// 属性名对齐 GenAI 语义约定（gen_ai.usage.*），主流后端能直接识别；
+	// 同时保留一份不带前缀的短名，方便按任意字段过滤。
+	if entry.InputTokens > 0 {
+		attrs = append(attrs, otlpIntAttr("gen_ai.usage.input_tokens", entry.InputTokens),
+			otlpIntAttr("input_tokens", entry.InputTokens))
+	}
+	if entry.OutputTokens > 0 {
+		attrs = append(attrs, otlpIntAttr("gen_ai.usage.output_tokens", entry.OutputTokens),
+			otlpIntAttr("output_tokens", entry.OutputTokens))
+	}
+	if entry.CacheRead > 0 {
+		attrs = append(attrs, otlpIntAttr("gen_ai.usage.cache_read_tokens", entry.CacheRead),
+			otlpIntAttr("cache_read_tokens", entry.CacheRead))
+	}
+	if entry.CacheWrite > 0 {
+		attrs = append(attrs, otlpIntAttr("gen_ai.usage.cache_write_tokens", entry.CacheWrite),
+			otlpIntAttr("cache_write_tokens", entry.CacheWrite))
+	}
+	if entry.ReasoningTokens > 0 {
+		attrs = append(attrs, otlpIntAttr("gen_ai.usage.reasoning_tokens", entry.ReasoningTokens),
+			otlpIntAttr("reasoning_tokens", entry.ReasoningTokens))
+	}
+	if total := entry.InputTokens + entry.OutputTokens + entry.CacheRead + entry.CacheWrite; total > 0 {
+		attrs = append(attrs, otlpIntAttr("gen_ai.usage.total_tokens", total),
+			otlpIntAttr("total_tokens", total))
+	}
+	if entry.Cost > 0 {
+		attrs = append(attrs, otlpFloatAttr("cost_usd", entry.Cost))
+	}
+	if entry.PricingModel != "" {
+		attrs = append(attrs, otlpStrAttr("pricing_model", entry.PricingModel),
+			otlpBoolAttr("priced", entry.Priced))
+	}
+	if entry.Model != "" {
+		attrs = append(attrs, otlpStrAttr("gen_ai.request.model", entry.Model))
+	}
+	if entry.Model != "" {
+		attrs = append(attrs, otlpStrAttr("gen_ai.system", entry.Protocol))
+	}
+	// 自动续接/裁剪：排查"上下文是不是被我们自己截掉了"的关键信号。
+	if entry.AutoContinued {
+		attrs = append(attrs, otlpBoolAttr("auto_continued", true),
+			otlpIntAttr("trimmed_items", int64(entry.TrimmedItems)))
+	}
 
 	span := otlpSpan{
 		TraceID:           otlpRandomHex(16),

@@ -125,7 +125,11 @@ func sessionAgentName(id string) string {
 // 选中 Agent 的会话与回收站。deletable 恒为 false——网关只读 Agent 的
 // 会话文件，不代删；resume 只给已知命令形态的 Claude Code。
 func (g *Gateway) handleSessionsManage(w http.ResponseWriter, r *http.Request) {
-	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	writeJSON(w, http.StatusOK, g.buildSessionsManage(strings.TrimSpace(r.URL.Query().Get("agent"))))
+}
+
+// buildSessionsManage 组装会话页视图（handler 与"删除/恢复"后的回包共用）。
+func (g *Gateway) buildSessionsManage(agent string) map[string]any {
 	all := sessions.Scan()
 
 	byAgent := make(map[string][]sessions.Session, 4)
@@ -158,26 +162,38 @@ func (g *Gateway) handleSessionsManage(w http.ResponseWriter, r *http.Request) {
 	for _, s := range byAgent[agent] {
 		// resume 覆盖扫描器支持的全部三个客户端（原来只给 Claude Code 拼）。
 		resume := resumeCommand(s.Agent, s.ID)
+		// 本机会话可删（进回收站，可恢复）；WSL 会话跨发行版搬运风险高，标不可删。
+		deletable := s.WSL == "" && strings.TrimSpace(s.Path) != ""
 		list = append(list, map[string]any{
 			"id": s.ID, "agent": s.Agent,
 			"title": s.Title, "name": s.Title,
 			"cwd": s.Cwd, "path": s.Path, "wsl": s.WSL,
 			"last": s.Last * 1000, "size": s.Size,
 			"models": []any{}, "messages": 0, "start": 0,
-			"deletable": false, "gateway": false,
+			"deletable": deletable, "gateway": false,
 			"transcript": true, "resume": resume,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	// 回收站：删除是可撤销的，页面要能看见"删掉的还能捡回来"。
+	trashRows := make([]map[string]any, 0, 4)
+	for _, e := range g.sessionTrashStore().List() {
+		trashRows = append(trashRows, map[string]any{
+			"id": e.ID, "agent": e.Agent, "name": e.Title, "title": e.Title,
+			"path": e.OrigPath, "size": e.Size, "deleted_at": e.DeletedAt,
+			"deletable": true, "restorable": true,
+		})
+	}
+
+	return map[string]any{
 		"agent":     agent,
 		"agents":    agents,
 		"sessions":  list,
-		"trash":     []any{},
-		"deletable": false,
+		"trash":     trashRows,
+		"deletable": true,
 		"recording": false,
 		"recorded":  0,
-	})
+	}
 }
 
 // handleSessionsTranscript GET /api/sessions/transcript?agent=&id=

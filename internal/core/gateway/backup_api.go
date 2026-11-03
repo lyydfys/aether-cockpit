@@ -208,11 +208,19 @@ func (g *Gateway) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 
 // handleBackupExportFile POST /api/backup/export
 //
-// 桌面壳的「导出…」：口令密封后落盘成 .aether-backup，返回 {path}。
+// 两种出口：
+//   - 默认（桌面壳的「导出…」）：口令密封后落盘成 .aether-backup，返回 {path}。
+//   - `{"inline":true}`：不落盘，直接把同一份密封密文以 base64 回给调用方。
+//     移动端没有可写的 Downloads 目录，也没有让用户去文件管理器里找文件的通路；
+//     它需要拿到密文自己写进应用沙箱再走分享面板。
+//
+// 两种出口用的是**同一个** sealBackup，密文格式一致，所以桌面端能导入手机导出的备份，
+// 反之亦然。inline 绝不是"免口令"分支。
 func (g *Gateway) handleBackupExportFile(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Pass    string `json:"pass"`
 		Library bool   `json:"library"`
+		Inline  bool   `json:"inline"`
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
 	if body.Pass == "" {
@@ -227,6 +235,14 @@ func (g *Gateway) handleBackupExportFile(w http.ResponseWriter, r *http.Request)
 	sealed, err := sealBackup(raw, body.Pass)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "密封失败: " + err.Error()})
+		return
+	}
+	if body.Inline {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data":       base64.StdEncoding.EncodeToString(sealed),
+			"bytes":      len(sealed),
+			"created_at": time.Now().Unix(),
+		})
 		return
 	}
 	dir := ""
@@ -301,6 +317,7 @@ func (g *Gateway) applyBundle(bundle *backupBundle) map[string]bool {
 		groups := g.settings.ModelGroupsOverride
 		g.settingsMu.Unlock()
 		g.syncRedactPrefs()
+		g.syncHooks()
 		g.models.SetModelRedirects(g.modelRedirects())
 		g.models.Rebuild()
 

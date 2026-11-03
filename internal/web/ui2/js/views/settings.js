@@ -408,6 +408,14 @@ export default {
     }
 
     function privacy(s) {
+      const hooksCfg = s.hooks || {};
+      const listText = (v) => (Array.isArray(v) ? v.join(', ') : '');
+      const clampInput = input({
+        type: 'number', value: hooksCfg.clamp_output ? String(hooksCfg.clamp_output) : '',
+        placeholder: '留空 = 不限制',
+      });
+      const blockInput = input({ value: listText(hooksCfg.block_models), placeholder: '例如 gpt-4*,o1-*' });
+      const guardInput = input({ value: listText(hooksCfg.guard_providers), placeholder: '例如 expensive-channel' });
       return [
         section('脱敏', [
           line('请求脱敏', '请求离开这台电脑前，把密钥/邮箱/手机号换成占位符', toggle(!!s.redact, (on) => save({ redact: on }, '请求脱敏'))),
@@ -418,7 +426,41 @@ export default {
           line('响应回填', '上游响应里的占位符换回原文', toggle(!!(s.privacy_mask && s.privacy_mask.enabled), (on) => save({ privacy_mask: { enabled: on } }, '响应回填'))),
           h('div', { class: 'meta', style: 'padding:8px 2px' }, '按类型处置、细项开关、自定义规则、白名单与记录详情在「洞察 → 脱敏」页。'),
         ]),
+        // 请求管线钩子：进程内扩展点（不是 library 里那种客户端 hook）。
+        section('请求钩子', [
+          line('丢弃推理增量', '部分客户端会把 reasoning 当正文显示；打开后从流里过滤掉',
+            toggle(!!hooksCfg.drop_reasoning, (on) => saveHooks({ ...hooksCfg, drop_reasoning: on }, '丢弃推理增量'))),
+          line('输出上限', '客户端不设 max_tokens 时按这个值封顶，防止一次跑掉整天额度',
+            h('div', { class: 'inline', style: 'gap:8px' },
+              clampInput,
+              btn('保存', { ghost: true, onClick: () => saveHooks({ ...hooksCfg, clamp_output: Number(clampInput.value) || 0 }, '输出上限') }))),
+          line('拦截模型', '按前缀拦截（逗号分隔，* 结尾表示前缀），被拦的请求直接 4xx',
+            h('div', { class: 'inline', style: 'gap:8px' },
+              blockInput,
+              btn('保存', { ghost: true, onClick: () => saveHooks({ ...hooksCfg, block_models: splitList(blockInput.value) }, '拦截模型') }))),
+          line('跳过渠道', '这些渠道不参与本次请求（逗号分隔的渠道 ID）',
+            h('div', { class: 'inline', style: 'gap:8px' },
+              guardInput,
+              btn('保存', { ghost: true, onClick: () => saveHooks({ ...hooksCfg, guard_providers: splitList(guardInput.value) }, '跳过渠道') }))),
+          h('div', { class: 'meta', style: 'padding:8px 2px' },
+            '钩子跑在网关进程内（不启动任何外部进程）；单个钩子 panic 或超时只跳过它自己，不影响请求。'),
+        ]),
       ];
+    }
+
+    // splitList 把逗号/换行分隔的文本切成数组（去空、去重）。
+    function splitList(text) {
+      const out = [];
+      for (const part of String(text || '').split(/[,，\n]/)) {
+        const v = part.trim();
+        if (v && !out.includes(v)) out.push(v);
+      }
+      return out;
+    }
+
+    async function saveHooks(cfg, label) {
+      try { await api.post('settings', { hooks: cfg }); toast(label + ' 已保存'); }
+      catch (e) { toast('保存失败：' + (e.message || e)); }
     }
 
     function observability(s) {

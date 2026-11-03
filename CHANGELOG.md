@@ -2,6 +2,33 @@
 
 ## 未发布
 
+### 会话删除与回收站
+
+- 会话删除不再返回 501：删除 = 把会话文件移进回收站并记 manifest，随时可以恢复；「彻底清除」才真删文件。原位置已有同名文件时拒绝恢复（不覆盖用户数据）。WSL 里的会话仍不支持删除（跨发行版搬运不可靠），页面按 `deletable` 隐藏按钮。
+- 会话页新增「回收站」入口与「删除（可恢复）」按钮。
+
+### 预算（多窗口并行）
+
+- 网关密钥的限额从"单窗口"扩展为**多个并行窗口**：`{"windows":[{"period":"hours","hours":1,"tokens":1000},{"period":"day","tokens":50000}]}`，任意一个窗口触顶就拒。老的单窗口配置（`period`+`tokens`/`cost`）行为完全不变。
+- 窗口类型支持 `hours` / `days`（滚动）与 `day` / `week` / `month`（日历，周从周一开始），可与 RPM 叠加。
+
+### OTLP
+
+- span 现在带 token 与费用：`gen_ai.usage.input_tokens / output_tokens / cache_read_tokens / cache_write_tokens / reasoning_tokens / total_tokens`、`cost_usd`、`pricing_model`、`gen_ai.request.model`，以及自动续接标记。此前这些字段在日志里齐备却一个都没写进 span，接 Langfuse/Tempo 基本点不亮。
+- 新增 OTLP **metrics** 导出：traces 发成功后同时向 `/v1/metrics` 推送两个计数器（`gen_ai.client.token.usage` 按类型分点、`aether.request.cost`），按 model+provider 聚合；指标失败只记日志，不影响 traces。
+
+### 用量导出
+
+- 请求台账 CSV 从 14 列扩到 **43 列**：补齐渠道 ID / 账号 ID / 调用方 key / 会话 / 请求 ID / 来源 / 目的 / reasoning / total_tokens / 定价模型 / err_type / 重试 / 转交 / 流式 / 上下文项数 / 裁剪项数 / 预估 token / 上游截断 / 路由 ID。列定义改成"表头 + 取值函数"成对声明，加列不会再错位。
+- 用量汇总新增**渠道维度**（`/api/usage` 的 `providers`）：账单能回答"钱主要花在哪个渠道"。
+
+### 插件钩子
+
+- 新增进程内请求管线钩子（**不启动任何外部进程**，与"单二进制"定位一致）：`onRequest` / `onProvider` / `onAccount` / `onEvent` / `onResponse` / `onUsage` 六个扩展点，Go 接口级注册，按注册顺序执行。
+- 钩子全程 fail-open：单个钩子 panic 或超时（200ms）只跳过它自己，绝不拖垮请求。
+- 内置 5 个可直接配置的钩子：`drop_reasoning`（丢弃推理增量）、`clamp_output`（封顶 max_tokens）、`block_models`（按前缀拦截模型，返回 4xx）、`guard_provider`（跳过指定渠道）、`guard_account`（跳过指定账号）。
+- 设置页「请求钩子」可开关/填写；`GET /api/pipeline-hooks` 返回当前生效的钩子清单，便于确认配置真的装上了。
+
 ### 用量与限额
 
 - **修复用量聚合漏加 cache write**：同一（日期 / 渠道 / 模型 / 账号 / 客户端 / key）从第二次请求起，`cache_creation` token 全部丢失——只有当天第一次落格时才带上。Anthropic 系 cache write 单价是 input 的 1.25 倍，等于用量页的 token 与费用长期偏低。

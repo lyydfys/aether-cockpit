@@ -29,13 +29,32 @@ import (
 
 // callerKeyLimit 是窗口内的用量上限。Tokens/Cost/RPM 为 0 表示不限。
 // RPM 是"每分钟请求数"（滑窗 60 秒），与 token/费用窗口独立生效。
+// callerKeyLimit 是一个网关密钥的用量限额。
+//
+// 两种写法都支持：
+//   - 老的单窗口：Period + Days/Hours + Tokens/Cost；
+//   - 多窗口并行：Windows 里列多组，**任意一组触顶就拒**（对齐 aether 的
+//     5 个并行窗口：小时 / 日 / 周 / 月各自独立计时）。
+//
+// RPM 与窗口无关，始终独立生效。
 type callerKeyLimit struct {
-	Period string  `json:"period,omitempty"` // days | hours
+	Period string  `json:"period,omitempty"` // days | hours | day | week | month
 	Days   int     `json:"days,omitempty"`
 	Hours  int     `json:"hours,omitempty"`
 	Tokens int64   `json:"tokens,omitempty"`
 	Cost   float64 `json:"cost,omitempty"`
 	RPM    int     `json:"rpm,omitempty"`
+	// Windows 是并行窗口列表；配置了就与上面那组一起生效。
+	Windows []callerKeyWindow `json:"windows,omitempty"`
+}
+
+// callerKeyWindow 是一个限额窗口。
+type callerKeyWindow struct {
+	Period string  `json:"period"` // hours | days | day | week | month
+	Days   int     `json:"days,omitempty"`
+	Hours  int     `json:"hours,omitempty"`
+	Tokens int64   `json:"tokens,omitempty"`
+	Cost   float64 `json:"cost,omitempty"`
 }
 
 // callerKey 是一条网关密钥。

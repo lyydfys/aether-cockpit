@@ -2,7 +2,7 @@
    用量完全来自各 Agent 自己写的 JSONL，不依赖官方额度或网关请求账本。 */
 import { h, clear } from '../dom.js';
 import * as api from '../api.js';
-import { chip, btn, iconBtn, card, empty, errorBox, skeleton, drawer, toast, select, fmtDate, fmtCost } from '../components.js';
+import { chip, btn, iconBtn, card, empty, errorBox, skeleton, drawer, toast, select, fmtDate, fmtCost, confirmDialog } from '../components.js';
 
 const AGENT_LABEL = {
   'claude-code': 'Claude Code',
@@ -177,6 +177,7 @@ export default {
           agentLabel(a.id) + ' ' + (a.count || 0)));
       }
       bar.append(h('span', { class: 'grow' }));
+      bar.append(btn('回收站', { ghost: true, onClick: () => openTrash() }));
       bar.append(iconBtn('refresh', '刷新', load));
       c.head.append(bar);
 
@@ -356,7 +357,50 @@ export default {
 
     /* ---------- 单个会话 ---------- */
 
-    async function openSession(s) {
+    // openTrash 打开回收站：会话删除是可撤销的，所以必须有个地方能捡回来。
+function openTrash() {
+  const list = h('div', { class: 'list' });
+  const d = drawer('回收站', (body) => {
+    body.append(h('div', { class: 'meta', style: 'padding-bottom:8px' },
+      '删除的会话会先移到这里，随时可以恢复；彻底清除才会真正删掉文件。'));
+    body.append(list);
+    const reload = async () => {
+      clear(list);
+      try {
+        const r = await api.get('sessions/trash');
+        const rows = r.trash || [];
+        if (!rows.length) { list.append(empty('回收站是空的', '删除会话后会出现在这里。')); return; }
+        for (const e of rows) {
+          list.append(h('div', { class: 'row' },
+            h('span', { class: 'name' }, e.title || e.id),
+            chip(agentLabel(e.agent), 'plain'),
+            h('span', { class: 'grow' }),
+            h('span', { class: 'meta' }, fmtDate(Math.round((e.deleted_at || 0)), false)),
+            btn('恢复', { primary: true, onClick: async () => {
+              try { await api.post('sessions/restore', { ids: [e.id] }); toast('已恢复'); await reload(); }
+              catch (err) { toast('恢复失败：' + (err.message || err)); }
+            } }),
+            iconBtn('trash', '彻底清除', async () => {
+              try { await api.post('sessions/purge', { ids: [e.id] }); toast('已彻底清除'); await reload(); }
+              catch (err) { toast('清除失败：' + (err.message || err)); }
+            }, { danger: true })));
+        }
+        list.append(h('div', { class: 'inline', style: 'justify-content:flex-end;padding-top:8px' },
+          btn('清空回收站', { danger: true, onClick: async () => {
+            if (!(await confirmDialog('清空回收站？', '这会永久删除里面的会话文件，无法恢复。', { danger: true, confirmText: '清空' }))) return;
+            try { await api.post('sessions/purge', { all: true }); toast('已清空'); await reload(); }
+            catch (err) { toast('清空失败：' + (err.message || err)); }
+          } })));
+      } catch (err) {
+        list.append(errorBox('读取回收站失败：' + (err.message || err), reload));
+      }
+    };
+    reload();
+    return d;
+  });
+}
+
+async function openSession(s) {
       const body = h('div', { style: 'display:flex;flex-direction:column;gap:10px' });
       const d = drawer(s.title || s.name || s.id, (b) => { b.append(body); });
       const meta = [agentLabel(s.agent), s.cwd, s.last ? fmtDate(Math.round(s.last / 1000), true) : '', s.size ? fmtSize(s.size) : '', s.wsl ? 'WSL ' + s.wsl : ''].filter(Boolean);
@@ -376,6 +420,19 @@ export default {
           } catch (e) { toast('打开失败：' + (e.message || e) + '（可改用「复制恢复命令」）'); }
         } }));
         actions.append(btn('复制恢复命令', { onClick: () => navigator.clipboard.writeText(s.resume).then(() => toast('已复制'), () => toast('复制失败')) }));
+      }
+      // 删除是可撤销的（进回收站），WSL 会话不支持（跨发行版搬运不可靠）。
+      if (s.deletable) {
+        actions.append(btn('删除（可恢复）', { danger: true, onClick: async () => {
+          if (!(await confirmDialog('删除「' + (s.title || s.id) + '」？',
+            '会话文件会移到回收站，可以随时恢复；彻底清除才会真正删除。', { danger: true, confirmText: '删除' }))) return;
+          try {
+            await api.post('sessions/delete', { ids: [s.id] });
+            toast('已移到回收站');
+            d.close();
+            load();
+          } catch (e) { toast('删除失败：' + (e.message || e)); }
+        } }));
       }
       body.append(actions);
       const usageBox = h('div');

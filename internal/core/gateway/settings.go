@@ -638,6 +638,8 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	g.syncRedactPrefs()
+	// 插件钩子同样是"设置驱动"的：保存后立刻重建，不用重启。
+	g.syncHooks()
 	if body.Proxy != nil {
 		if _, err := g.applyGlobalProxy(*body.Proxy); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})

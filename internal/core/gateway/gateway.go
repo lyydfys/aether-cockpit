@@ -35,6 +35,7 @@ import (
 	"aether-cockpit/internal/core/eventbus"
 	"aether-cockpit/internal/core/gateway/inbound"
 	"aether-cockpit/internal/core/gateway/transducer"
+	"aether-cockpit/internal/core/hooks"
 	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/core/library"
 	"aether-cockpit/internal/core/mw"
@@ -306,6 +307,14 @@ type Gateway struct {
 	remoteCache map[string]remoteQuotaEntry
 	remoteBusy  map[string]bool
 
+	// 会话回收站（惰性创建，见 sessions_trash.go）。
+	trash     *sessionTrash
+	trashOnce sync.Once
+
+	// 请求管线插件钩子（见 pipeline_hooks.go）。
+	hooks     *hooks.Registry
+	hooksOnce sync.Once
+
 	// quota 额度卡片的后台补读去重（懒初始化）。
 	quotaOnce sync.Once
 	quota     *quotaRefreshState
@@ -441,6 +450,8 @@ func New(cfg Config) *Gateway {
 		}
 	}
 	g.syncRedactPrefs()
+	// 请求管线插件钩子：与脱敏一样是设置驱动的，启动时装载一次。
+	g.syncHooks()
 	g.callerKeys = newCallerKeyStore(filepath.Join(filepath.Dir(g.settingsPath), "caller-keys.json"))
 	// 渠道页的 on/off 参与模型解析（闭包读实时设置，无需重建）。
 	g.models.SetEnabledFilter(g.providerIsEnabled)
@@ -1139,6 +1150,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("GET /api/sessions/stats", g.handleSessionsStats)
 	// 会话「在终端重开」：生成 resume 命令并在新终端窗口里跑起来。
 	m.HandleFunc("POST /api/sessions/terminal", g.handleSessionTerminal)
+	// 请求管线插件钩子清单（确认配的钩子真的装上了）。
+	m.HandleFunc("GET /api/pipeline-hooks", g.handlePipelineHooks)
 	m.HandleFunc("GET /api/context", g.handleContextEmpty)
 	m.HandleFunc("GET /api/tune", g.handleTuneEmpty)
 	m.HandleFunc("POST /api/tune/{path...}", g.handleTuneAction)
@@ -1151,8 +1164,13 @@ func (g *Gateway) routes() {
 	} {
 		m.HandleFunc("GET /api/"+p, g.handleSessionsStub)
 	}
+	// 会话删除是"可撤销的删除"：进回收站、能恢复、能彻底清除。
+	// 其余写入类操作（迁移等）仍保持只读并返回 501。
+	m.HandleFunc("POST /api/sessions/delete", g.handleSessionsDelete)
+	m.HandleFunc("POST /api/sessions/restore", g.handleSessionsRestore)
+	m.HandleFunc("POST /api/sessions/purge", g.handleSessionsPurge)
+	m.HandleFunc("GET /api/sessions/trash", g.handleSessionsTrash)
 	for _, p := range []string{
-		"sessions/delete", "sessions/purge", "sessions/restore",
 		"sessions/relocate-claude",
 	} {
 		m.HandleFunc("POST /api/"+p, g.handleSessionsWriteReadOnly)
@@ -1540,6 +1558,9 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, proto ir.Protoco
 	if unmasker != nil {
 		res.ch = unmasker.wrapStreams(ctx, res.ch)
 	}
+	// 插件钩子 onEvent：可丢弃/改写每个流事件。放在脱敏之后，
+	// 避免钩子看到还没还原的占位符。
+	res.ch = g.withEventHooks(ctx, res.ch)
 	// 流内错误（例如 Trae 在 SSE 里报额度耗尽）也要惩罚账号：
 	// 首事件之后的错误由转接器/聚合器写回，不经过 dispatch 的错误分支。
 	res.ch = g.watchStreamErrors(res.ch, res.env)
@@ -1652,6 +1673,10 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			if !ok {
 				continue
 			}
+			// 插件钩子 onProvider：允许跳过某个渠道（成本太高、临时限流…）。
+			if g.hookRegistry().RunProvider(ctx, req, b.ProviderID) {
+				continue
+			}
 			chat, ok := provider.AsChat(p)
 			if !ok {
 				continue
@@ -1695,6 +1720,12 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 				if lastErr == nil {
 					lastErr = selErr
 				}
+				continue
+			}
+			// 插件钩子 onAccount：允许跳过某个账号（被封、余额为 0…）。
+			// 跳过时把该账号排除，让下一次 Select 换一个，而不是整条渠道放弃。
+			if g.hookRegistry().RunAccount(ctx, req, env) {
+				exclude[env.AccountID] = true
 				continue
 			}
 

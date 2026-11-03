@@ -445,6 +445,7 @@ func (g *Gateway) handleUsage(w http.ResponseWriter, r *http.Request) {
 	accounts := make(map[string]*usageTotals, 8)
 	clients := make(map[string]*usageTotals, 8)
 	callerKeys := make(map[string]*usageTotals, 8)
+	providerTotals := make(map[string]*usageTotals, 8)
 	accountProvider := make(map[string]string, 8)
 	var total usageTotals
 	var unpriced int64
@@ -482,6 +483,7 @@ func (g *Gateway) handleUsage(w http.ResponseWriter, r *http.Request) {
 				return t
 			}
 			accumulateUsage(get(q.ByProvider, c.ProviderID), c, cost)
+			accumulateUsage(get(providerTotals, c.ProviderID), c, cost)
 			accumulateUsage(get(models, c.Model), c, cost)
 			accumulateUsage(get(accounts, c.AccountID), c, cost)
 			client := c.Client
@@ -613,6 +615,28 @@ func (g *Gateway) handleUsage(w http.ResponseWriter, r *http.Request) {
 	//   totals/days/models_native 是内核原生的聚合结果；
 	//   calls/input/output/cost/series/agents/models/accounts 是前端用量页直接读的。
 	// 用量页只认后者，缺了它就只会显示空态。
+	// 渠道维度：账单要能回答"钱主要花在哪个渠道"。
+	// 之前只有按天聚合里带 by_provider，整窗汇总没有，导出也看不出来。
+	providerRows := make([]map[string]any, 0, 8)
+	for id, t := range providerTotals {
+		name := id
+		if p, ok := provider.Get(id); ok {
+			if dn := p.Manifest().DisplayName; dn != "" {
+				name = dn
+			}
+		}
+		providerRows = append(providerRows, map[string]any{
+			"id": id, "name": name, "icon": "generic",
+			"calls": int(t.Requests), "errors": int(t.Errors),
+			"input": int(t.InputTokens), "output": int(t.OutputTokens),
+			"cache_read": int(t.CachedTokens), "cache_write": int(t.CacheCreate),
+			"reasoning": int(t.Reasoning), "cost": t.Cost,
+		})
+	}
+	sort.Slice(providerRows, func(i, j int) bool {
+		return providerRows[i]["cost"].(float64) > providerRows[j]["cost"].(float64)
+	})
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"days":            perDay,
 		"totals":          total,
@@ -635,6 +659,7 @@ func (g *Gateway) handleUsage(w http.ResponseWriter, r *http.Request) {
 		"agents":      agentRows,
 		"models":      modelViews,
 		"accounts":    accountRows,
+		"providers":   providerRows,
 		"series":      series,
 		"bucket":      "day",
 		"path":        s.path,

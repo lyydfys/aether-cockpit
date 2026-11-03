@@ -2,7 +2,10 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -122,12 +125,89 @@ func rollingSince(limit *callerKeyLimit, now time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// spent 返回该 key 在当前窗口内已用掉的 tokens / cost（含在途预留）。
+// quotaWindow 是"一个限额窗口"的统一形态。
 //
-// 语义取舍：在途预留算进"已用"，否则并发突发仍然能一起通过。缺点是并发
-// 高峰时可能比实际更早触顶——这是"硬上限"该有的方向（宁可早拒，不可穿透）。
-func (q *quotaTracker) spent(id string, limit *callerKeyLimit) (tokens float64, cost float64) {
+// 为什么要抽象出来：aether 的预算模型允许一个 key 同时挂多个窗口
+// （小时 / 日 / 周 / 月各自独立），只要**任意一个**窗口超了就拒。
+// 老的 callerKeyLimit 只有一组 Period/Tokens/Cost，把它当成"一个窗口"，
+// 与显式配置的 Windows 走同一条判定路径。
+type quotaWindow struct {
+	Period string
+	Days   int
+	Hours  int
+	Tokens int64
+	Cost   float64
+}
+
+// limitWindows 把 callerKeyLimit 展开成窗口列表。
+//
+// 兼容规则：没配 Windows 时，把老的单窗口字段当作唯一窗口——这样升级前
+// 保存的配置行为完全不变。
+func limitWindows(limit *callerKeyLimit) []quotaWindow {
 	if limit == nil {
+		return nil
+	}
+	out := make([]quotaWindow, 0, len(limit.Windows)+1)
+	for _, w := range limit.Windows {
+		if w.Tokens <= 0 && w.Cost <= 0 {
+			continue // 空窗口等于没设，忽略
+		}
+		out = append(out, quotaWindow{
+			Period: strings.ToLower(strings.TrimSpace(w.Period)),
+			Days:   w.Days, Hours: w.Hours, Tokens: w.Tokens, Cost: w.Cost,
+		})
+	}
+	if limit.Tokens > 0 || limit.Cost > 0 {
+		out = append(out, quotaWindow{
+			Period: strings.ToLower(strings.TrimSpace(limit.Period)),
+			Days:   limit.Days, Hours: limit.Hours,
+			Tokens: limit.Tokens, Cost: limit.Cost,
+		})
+	}
+	return out
+}
+
+// windowKey 是计数器里区分窗口的键（日历窗口按 period，滚动窗口按跨度）。
+func windowKey(w quotaWindow) string {
+	if _, ok := calendarWindowStart(w.Period, time.Now()); ok {
+		return "cal:" + w.Period
+	}
+	return fmt.Sprintf("roll:%s:%d:%d", w.Period, w.Days, w.Hours)
+}
+
+// usedIn 返回该窗口内已用的 tokens / cost（不含在途预留；调用方持锁）。
+func (q *quotaTracker) usedInLocked(u *quotaUsage, w quotaWindow, now time.Time) (float64, float64) {
+	if start, ok := calendarWindowStart(w.Period, now); ok {
+		if b := u.calendar[w.Period]; b != nil && b.start == start {
+			return b.tokens, b.cost
+		}
+		return 0, 0
+	}
+	limit := &callerKeyLimit{Period: w.Period, Days: w.Days, Hours: w.Hours}
+	since, ok := rollingSince(limit, now)
+	if !ok {
+		return 0, 0
+	}
+	cut := since.Unix()
+	var tokens, cost float64
+	for start, b := range u.buckets {
+		// 桶按小时对齐：起点不早于 since 的整桶计入，最后一桶可能少算
+		// 最多一小时——用固定桶换有界内存的已知代价。
+		if start >= cut {
+			tokens += b.tokens
+			cost += b.cost
+		}
+	}
+	return tokens, cost
+}
+
+// spent 返回该 key 在"最紧的窗口"里已用的 tokens / cost（含在途预留）。
+//
+// 为什么给最紧的而不是求和：调用方（页面、诊断）关心"离触顶还有多远"，
+// 多窗口下答案是"最接近上限的那个窗口"。
+func (q *quotaTracker) spent(id string, limit *callerKeyLimit) (tokens float64, cost float64) {
+	windows := limitWindows(limit)
+	if len(windows) == 0 {
 		return 0, 0
 	}
 	q.mu.Lock()
@@ -135,24 +215,25 @@ func (q *quotaTracker) spent(id string, limit *callerKeyLimit) (tokens float64, 
 	u := q.usageLocked(id)
 	now := q.now()
 
-	if start, ok := calendarWindowStart(limit.Period, now); ok {
-		if b := u.calendar[limit.Period]; b != nil && b.start == start {
-			return b.tokens + u.inflightTokens, b.cost + u.inflightCost
-		}
-		return u.inflightTokens, u.inflightCost
-	}
-	if since, ok := rollingSince(limit, now); ok {
-		cut := since.Unix()
-		for start, b := range u.buckets {
-			// 桶按小时对齐：起点不早于 since 的整桶计入，最后一桶可能少算
-			// 最多一小时——用固定桶换有界内存的已知代价。
-			if start >= cut {
-				tokens += b.tokens
-				cost += b.cost
-			}
+	bestRatio := -1.0
+	for _, w := range windows {
+		t, c := q.usedInLocked(u, w, now)
+		t += u.inflightTokens
+		c += u.inflightCost
+		r := math.Max(ratio(t, float64(w.Tokens)), ratio(c, w.Cost))
+		if r > bestRatio {
+			bestRatio, tokens, cost = r, t, c
 		}
 	}
-	return tokens + u.inflightTokens, cost + u.inflightCost
+	return tokens, cost
+}
+
+// ratio 返回 v/limit（limit<=0 时视为 0）。
+func ratio(v, limit float64) float64 {
+	if limit <= 0 {
+		return 0
+	}
+	return v / limit
 }
 
 // reservation 是一次请求的额度预留。settle 与 release 只生效一次。
@@ -165,8 +246,12 @@ type reservation struct {
 }
 
 // tryReserve 尝试为一次请求预留额度。超限返回 (nil, false)。
+//
+// 多窗口语义：**每个窗口都必须通过**才算放行（任意一个窗口触顶就拒）。
+// 这就是 aether 的"5 个并行窗口"——小时、日、周、月各自独立计时。
 func (q *quotaTracker) tryReserve(id string, limit *callerKeyLimit, tokens, cost float64) (*reservation, bool) {
-	if limit == nil || (limit.Tokens <= 0 && limit.Cost <= 0) {
+	windows := limitWindows(limit)
+	if len(windows) == 0 {
 		return nil, true // 没设限额：不必预留
 	}
 	q.mu.Lock()
@@ -174,30 +259,19 @@ func (q *quotaTracker) tryReserve(id string, limit *callerKeyLimit, tokens, cost
 	u := q.usageLocked(id)
 	now := q.now()
 
-	var usedTokens, usedCost float64
-	if start, ok := calendarWindowStart(limit.Period, now); ok {
-		if b := u.calendar[limit.Period]; b != nil && b.start == start {
-			usedTokens, usedCost = b.tokens, b.cost
+	for _, w := range windows {
+		usedTokens, usedCost := q.usedInLocked(u, w, now)
+		projectedTokens := usedTokens + u.inflightTokens + tokens
+		projectedCost := usedCost + u.inflightCost + cost
+		// 只在"本次预留会把额度顶过去"时拒绝；已用超了也必须拒绝。
+		if w.Tokens > 0 && projectedTokens > float64(w.Tokens) {
+			u.rejected++
+			return nil, false
 		}
-	} else if since, ok := rollingSince(limit, now); ok {
-		cut := since.Unix()
-		for s, b := range u.buckets {
-			if s >= cut {
-				usedTokens += b.tokens
-				usedCost += b.cost
-			}
+		if w.Cost > 0 && projectedCost > w.Cost {
+			u.rejected++
+			return nil, false
 		}
-	}
-	projectedTokens := usedTokens + u.inflightTokens + tokens
-	projectedCost := usedCost + u.inflightCost + cost
-	// 只在"本次预留会把额度顶过去"时拒绝；已用超了也必须拒绝。
-	if limit.Tokens > 0 && projectedTokens > float64(limit.Tokens) {
-		u.rejected++
-		return nil, false
-	}
-	if limit.Cost > 0 && projectedCost > limit.Cost {
-		u.rejected++
-		return nil, false
 	}
 	u.inflightTokens += tokens
 	u.inflightCost += cost

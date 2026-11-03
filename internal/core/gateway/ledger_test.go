@@ -139,8 +139,11 @@ func TestLedgerHeatmapAndCSV(t *testing.T) {
 	rec = httptest.NewRecorder()
 	g.handleLedgerCSV(rec, httptest.NewRequest("GET", "/api/usage/requests.csv?period=7d", nil))
 	body := rec.Body.String()
-	if !strings.HasPrefix(body, "time,agent,model,") {
-		t.Fatalf("CSV 头不对: %q", body[:40])
+	// 表头必须覆盖审计需要的维度（不再是只有 14 列）。
+	for _, col := range []string{"time", "agent", "model", "provider", "account", "caller_key", "err_type", "upstream_truncated"} {
+		if !strings.Contains(strings.SplitN(body, "\n", 2)[0], col) {
+			t.Fatalf("CSV 头缺列 %q: %q", col, body[:80])
+		}
 	}
 	if got := strings.Count(strings.TrimSpace(body), "\n") + 1; got != 4 {
 		t.Errorf("CSV 行数 = %d, want 4（含表头）", got)

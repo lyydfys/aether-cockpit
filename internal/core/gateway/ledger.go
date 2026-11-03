@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -881,11 +882,79 @@ func (s *ledgerStore) heatmap(f ledgerFilter, price func(ledgerRecord) (float64,
 	}
 }
 
+// ledgerCSVColumns 是 CSV 的列定义：表头 + 取值函数成对出现。
+//
+// 拆成表的意义：以前是一行写死的 14 列表头和一段平行数组，加一列要改两处
+// 还容易错位。现在加列 = 加一行。
+type ledgerCSVColumn struct {
+	Name  string
+	Value func(r ledgerRecord) string
+}
+
+func itoa(v int64) string   { return strconv.FormatInt(v, 10) }
+func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', 6, 64) }
+func btoa(v bool) string    { return strconv.FormatBool(v) }
+
+// ledgerCSVColumns 覆盖请求台账能提供的全部维度。
+//
+// 对齐 aether 的 47 列思路：不只给"花了多少"，还要能给"谁花的、走的哪条路、
+// 有没有重试/换渠道/被截断"。这些字段 Record 里本来就有，缺的只是导出。
+var ledgerCSVColumns = []ledgerCSVColumn{
+	{"time", func(r ledgerRecord) string { return time.UnixMilli(r.T).Format(time.RFC3339) }},
+	{"day", func(r ledgerRecord) string { return r.Day }},
+	{"id", func(r ledgerRecord) string { return r.ID }},
+	{"agent", func(r ledgerRecord) string { return r.Agent }},
+	{"agent_name", func(r ledgerRecord) string { return r.AgentName }},
+	{"kind", func(r ledgerRecord) string { return r.Kind }},
+	{"session", func(r ledgerRecord) string { return r.Session }},
+	{"req", func(r ledgerRecord) string { return r.Req }},
+	{"model", func(r ledgerRecord) string { return r.Model }},
+	{"provider_id", func(r ledgerRecord) string { return r.ProviderID }},
+	{"provider", func(r ledgerRecord) string { return r.ProviderName }},
+	{"account_id", func(r ledgerRecord) string { return r.AccountID }},
+	{"account", func(r ledgerRecord) string { return r.AccountName }},
+	{"host", func(r ledgerRecord) string { return r.Host }},
+	{"access", func(r ledgerRecord) string { return r.Access }},
+	{"source", func(r ledgerRecord) string { return r.Source }},
+	{"purpose", func(r ledgerRecord) string { return r.Purpose }},
+	{"input", func(r ledgerRecord) string { return itoa(r.In) }},
+	{"output", func(r ledgerRecord) string { return itoa(r.Out) }},
+	{"cache_read", func(r ledgerRecord) string { return itoa(r.CacheRead) }},
+	{"cache_write", func(r ledgerRecord) string { return itoa(r.CacheWrite) }},
+	{"reasoning", func(r ledgerRecord) string { return itoa(r.Reasoning) }},
+	{"total_tokens", func(r ledgerRecord) string { return itoa(r.In + r.Out + r.CacheRead + r.CacheWrite) }},
+	{"cost_usd", func(r ledgerRecord) string { return ftoa(r.Cost) }},
+	{"priced", func(r ledgerRecord) string { return btoa(r.Priced) }},
+	{"pricing_model", func(r ledgerRecord) string { return r.PricingModel }},
+	{"ttft_ms", func(r ledgerRecord) string { return itoa(r.TTFT) }},
+	{"ms", func(r ledgerRecord) string { return itoa(r.Ms) }},
+	{"status", func(r ledgerRecord) string { return itoa(int64(r.Status)) }},
+	{"err_type", func(r ledgerRecord) string { return r.ErrType }},
+	{"error", func(r ledgerRecord) string { return r.Err }},
+	{"tries", func(r ledgerRecord) string { return itoa(int64(r.Tries)) }},
+	{"retried", func(r ledgerRecord) string { return btoa(r.Retried) }},
+	{"handed_on", func(r ledgerRecord) string { return btoa(r.HandedOn) }},
+	{"stream", func(r ledgerRecord) string { return btoa(r.Stream) }},
+	{"items", func(r ledgerRecord) string { return itoa(int64(r.Items)) }},
+	{"trimmed_items", func(r ledgerRecord) string { return itoa(int64(r.TrimmedItems)) }},
+	{"previous_id", func(r ledgerRecord) string { return btoa(r.PreviousID) }},
+	{"auto_continued", func(r ledgerRecord) string { return btoa(r.AutoContinued) }},
+	{"est_tokens", func(r ledgerRecord) string { return itoa(r.EstTokens) }},
+	{"upstream_truncated", func(r ledgerRecord) string { return btoa(r.UpstreamTruncated) }},
+	{"route_id", func(r ledgerRecord) string { return itoa(r.RouteID) }},
+	{"caller_key", func(r ledgerRecord) string { return r.CallerKey }},
+}
+
 // csv 把筛选后的记录导出为 CSV。
 func (s *ledgerStore) csv(f ledgerFilter, from, to string, price func(ledgerRecord) (float64, bool)) []byte {
 	all := s.records(from, to)
 	var b strings.Builder
-	b.WriteString("time,agent,model,provider,account,input,output,cache_read,cache_write,cost,ttft_ms,ms,status,error\n")
+	header := make([]string, 0, len(ledgerCSVColumns))
+	for _, c := range ledgerCSVColumns {
+		header = append(header, c.Name)
+	}
+	b.WriteString(strings.Join(header, ","))
+	b.WriteString("\n")
 	for _, r := range all {
 		if !f.match(r) {
 			continue
@@ -893,13 +962,12 @@ func (s *ledgerStore) csv(f ledgerFilter, from, to string, price func(ledgerReco
 		if price != nil {
 			if c, ok := price(r); ok {
 				r.Cost = c
+				r.Priced = true
 			}
 		}
-		line := []string{
-			time.UnixMilli(r.T).Format(time.RFC3339), r.Agent, r.Model, r.ProviderName, r.AccountName,
-			fmt.Sprintf("%d", r.In), fmt.Sprintf("%d", r.Out), fmt.Sprintf("%d", r.CacheRead), fmt.Sprintf("%d", r.CacheWrite),
-			fmt.Sprintf("%.6f", r.Cost), fmt.Sprintf("%d", r.TTFT), fmt.Sprintf("%d", r.Ms),
-			fmt.Sprintf("%d", r.Status), r.Err,
+		line := make([]string, 0, len(ledgerCSVColumns))
+		for _, c := range ledgerCSVColumns {
+			line = append(line, c.Value(r))
 		}
 		for i, v := range line {
 			if strings.ContainsAny(v, ",\"\n") {
