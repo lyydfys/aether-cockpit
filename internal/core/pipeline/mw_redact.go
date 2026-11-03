@@ -118,7 +118,8 @@ func Redact(deps Deps) Middleware {
 					}
 					ev := ir.UnifiedStreamEvent{Type: ir.EventTextDelta}
 					ev.TextDelta = eng.Unmask(pendingText)
-					ev.ArgsDelta = eng.Unmask(pendingArgs)
+					// 参数是 JSON 文本：这里的尾巴同样要转义，与逐块路径保持一致。
+					ev.ArgsDelta = eng.UnmaskJSON(pendingArgs)
 					pendingText, pendingArgs = "", ""
 					out <- ev
 				}

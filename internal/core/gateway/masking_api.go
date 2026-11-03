@@ -5,11 +5,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"aether-cockpit/internal/core/apppaths"
 	"aether-cockpit/internal/core/redact"
 )
 
@@ -754,6 +756,15 @@ func redactRulesView(eng *redact.Engine) []map[string]any {
 // redactEngine 返回脱敏引擎（懒初始化）。
 func (g *Gateway) redactEngine() *redact.Engine {
 	g.redactOnce.Do(func() {
+		// 盐落在数据目录（0600），跨重启稳定：否则用户把带占位符的历史
+		// 贴回来、断线重连、或从备份恢复时都换不回原值。
+		//
+		// 只在拿到**绝对路径**时才落盘：移动端没有"数据目录"概念，apppaths
+		// 会退回相对路径 data/，那会在进程 cwd 里凭空建目录（移动端明确禁止），
+		// 这种情况下退化成内存随机盐即可。
+		if p := apppaths.Data("redact-salt"); filepath.IsAbs(p) {
+			redact.SetSaltFile(p)
+		}
 		g.redactE = redact.New()
 	})
 	return g.redactE

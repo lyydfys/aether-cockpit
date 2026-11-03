@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/json"
 	"regexp"
 	"strings"
 
@@ -276,6 +277,20 @@ func newPrivacyUnmasker(mapping map[string]string, hold int) *privacyUnmasker {
 
 // push 处理一个增量，返回可安全下发的部分。
 func (u *privacyUnmasker) push(delta string) string {
+	return u.pushWith(delta, func(s string) string { return s })
+}
+
+// pushJSON 是工具参数专用的增量处理：还原值必须做 JSON 转义。
+//
+// 工具调用的参数是 JSON 文本，占位符落在字符串字面量里。原值若含引号、
+// 反斜杠或换行，直接拼回去会产出非法 JSON，客户端解析直接失败。
+// 正文（TextDelta）不能用这个——那里不该多出反斜杠。
+func (u *privacyUnmasker) pushJSON(delta string) string {
+	return u.pushWith(delta, jsonEscapeBody)
+}
+
+// pushWith 是 push 的通用形态：repl 决定"原值怎么落到输出里"。
+func (u *privacyUnmasker) pushWith(delta string, repl func(string) string) string {
 	u.buf += delta
 	var out strings.Builder
 	for {
@@ -291,7 +306,7 @@ func (u *privacyUnmasker) push(delta string) string {
 			break
 		}
 		out.WriteString(u.buf[:best])
-		out.WriteString(u.mapping[bestPh])
+		out.WriteString(repl(u.mapping[bestPh]))
 		u.buf = u.buf[best+len(bestPh):]
 	}
 	if len(u.buf) > u.hold {
@@ -300,6 +315,16 @@ func (u *privacyUnmasker) push(delta string) string {
 		u.buf = u.buf[cut:]
 	}
 	return out.String()
+}
+
+// jsonEscapeBody 把字符串转义成"可直接放进 JSON 字符串字面量"的形式
+// （不带外层引号）。
+func jsonEscapeBody(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil || len(b) < 2 {
+		return s
+	}
+	return string(b[1 : len(b)-1])
 }
 
 // flush 流结束时调用：交还剩余缓冲，并还原其中完整的占位符。
@@ -331,7 +356,7 @@ func (u *privacyUnmasker) wrapStreams(ctx context.Context, in <-chan ir.UnifiedS
 				case ir.EventTextDelta, ir.EventReasoningDelta:
 					ev.TextDelta = u.push(ev.TextDelta)
 				case ir.EventToolCallStart, ir.EventToolCallDelta:
-					ev.ArgsDelta = u.push(ev.ArgsDelta)
+					ev.ArgsDelta = u.pushJSON(ev.ArgsDelta)
 				case ir.EventDone, ir.EventError:
 					if rest := u.flush(); rest != "" {
 						tail := ir.UnifiedStreamEvent{Type: ir.EventTextDelta, TextDelta: rest}

@@ -346,9 +346,26 @@ func (g *Gateway) applyAgent(id string, r *http.Request) error {
 	if key == "" {
 		key = "aether-local"
 	}
-	if _, err := mgr.Apply(id, clients.ApplyParams{
+	params := clients.ApplyParams{
 		BaseURL: origin, APIKey: key, Model: model, ModelOptions: g.agentModelOptions(id),
-	}); err != nil {
+	}
+	// 暂存的附加字段（档位模型 / 推理档位）在这里真正落进配置。
+	// 以前 stage 是只写不读的死代码：用户在页面上选了档位，点应用也没用。
+	if staged := g.agentStageOf(id); len(staged) > 0 {
+		tiers := map[string]string{}
+		for _, k := range []string{"opus", "sonnet", "haiku", "small"} {
+			if v := strings.TrimSpace(staged[k]); v != "" {
+				tiers[k] = v
+			}
+		}
+		if len(tiers) > 0 {
+			params.Tiers = tiers
+		}
+		if v := strings.TrimSpace(staged["effort"]); v != "" {
+			params.Effort = v
+		}
+	}
+	if _, err := mgr.Apply(id, params); err != nil {
 		return err
 	}
 	eventbus.Emit(eventbus.TopicSpec+".updated", map[string]any{"source": "agent_connect", "client": id})

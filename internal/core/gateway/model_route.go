@@ -115,6 +115,15 @@ type RouteContext struct {
 	// 规则层只写这个字段，由 dispatch 在拿到候选链后写回 req.ReasoningEffort——
 	// 路由表不应该反过来改请求，否则策略与规则都能偷偷改请求语义。
 	EffortOut string
+	// 组规则的其它条件用这些信号（都由 dispatch 从请求里填，路由本身不解析协议）：
+	//   - Tokens：输入文本的 rune 数（大致等价于"上下文有多大"）；
+	//   - Images：请求是否带图片；
+	//   - Agent：客户端标识（client_agent）；
+	//   - Folder：工作目录。
+	Tokens int
+	Images bool
+	Agent  string
+	Folder string
 	// Now 是规则 time 条件使用的时钟；零值 = time.Now()（测试注入用）。
 	Now time.Time
 	// intentPick / intentPicked 是规则层定格下来的「分类器点名的候选」。
@@ -148,7 +157,10 @@ const (
 	GroupStrategyPriority = "priority"
 	GroupStrategyRotate   = "rotate"
 	GroupStrategyPace     = "pace"
-	GroupStrategySmart    = "smart"
+	// GroupStrategyUsage 按"剩余额度最多"排序（不看到期时间），
+	// 与 pace 的区别见 strategyUsage 的注释。
+	GroupStrategyUsage = "usage"
+	GroupStrategySmart = "smart"
 	// GroupStrategyFast 按实测时延排序：TTFT 升序，并列看吞吐。
 	GroupStrategyFast = "fast"
 )
@@ -172,6 +184,7 @@ func init() {
 	registerRouteStrategy(GroupStrategyPriority, strategyPriority)
 	registerRouteStrategy(GroupStrategyRotate, strategyRotate)
 	registerRouteStrategy(GroupStrategyPace, strategyPace)
+	registerRouteStrategy(GroupStrategyUsage, strategyUsage)
 	registerRouteStrategy(GroupStrategySmart, strategySmart)
 	registerRouteStrategy(GroupStrategyFast, strategyFast)
 }
@@ -525,12 +538,18 @@ func (r *ModelRouter) ResolveSmart(model, text, sessionKey string, fromRouter bo
 // 只关心候选链的调用方（诊断页、自检、分类器自身），让它们继续用简单签名，
 // 只有真正要把规则结果写回请求的路径才需要 outcome。
 func (r *ModelRouter) ResolveSmartEffort(model, text, sessionKey, effort string, fromRouter bool) ([]modelBinding, RouteOutcome) {
+	return r.ResolveSmartEffortSignals(model, text, sessionKey, effort, fromRouter, RouteSignals{})
+}
+
+// ResolveSmartEffortSignals 在 ResolveSmartEffort 之上再带上请求信号
+// （agent / folder / tokens / images），供组规则的对应条件使用。
+func (r *ModelRouter) ResolveSmartEffortSignals(model, text, sessionKey, effort string, fromRouter bool, sig RouteSignals) ([]modelBinding, RouteOutcome) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if strings.TrimSpace(text) == "" {
-		return r.resolveLockedOut(model, "", "", effort, false)
+		return r.resolveLockedOut(model, "", "", effort, false, sig)
 	}
-	return r.resolveLockedOut(model, text, sessionKey, effort, !fromRouter)
+	return r.resolveLockedOut(model, text, sessionKey, effort, !fromRouter, sig)
 }
 
 // resolveLocked 是解析核心。text/sessionKey 非空且 allowIntent 时，
@@ -541,10 +560,21 @@ func (r *ModelRouter) resolveLocked(model, text, sessionKey string, allowIntent 
 	return out
 }
 
+// RouteSignals 是组规则的"请求信号"条件（agents / folders / tokens / images）。
+//
+// 为什么单独抽一个结构：这些条件要由 dispatch 从请求里读出来，但路由层
+// 不该反过来解析协议。用零值表示"没有信号"，此时相关条件一律不成立。
+type RouteSignals struct {
+	Tokens int
+	Images bool
+	Agent  string
+	Folder string
+}
+
 // resolveLockedOut 是解析核心的完整版：多接受请求的 reasoning effort，并把
 // 策略与组规则的附加输出（RouteOutcome）带回给调用方。
 // 调用方必须已持有 r.mu.RLock。
-func (r *ModelRouter) resolveLockedOut(model, text, sessionKey, effort string, allowIntent bool) ([]modelBinding, RouteOutcome) {
+func (r *ModelRouter) resolveLockedOut(model, text, sessionKey, effort string, allowIntent bool, sig ...RouteSignals) ([]modelBinding, RouteOutcome) {
 	var none RouteOutcome
 
 	// 1. 精确匹配
@@ -567,7 +597,7 @@ func (r *ModelRouter) resolveLockedOut(model, text, sessionKey, effort string, a
 		logGroupWarnings(warns)
 		seats = r.filterEnabled(seats)
 		if len(seats) > 0 {
-			return r.applyGroupStrategyAndRules(model, seats, text, sessionKey, effort, allowIntent)
+			return r.applyGroupStrategyAndRules(model, seats, text, sessionKey, effort, allowIntent, sig...)
 		}
 	}
 
@@ -876,6 +906,43 @@ func strategyPace(ctx *RouteContext, seats []modelBinding) []modelBinding {
 	out := make([]modelBinding, len(seats))
 	for i, s := range paced {
 		out[i] = s.binding
+	}
+	return out
+}
+
+// strategyUsage 按"剩余额度最多"排序（不考虑到期时间）。
+//
+// 与 pace 的区别：pace 算的是"剩余 / 距到期小时数"，目的是把临期额度先花掉；
+// usage 只看剩余量，目的是"先把额度多的号用掉"（保住小号做兜底）。
+// 以前组级的 usage 被直接映射成 pace，用户选了 usage 拿到的是另一套语义。
+func strategyUsage(ctx *RouteContext, seats []modelBinding) []modelBinding {
+	if ctx == nil || ctx.Quota == nil {
+		return seats
+	}
+	type row struct {
+		binding   modelBinding
+		remaining int
+		known     bool
+	}
+	rows := make([]row, len(seats))
+	for i, b := range seats {
+		rows[i].binding = b
+		if remaining, _, ok := ctx.Quota(b.ProviderID); ok {
+			rows[i].remaining, rows[i].known = remaining, true
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].known != rows[j].known {
+			return rows[i].known
+		}
+		if !rows[i].known {
+			return false
+		}
+		return rows[i].remaining > rows[j].remaining
+	})
+	out := make([]modelBinding, len(seats))
+	for i, r := range rows {
+		out[i] = r.binding
 	}
 	return out
 }

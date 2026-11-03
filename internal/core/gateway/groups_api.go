@@ -76,7 +76,11 @@ func groupStrategySupport(routing string) (string, bool) {
 	switch routing {
 	case "rotate":
 		return GroupStrategyRotate, true
-	case "usage", "pace":
+	case "usage":
+		// usage 与 pace 是两种语义：usage 看剩余量（保住小号做兜底），
+		// pace 看"剩余 / 到期时间"（先花临期额度）。以前两者都被折成 pace。
+		return GroupStrategyUsage, true
+	case "pace":
 		return GroupStrategyPace, true
 	case "fast":
 		return GroupStrategyFast, true

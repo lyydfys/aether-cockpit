@@ -41,14 +41,18 @@ type aetherField struct {
 
 // aetherAgent 是 Agent 列表的一行。
 type aetherAgent struct {
-	ID     string         `json:"id"`
-	Name   string         `json:"name"`
-	Icon   string         `json:"icon"`
-	Path   string         `json:"path"`
-	Fields []aetherField  `json:"fields"`
-	Wired  bool           `json:"wired,omitempty"`
-	Source string         `json:"source,omitempty"`
-	Models map[string]any `json:"models,omitempty"`
+	ID     string        `json:"id"`
+	Name   string        `json:"name"`
+	Icon   string        `json:"icon"`
+	Path   string        `json:"path"`
+	Fields []aetherField `json:"fields"`
+	Wired  bool          `json:"wired,omitempty"`
+	// Detected 表示本机确实装了这个客户端（配置文件存在，或可执行文件在 PATH 里）。
+	// 前端据此把"没装也没接"的条目收起来——十几条全列会让真正在用的那几个
+	// 淹在一堆"未检测到"里。仍然可以手动展开看全部。
+	Detected bool           `json:"detected,omitempty"`
+	Source   string         `json:"source,omitempty"`
+	Models   map[string]any `json:"models,omitempty"`
 }
 
 // aetherProfile 是配置档。
@@ -77,6 +81,63 @@ func (g *Gateway) handleAetherState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, g.buildAetherState())
 }
 
+// agentFields 返回某个 Agent 在 Agents 页要展示的控件。
+//
+// 之前每个客户端只有 model 一个字段：Claude Code 的 opus/sonnet/haiku 被压成
+// 同一个模型，Codex 也没有推理档位。这里按客户端补上真实存在的字段——
+// 只补确定支持的，不为了"字段多"硬塞。
+func (g *Gateway) agentFields(id, model string, opts []aetherOption) []aetherField {
+	fields := []aetherField{{
+		Key:     "model",
+		Label:   "model",
+		Value:   model,
+		Options: opts,
+	}}
+	staged := g.agentStageOf(id)
+	pick := func(key, label, cur string) aetherField {
+		if v := strings.TrimSpace(staged[key]); v != "" {
+			cur = v
+		}
+		return aetherField{Key: key, Label: label, Value: cur, Options: opts}
+	}
+	switch id {
+	case "claude_code":
+		// 档位模型：分别给 opus/sonnet/haiku 选，空表示跟随主模型。
+		fields = append(fields,
+			pick("opus", "opus 档", ""),
+			pick("sonnet", "sonnet 档", ""),
+			pick("haiku", "haiku 档", ""))
+	case "codex_cli":
+		cur := strings.TrimSpace(staged["effort"])
+		fields = append(fields, aetherField{
+			Key: "effort", Label: "推理档位", Value: cur,
+			Options: []aetherOption{
+				{Value: "", Label: "跟随 Codex 默认"},
+				{Value: "low", Label: "low"},
+				{Value: "medium", Label: "medium"},
+				{Value: "high", Label: "high"},
+				{Value: "xhigh", Label: "xhigh"},
+			},
+		})
+	}
+	return fields
+}
+
+// agentStageOf 返回某个 Agent 暂存的字段值（用户在页面上选过、尚未应用）。
+func (g *Gateway) agentStageOf(id string) map[string]string {
+	g.settingsMu.Lock()
+	defer g.settingsMu.Unlock()
+	all, _ := g.settings.UI["agentStage"].(map[string]any)
+	one, _ := all[id].(map[string]any)
+	out := make(map[string]string, len(one))
+	for k, v := range one {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
+}
+
 func (g *Gateway) buildAetherState() aetherState {
 	opts := g.modelOptions()
 
@@ -98,18 +159,14 @@ func (g *Gateway) buildAetherState() aetherState {
 			}
 		}
 		agents = append(agents, aetherAgent{
-			ID:   st.ID,
-			Name: st.Name,
-			Icon: st.ID + "-color",
-			Path: st.Path,
-			Fields: []aetherField{{
-				Key:     "model",
-				Label:   "model",
-				Value:   model,
-				Options: opts,
-			}},
-			Wired:  wired,
-			Models: map[string]any{"shown": shown, "listed": len(opts)},
+			ID:       st.ID,
+			Name:     st.Name,
+			Icon:     st.ID + "-color",
+			Path:     st.Path,
+			Fields:   g.agentFields(st.ID, model, opts),
+			Wired:    wired,
+			Detected: st.Detected,
+			Models:   map[string]any{"shown": shown, "listed": len(opts)},
 		})
 	}
 

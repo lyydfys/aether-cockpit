@@ -16,6 +16,7 @@
 package redact
 
 import (
+	"container/list"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,6 +24,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -200,8 +203,11 @@ type Engine struct {
 	// 两张表都在内存，进程退出即消失。
 	forward map[string]string
 	reverse map[string]string
-	// valueOrder 记录插入顺序，超限时淘汰最旧的值（近似 FIFO，见 evictValuesLocked）。
-	valueOrder []string
+	// lru/lruEls 维护"最近用过"的顺序：超限时淘汰最久未用的值。
+	// 用 container/list 而不是切片，是为了让 touch 是 O(1)——
+	// 值表上限 20 万，逐个 splice 会把一次命中变成 O(n)。
+	lru    *list.List
+	lruEls map[string]*list.Element
 
 	records    []Record
 	maxRecords int
@@ -237,20 +243,63 @@ type Engine struct {
 //
 // 为什么要有上限：进程长时间运行时，每遇到一个新的敏感值就多一条记录，
 // 之前是完全无界的（只增不减）。这既是内存泄漏，也会让回程的 map 遍历变慢。
-// 20000 条按每条约百字节估算约 2MB，够覆盖一次长会话的全部历史。
-const maxValues = 20000
+// 20 万条按每条约百字节估算约 20MB，与 aether 同量级。
+const maxValues = 200000
 
-// New 创建引擎并装载内置规则。
-func New() *Engine {
+// saltFile 是盐的落盘位置（空表示只在内存里随机生成）。
+//
+// 为什么盐要落盘：盐一变，同一段带占位符的文本就再也换不回原值——
+// 用户把上一轮对话贴回来、断线重连后继续、从备份恢复，都会对不上。
+// 所以盐是"每机一份、跨进程稳定"的安装级标识，权限 0600。
+// 由网关在启动时用 SetSaltFile 指定路径；单元测试默认不落盘。
+var (
+	saltFileMu sync.Mutex
+	saltFile   string
+)
+
+// SetSaltFile 设置盐文件路径。传空串表示禁用落盘（测试用）。
+func SetSaltFile(path string) {
+	saltFileMu.Lock()
+	saltFile = path
+	saltFileMu.Unlock()
+}
+
+// loadOrCreateSalt 读取安装级盐；不存在就生成一份并落盘。
+//
+// 读失败（无权限/路径异常）时退回内存随机盐：宁可这次运行换不回旧占位符，
+// 也不能让网关因为一个盐文件起不来。
+func loadOrCreateSalt() []byte {
+	saltFileMu.Lock()
+	path := saltFile
+	saltFileMu.Unlock()
+
+	if path != "" {
+		if b, err := os.ReadFile(path); err == nil && len(b) >= 16 {
+			return b
+		}
+	}
 	salt := make([]byte, 32)
 	if _, err := rand.Read(salt); err != nil {
 		// 极端情况下拿不到熵：退回时间派生，仍然比不加盐强。
 		binary.BigEndian.PutUint64(salt, uint64(time.Now().UnixNano()))
 	}
+	if path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+			// 0600：只有本用户可读。写失败不影响本次运行。
+			_ = os.WriteFile(path, salt, 0o600)
+		}
+	}
+	return salt
+}
+
+// New 创建引擎并装载内置规则。
+func New() *Engine {
 	e := &Engine{
-		salt:       salt,
+		salt:       loadOrCreateSalt(),
 		forward:    make(map[string]string, 64),
 		reverse:    make(map[string]string, 64),
+		lru:        list.New(),
+		lruEls:     make(map[string]*list.Element, 64),
 		actions:    make(map[string]Action, 4),
 		sent:       make(map[string][]SentPart, 32),
 		backs:      make(map[string]map[string]int, 32),
@@ -374,7 +423,11 @@ func personalKind(kind string) bool {
 	switch kind {
 	case "EMAIL", "PHONE", "ID", "CARD",
 		"SSN", "PASSPORT", "IBAN", "BIRTHDAY", "MAC", "SERIAL", "HOME", "BUCKET",
-		"USERHOST", "IP_ADDR":
+		"USERHOST", "IP_ADDR",
+		// 新增的语义类：人名、地址、账号、主机名、用户名。
+		// 它们靠"上下文锚点"（姓名：/地址：/账号：）或结构特征定位，
+		// 精度不如密钥类，所以统一归到个人信息开关下，可一键关掉。
+		"PERSON", "ADDRESS", "ACCOUNT", "HOSTNAME", "USERNAME":
 		return true
 	}
 	return false
@@ -1027,6 +1080,8 @@ func (e *Engine) Clear() {
 	e.records = nil
 	e.forward = make(map[string]string, 64)
 	e.reverse = make(map[string]string, 64)
+	e.lru = list.New()
+	e.lruEls = make(map[string]*list.Element, 64)
 	e.sent = make(map[string][]SentPart, 32)
 	e.sentOrder = nil
 	e.backs = make(map[string]map[string]int, 32)
@@ -1041,33 +1096,57 @@ func (e *Engine) Clear() {
 // 4096 个值上就有约 50% 撞车概率，且可离线反推原值）。
 func (e *Engine) placeholderFor(value, kind string) string {
 	if ph, ok := e.forward[value]; ok {
+		// LRU：命中就把这个值挪到队首，避免"被大量冷值挤掉"的活跃值
+		// 在回程时换不回原文。
+		e.touchValueLocked(value)
 		return ph
 	}
 	ph := e.placeholderName(value, kind)
 	e.forward[value] = ph
 	e.reverse[ph] = value
-	e.valueOrder = append(e.valueOrder, value)
+	if e.lru != nil {
+		if e.lruEls == nil {
+			e.lruEls = make(map[string]*list.Element, 64)
+		}
+		e.lruEls[value] = e.lru.PushFront(value)
+	}
 	e.evictValuesLocked()
 	return ph
 }
 
-// evictValuesLocked 在映射超限时按插入顺序淘汰最旧的值（调用方持有写锁）。
-//
-// 淘汰只影响"回程还能不能换回原文"，不影响"已经发出去的占位符"。
-// 这让内存有界，代价是极老的值在回复里出现时换不回来（用户会看到占位符）。
-func (e *Engine) evictValuesLocked() {
-	if len(e.valueOrder) <= maxValues {
+// touchValueLocked 把一个已存在的值标记为"最近用过"（调用方持有写锁）。
+func (e *Engine) touchValueLocked(value string) {
+	if e.lru == nil || e.lruEls == nil {
 		return
 	}
-	drop := len(e.valueOrder) - maxValues
-	for _, v := range e.valueOrder[:drop] {
+	if el, ok := e.lruEls[value]; ok {
+		e.lru.MoveToFront(el)
+	}
+}
+
+// evictValuesLocked 在映射超限时淘汰"最久没被用过"的值（调用方持有写锁）。
+//
+// 为什么是 LRU 而不是 FIFO：同一份配置文件里的密钥往往反复出现，FIFO 会在
+// 灌入大量一次性值（日志、堆栈）时把仍然活跃的老值挤掉，导致回程换不回原文。
+//
+// 淘汰只影响"回程还能不能换回原文"，不影响"已经发出去的占位符"。
+func (e *Engine) evictValuesLocked() {
+	if e.lru == nil || len(e.forward) <= maxValues {
+		return
+	}
+	for len(e.forward) > maxValues {
+		back := e.lru.Back()
+		if back == nil {
+			return
+		}
+		v, _ := back.Value.(string)
+		e.lru.Remove(back)
+		delete(e.lruEls, v)
 		if ph, ok := e.forward[v]; ok {
 			delete(e.reverse, ph)
 			delete(e.forward, v)
 		}
 	}
-	// 从头切走，避免 slice 无界增长。
-	e.valueOrder = append([]string(nil), e.valueOrder[drop:]...)
 }
 
 // placeholderName 用进程级盐派生占位符。
@@ -1193,6 +1272,29 @@ func builtinRules() []Rule {
 			`\b[A-Za-z0-9._\-]{1,32}@[A-Za-z0-9][A-Za-z0-9._\-]{0,62}\b`, ActionMask), notEmailDomain),
 		validated(def("public_ip", "公网 IP 地址", "IP_ADDR",
 			`\b\d{1,3}(?:\.\d{1,3}){3}\b`, ActionMask), publicIPv4),
+
+		// 语义类：人名 / 地址 / 账号 / 主机名 / 用户名。
+		//
+		// 这些都靠"上下文锚点"定位（姓名：/地址：/账号：…），而不是裸匹配——
+		// 没有本地模型时，裸匹配中文人名会把"上线了""程序员"一起吃掉，
+		// 误伤的代价比漏掉更大。带锚点后精度够了，覆盖面也只差"裸文本里的
+		// 姓名"，那一段留给将来的本地模型。
+		grouped(def("person_labeled", "姓名（带标签）", "PERSON",
+			`(?i:(?:姓名|名字|联系人|收件人|客户|name)\s*[:：=]\s*)([\p{Han}]{2,4}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})`, ActionMask), 1),
+		grouped(def("person_intro", "自我介绍里的名字", "PERSON",
+			`(?:我叫|我的名字是|本人)\s*([\p{Han}]{2,4})`, ActionMask), 1),
+		grouped(def("address_labeled", "地址（带标签）", "ADDRESS",
+			`(?i:(?:地址|住址|收货地址|address)\s*[:：=]\s*)([^\n\r，。；;]{6,120})`, ActionMask), 1),
+		grouped(def("address_cn", "中文结构化地址", "ADDRESS",
+			`([\p{Han}]{2,10}(?:省|自治区|特别行政区))?([\p{Han}]{2,10}市)([\p{Han}]{2,10}(?:区|县|旗))([\p{Han}A-Za-z0-9]{2,20}(?:路|街|道|巷))([0-9]{1,5}号)`, ActionMask), 0),
+		grouped(def("account_labeled", "账号/用户名（带标签）", "ACCOUNT",
+			`(?i:(?:账号|帐号|账户|用户名|username|account|login)\s*[:：=]\s*)([A-Za-z0-9._%+\-@]{3,64})`, ActionMask), 1),
+		grouped(def("hostname_labeled", "主机名（带标签）", "HOSTNAME",
+			`(?i:(?:hostname|主机名|服务器)\s*[:：=]\s*)([A-Za-z0-9][A-Za-z0-9._\-]{1,253})`, ActionMask), 1),
+		def("hostname_internal", "内网主机名", "HOSTNAME",
+			`\b[A-Za-z0-9][A-Za-z0-9\-]{0,62}(?:\.[A-Za-z0-9][A-Za-z0-9\-]{0,62})*\.(?:local|lan|internal|intranet|corp|home)\b`, ActionMask),
+		grouped(def("username_labeled", "用户名（带标签）", "USERNAME",
+			`(?i:(?:user|username|登录名|用户)\s*[:：=]\s*)([A-Za-z0-9._\-]{2,32})`, ActionMask), 1),
 	}
 }
 

@@ -58,6 +58,15 @@ type ApplyParams struct {
 	// experimental_bearer_token，而不是要求外部 AETHER_API_KEY 环境变量。
 	// 桌面端无法可靠继承网关进程的环境变量，一键启动时用它完成接入。
 	CodexBearerToken string
+	// Tiers 是 Claude Code 的按档位模型（键：opus / sonnet / haiku / small）。
+	//
+	// 为什么单独给：Claude Code 的 /model 别名与子代理会按 tier 变量取模型，
+	// 把所有 tier 都指到同一个模型会让"opus 干重活、haiku 干杂活"的用法失效。
+	// 空值回退到 Model，保持原有单模型行为。
+	Tiers map[string]string
+	// Effort 是推理档位（low/medium/high/xhigh/max），只对支持的客户端生效
+	// （目前是 Codex 的 config.toml model_reasoning_effort）。空表示不写。
+	Effort string
 }
 
 // ModelOption 是模型选择器的一行。
@@ -787,10 +796,19 @@ func applyJSON(content []byte, p ApplyParams) ([]byte, error) {
 	}
 	if p.Model != "" {
 		env["ANTHROPIC_MODEL"] = p.Model
-		// Claude Code 的 opus/sonnet/haiku 别名与子代理会按 tier 变量取模型；
-		// 不设置时它们会绕过网关写死的模型名，上游无法解析。统一指到所选模型。
-		for _, key := range claudeTierEnvKeys {
-			env[key] = p.Model
+	}
+	// 档位模型：与保注释路径同一套回退规则。
+	if p.Model != "" || len(p.Tiers) > 0 {
+		tier := func(name string) string {
+			if v := strings.TrimSpace(p.Tiers[name]); v != "" {
+				return v
+			}
+			return strings.TrimSpace(p.Model)
+		}
+		for envKey, tierName := range claudeTierEnvKeys {
+			if v := tier(tierName); v != "" {
+				env[envKey] = v
+			}
 		}
 	}
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -800,13 +818,13 @@ func applyJSON(content []byte, p ApplyParams) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
-// claudeTierEnvKeys 是 Claude Code 按 tier 取模型的变量名。
+// claudeTierEnvKeys 是 Claude Code 按档位（tier）取模型的变量名。
 // 不设置时 opus/sonnet/haiku 别名与子代理会绕过网关写死的模型名，上游无法解析。
-var claudeTierEnvKeys = []string{
-	"ANTHROPIC_DEFAULT_OPUS_MODEL",
-	"ANTHROPIC_DEFAULT_SONNET_MODEL",
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL",
-	"ANTHROPIC_SMALL_FAST_MODEL",
+var claudeTierEnvKeys = map[string]string{
+	"ANTHROPIC_DEFAULT_OPUS_MODEL":   "opus",
+	"ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet",
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "haiku",
+	"ANTHROPIC_SMALL_FAST_MODEL":     "small",
 }
 
 // claudeMembers 组装 Claude Code settings.json 需要写入的顶层成员。
@@ -818,8 +836,26 @@ func claudeMembers(content []byte, p ApplyParams) map[string]any {
 	}
 	if p.Model != "" {
 		env["ANTHROPIC_MODEL"] = p.Model
-		for _, key := range claudeTierEnvKeys {
-			env[key] = p.Model
+	}
+	// 按档位模型：有就用，没配就回退到主模型（保持旧行为）。
+	tier := func(name string) string {
+		if v := strings.TrimSpace(p.Tiers[name]); v != "" {
+			return v
+		}
+		return strings.TrimSpace(p.Model)
+	}
+	if p.Model != "" || len(p.Tiers) > 0 {
+		if v := tier("opus"); v != "" {
+			env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = v
+		}
+		if v := tier("sonnet"); v != "" {
+			env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = v
+		}
+		if v := tier("haiku"); v != "" {
+			env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = v
+		}
+		if v := tier("small"); v != "" {
+			env["ANTHROPIC_SMALL_FAST_MODEL"] = v
 		}
 	}
 	members := map[string]any{"env": env}
@@ -1042,6 +1078,9 @@ func applyTOML(content []byte, p ApplyParams) ([]byte, error) {
 				continue
 			} else if p.CodexCatalog != "" && (strings.HasPrefix(t, "model_catalog_json =") || strings.HasPrefix(t, "model_catalog_json=")) {
 				continue
+			} else if strings.TrimSpace(p.Effort) != "" && (strings.HasPrefix(t, "model_reasoning_effort =") || strings.HasPrefix(t, "model_reasoning_effort=")) {
+				// 显式指定档位时替换旧值；没指定就保留用户自己写的。
+				continue
 			}
 		}
 		out = append(out, line)
@@ -1051,6 +1090,11 @@ func applyTOML(content []byte, p ApplyParams) ([]byte, error) {
 	head := []string{`model_provider = "aether"`}
 	if p.Model != "" {
 		head = append(head, `model = "`+p.Model+`"`)
+	}
+	// 推理档位：Codex 读 config.toml 的 model_reasoning_effort。
+	// 空表示"不指定"，让 Codex 用它自己的默认，而不是替用户写死一个档。
+	if e := strings.TrimSpace(p.Effort); e != "" {
+		head = append(head, `model_reasoning_effort = "`+e+`"`)
 	}
 	if p.CodexCatalog != "" {
 		head = append(head, `model_catalog_json = "`+p.CodexCatalog+`"`)

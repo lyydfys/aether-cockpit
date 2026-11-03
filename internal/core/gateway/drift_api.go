@@ -128,7 +128,23 @@ func (g *Gateway) driftParamsFor(a aetherAgent, origin, key string) clients.Appl
 	}
 	return clients.ApplyParams{
 		BaseURL: origin, APIKey: key, Model: model, ModelOptions: g.agentModelOptions(a.ID),
+		Tiers: g.agentTiers(a.ID), Effort: g.agentStageOf(a.ID)["effort"],
 	}
+}
+
+// agentTiers 取该 Agent 暂存的档位模型（opus/sonnet/haiku），供漂移预览对齐。
+func (g *Gateway) agentTiers(id string) map[string]string {
+	staged := g.agentStageOf(id)
+	tiers := map[string]string{}
+	for _, k := range []string{"opus", "sonnet", "haiku", "small"} {
+		if v := strings.TrimSpace(staged[k]); v != "" {
+			tiers[k] = v
+		}
+	}
+	if len(tiers) == 0 {
+		return nil
+	}
+	return tiers
 }
 
 // handleDriftApply POST /api/drift/apply —— 把检测到的漂移一键写回。
@@ -180,11 +196,30 @@ func (g *Gateway) handleDriftApply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"applied": applied, "errors": errs})
 }
 
-// driftFromChanges 把第一处文件变化摊成前端要的 drift 形状。
+// driftFromChanges 把文件变化摊成前端要的 drift 形状。
+//
+// 分类（与 aether 的五类对齐，便于页面按类型给不同的修复动作）：
+//   - removed ：我们写过的那份文件被人删了 → 只能重新接入
+//   - created ：文件是别人新建的（我们没写过）→ 提示可能重复配置
+//   - unwired ：网关地址被人改回官方 → 典型"换回原客户端"
+//   - model   ：地址还在，只有模型/档位被改 → 只重写模型即可
+//   - edited  ：其它键被改（用户手改、其它工具写入）
 func driftFromChanges(changes []clients.PreviewChange, want string) map[string]any {
 	first := changes[0]
+	kind := classifyDrift(changes)
 	var b strings.Builder
-	b.WriteString("配置文件与 Aether Cockpit 上次写入的不一致：")
+	switch kind {
+	case "removed":
+		b.WriteString("配置文件已被删除：")
+	case "created":
+		b.WriteString("检测到新建的配置文件：")
+	case "unwired":
+		b.WriteString("网关地址已被改回官方：")
+	case "model":
+		b.WriteString("模型设置已被改动：")
+	default:
+		b.WriteString("配置文件与 Aether Cockpit 上次写入的不一致：")
+	}
 	b.WriteString(first.Path)
 	for _, ln := range first.Lines {
 		if t := strings.TrimSpace(ln.Text); t != "" {
@@ -195,9 +230,48 @@ func driftFromChanges(changes []clients.PreviewChange, want string) map[string]a
 		}
 	}
 	return map[string]any{
-		"kind":   "unwired",
+		"kind":   kind,
 		"field":  "model",
 		"want":   want,
 		"detail": b.String(),
 	}
+}
+
+// classifyDrift 按变化内容判断漂移类型（多个文件时以最严重的一处为准）。
+func classifyDrift(changes []clients.PreviewChange) string {
+	sev := map[string]int{"removed": 4, "unwired": 3, "created": 2, "edited": 1, "model": 0}
+	worst := "edited"
+	for _, c := range changes {
+		k := "edited"
+		switch {
+		case c.Removed:
+			k = "removed"
+		case c.Created:
+			k = "created"
+		default:
+			// 地址类变化优先级最高：它意味着整个接入失效。
+			addr, model := false, false
+			for _, ln := range c.Lines {
+				t := strings.ToLower(ln.Text + " " + ln.Was)
+				if strings.Contains(t, "base_url") || strings.Contains(t, "baseurl") ||
+					strings.Contains(t, "anthropic_base_url") || strings.Contains(t, "api_url") ||
+					strings.Contains(t, "openaibaseurl") || strings.Contains(t, "deploymenturl") {
+					addr = true
+				}
+				if strings.Contains(t, "model") && !strings.Contains(t, "base") {
+					model = true
+				}
+			}
+			switch {
+			case addr:
+				k = "unwired"
+			case model:
+				k = "model"
+			}
+		}
+		if sev[k] > sev[worst] || (k == "model" && worst == "edited") {
+			worst = k
+		}
+	}
+	return worst
 }

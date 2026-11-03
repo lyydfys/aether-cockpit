@@ -25,6 +25,7 @@ package gateway
 import (
 	"fmt"
 	"log"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -62,6 +63,19 @@ type GroupRule struct {
 	Intent string `json:"intent,omitempty"`
 	// Time 条件：命中时段与星期。
 	Time *TimeWindow `json:"time,omitempty"`
+	// Tokens 条件：本次请求的输入长度（rune 数）≥ 该值。
+	// 用来把"大上下文"单独路由到长窗口渠道。0 = 不限制。
+	Tokens int `json:"tokens,omitempty"`
+	// Images 条件：请求是否带图片。nil = 不限制。
+	Images *bool `json:"images,omitempty"`
+	// Agents 条件：请求来自这些客户端（client_agent）。空 = 不限制。
+	Agents []string `json:"agents,omitempty"`
+	// Folders 条件：工作目录在这些路径（含子目录）之下。空 = 不限制。
+	Folders []string `json:"folders,omitempty"`
+	// ExceptFolders 条件：工作目录不在这些路径之下（与 Folders 互斥使用）。
+	ExceptFolders []string `json:"exceptFolders,omitempty"`
+	// Pause 临时停用这条规则（保留配置但不生效，便于排查）。
+	Pause bool `json:"pause,omitempty"`
 }
 
 // TimeWindow 是「一天里的某个时段」：From 到 To，均为 HH:MM。
@@ -566,7 +580,12 @@ func (r GroupRule) matches(ctx *RouteContext) bool {
 	if ctx == nil {
 		return false
 	}
-	if r.Effort == "" && r.Intent == "" && r.Time == nil {
+	// Pause 是"保留配置但临时不生效"，排查规则冲突时用。
+	if r.Pause {
+		return false
+	}
+	// 一条规则至少要有一个条件，否则它会无条件命中、把整组顺序钉死。
+	if !r.hasCondition() {
 		return false
 	}
 	if !effortConditionHolds(r.Effort, ctx.EffortIn) {
@@ -578,7 +597,78 @@ func (r GroupRule) matches(ctx *RouteContext) bool {
 	if r.Time != nil && !r.Time.Holds(ctx.ruleNow()) {
 		return false
 	}
+	// 下面几个条件都是"有值才判"：配置里没写就是通配。
+	if r.Tokens > 0 && ctx.Tokens < r.Tokens {
+		return false
+	}
+	if r.Images != nil && ctx.Images != *r.Images {
+		return false
+	}
+	if len(r.Agents) > 0 && !containsFold(r.Agents, ctx.Agent) {
+		return false
+	}
+	if len(r.Folders) > 0 && !underAnyFolder(ctx.Folder, r.Folders) {
+		return false
+	}
+	if len(r.ExceptFolders) > 0 && underAnyFolder(ctx.Folder, r.ExceptFolders) {
+		return false
+	}
 	return true
+}
+
+// hasCondition 判断这条规则是否有任何"会收窄命中"的条件。
+func (r GroupRule) hasCondition() bool {
+	return r.Effort != "" || r.Intent != "" || r.Time != nil ||
+		r.Tokens > 0 || r.Images != nil ||
+		len(r.Agents) > 0 || len(r.Folders) > 0 || len(r.ExceptFolders) > 0
+}
+
+// containsFold 在切片里做大小写无关的相等比较（客户端标识大小写不统一）。
+func containsFold(list []string, want string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
+	if want == "" {
+		return false
+	}
+	for _, v := range list {
+		if strings.ToLower(strings.TrimSpace(v)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// underAnyFolder 判断 folder 是否在任一前缀之下。
+//
+// 用"路径前缀 + 分隔符"比较而不是纯 strings.HasPrefix：否则 /work/app2
+// 会被 /work/app 误判为子目录。大小写按平台归一（Windows 不区分）。
+func underAnyFolder(folder string, prefixes []string) bool {
+	f := normFolder(folder)
+	if f == "" {
+		return false
+	}
+	for _, p := range prefixes {
+		pp := normFolder(p)
+		if pp == "" {
+			continue
+		}
+		if f == pp || strings.HasPrefix(f, pp+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func normFolder(p string) string {
+	s := strings.TrimSpace(p)
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "\\", "/")
+	s = strings.TrimRight(s, "/")
+	if runtime.GOOS == "windows" {
+		s = strings.ToLower(s)
+	}
+	return s
 }
 
 // applyGroupRules 在排序策略之后套用组规则。
@@ -622,9 +712,17 @@ func applyGroupRules(ctx *RouteContext, rules []GroupRule, seats []modelBinding)
 // 内层组（group/<id>）的候选在 groupSeatsLocked 里已各自套过自己的策略；
 // 外层策略作用于整条展开链，这就是「内层组没写 routing 时继承外层 routing」
 // （内层策略为 priority 时是空操作，对齐 aether Group.Within）。
-func (r *ModelRouter) applyGroupStrategyAndRules(group string, seats []modelBinding, text, sessionKey, effortIn string, allowIntent bool) ([]modelBinding, RouteOutcome) {
+func (r *ModelRouter) applyGroupStrategyAndRules(group string, seats []modelBinding, text, sessionKey, effortIn string, allowIntent bool, sig ...RouteSignals) ([]modelBinding, RouteOutcome) {
 	ctx := r.groupRouteContextLocked(group, text, sessionKey, allowIntent)
 	ctx.EffortIn = normalizeEffortRequest(effortIn)
+	// 请求信号（agent / folder / tokens / images）：只有调用方显式传入时才填，
+	// 否则相关条件不成立——宁可规则不命中，也不要用错误的信号去命中。
+	if len(sig) > 0 {
+		ctx.Tokens = sig[0].Tokens
+		ctx.Images = sig[0].Images
+		ctx.Agent = sig[0].Agent
+		ctx.Folder = sig[0].Folder
+	}
 	rules := r.virtualRules[group]
 	// 意图必须在策略重排之前定格：分类器给的是候选下标。
 	if len(rules) > 0 && rulesNeedIntent(rules) {

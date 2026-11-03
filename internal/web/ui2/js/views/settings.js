@@ -411,8 +411,12 @@ export default {
       return [
         section('脱敏', [
           line('请求脱敏', '请求离开这台电脑前，把密钥/邮箱/手机号换成占位符', toggle(!!s.redact, (on) => save({ redact: on }, '请求脱敏'))),
-          line('个人信息', '在脱敏里包含姓名、地址等个人字段', toggle(!!s.redact_personal, (on) => save({ redactPersonal: on }, '个人信息'))),
+          // 服务端返回的键是 redactPersonal（camelCase）；以前写成红下的
+          // s.redact_personal，开关永远是"关闭"状态，看着像没生效。
+          line('个人信息', '在脱敏里包含邮箱、手机号、证件、银行卡等个人字段', toggle(s.redactPersonal !== false, (on) => save({ redactPersonal: on }, '个人信息'))),
+          line('保留格式的假值', '密钥类改成"同形假值"（sk-… 仍是 sk-…），上游更难识别', toggle(!!s.redactShape, (on) => save({ redactShape: on }, '保留格式的假值'))),
           line('响应回填', '上游响应里的占位符换回原文', toggle(!!(s.privacy_mask && s.privacy_mask.enabled), (on) => save({ privacy_mask: { enabled: on } }, '响应回填'))),
+          h('div', { class: 'meta', style: 'padding:8px 2px' }, '按类型处置、细项开关、自定义规则、白名单与记录详情在「洞察 → 脱敏」页。'),
         ]),
       ];
     }

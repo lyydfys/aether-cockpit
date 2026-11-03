@@ -13,7 +13,7 @@ import (
 // （language_models.openai_compatible.aether + agent.default_model），
 // API Key 不在设置里，而是系统凭据存储：Windows 上是 Credential Manager，
 // 目标名 `zed:url=<api_url>`、用户名 Bearer、blob 为 Key 字节
-//（zed crates/gpui_windows/src/util.rs 与 language_model/src/api_key.rs）。
+// （zed crates/gpui_windows/src/util.rs 与 language_model/src/api_key.rs）。
 // 少写这一步 Zed 只会显示未配置 Key，所以 Key 写失败时整个 Apply 失败。
 const zedProviderKey = "aether"
 
@@ -74,11 +74,9 @@ func zedAPIURL(settings []byte) string {
 
 // applyZed 写 settings.json 并落 Key。JSONC（含注释）拒绝改写。
 func applyZed(content []byte, p ApplyParams) ([]byte, error) {
-	root := map[string]any{}
-	if len(strings.TrimSpace(string(content))) > 0 {
-		if err := json.Unmarshal(content, &root); err != nil {
-			return nil, fmt.Errorf("现有 Zed settings.json 不是合法 JSON（可能含注释，JSONC 无法安全合并）: %w", err)
-		}
+	root, err := parseJSONCObject(content, "Zed settings.json")
+	if err != nil {
+		return nil, err
 	}
 	apiURL := p.BaseURL + "/v1"
 	rows := modelRows(p)
@@ -124,11 +122,11 @@ func applyZed(content []byte, p ApplyParams) ([]byte, error) {
 	if err := zedWriteCredential(apiURL, p.APIKey); err != nil {
 		return nil, fmt.Errorf("写入 Zed 系统凭据失败: %w", err)
 	}
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := finishJSON(content, root)
 	if err != nil {
 		return nil, err
 	}
-	return append(out, '\n'), nil
+	return out, nil
 }
 
 func managedZed(data []byte) *ManagedInfo {

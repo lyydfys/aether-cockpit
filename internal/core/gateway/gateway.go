@@ -1550,8 +1550,8 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 	// 传 req.ReasoningEffort 进去是为了让组规则能按"请求要求的推理档"出规则
 	// （例如高强度推理只走贵模型）。RouteOutcome.EffortOut 是规则强制指定的
 	// 档位，非空时覆盖请求——只在客户端没有显式指定时生效，用户意图优先。
-	bindings, outcome := g.models.ResolveSmartEffort(req.Model, req.LastUserText(),
-		conversationFingerprint(req), req.ReasoningEffort, fromRouter)
+	bindings, outcome := g.models.ResolveSmartEffortSignals(req.Model, req.LastUserText(),
+		conversationFingerprint(req), req.ReasoningEffort, fromRouter, routeSignalsFor(req))
 	if outcome.EffortOut != "" && req.ReasoningEffort == "" {
 		req.ReasoningEffort = g.clampReasoningEffort(req.Model, outcome.EffortOut)
 	}

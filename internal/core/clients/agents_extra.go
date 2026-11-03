@@ -410,11 +410,9 @@ func init() {
 
 // applyClineProviders 合并写 providers.json：只改 aether 槽位与 lastUsedProvider。
 func applyClineProviders(content []byte, p ApplyParams) ([]byte, error) {
-	root := map[string]any{}
-	if len(strings.TrimSpace(string(content))) > 0 {
-		if err := json.Unmarshal(content, &root); err != nil {
-			return nil, fmt.Errorf("现有 Cline providers.json 不是合法 JSON: %w", err)
-		}
+	root, err := parseJSONCObject(content, "Cline providers.json")
+	if err != nil {
+		return nil, err
 	}
 	providers, _ := root["providers"].(map[string]any)
 	if providers == nil {
@@ -437,20 +435,14 @@ func applyClineProviders(content []byte, p ApplyParams) ([]byte, error) {
 	providers[clineSlot] = entry
 	root["providers"] = providers
 	root["lastUsedProvider"] = clineSlot
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(out, '\n'), nil
+	return finishJSON(content, root)
 }
 
 // applyClineState 同步扩展状态（存在才写）：provider/openAiBaseUrl/模型 id。
 func applyClineState(content []byte, p ApplyParams) ([]byte, error) {
-	root := map[string]any{}
-	if len(strings.TrimSpace(string(content))) > 0 {
-		if err := json.Unmarshal(content, &root); err != nil {
-			return nil, fmt.Errorf("现有 Cline globalState.json 不是合法 JSON: %w", err)
-		}
+	root, err := parseJSONCObject(content, "Cline globalState.json")
+	if err != nil {
+		return nil, err
 	}
 	root["actModeApiProvider"] = "openai"
 	root["planModeApiProvider"] = "openai"
@@ -462,27 +454,17 @@ func applyClineState(content []byte, p ApplyParams) ([]byte, error) {
 	}
 	delete(root, "actModeOpenAiModelInfo")
 	delete(root, "planModeOpenAiModelInfo")
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(out, '\n'), nil
+	return finishJSON(content, root)
 }
 
 // applyClineSecrets 把 Key 写进扩展的 secrets.json（存在才写）。
 func applyClineSecrets(content []byte, p ApplyParams) ([]byte, error) {
-	root := map[string]any{}
-	if len(strings.TrimSpace(string(content))) > 0 {
-		if err := json.Unmarshal(content, &root); err != nil {
-			return nil, fmt.Errorf("现有 Cline secrets.json 不是合法 JSON: %w", err)
-		}
-	}
-	root["openAiApiKey"] = p.APIKey
-	out, err := json.MarshalIndent(root, "", "  ")
+	root, err := parseJSONCObject(content, "Cline secrets.json")
 	if err != nil {
 		return nil, err
 	}
-	return append(out, '\n'), nil
+	root["openAiApiKey"] = p.APIKey
+	return finishJSON(content, root)
 }
 
 func managedCline(data []byte) *ManagedInfo {
@@ -796,6 +778,10 @@ func applyCodebuddyModels(content []byte, p ApplyParams) ([]byte, error) {
 		}
 		out = root
 	}
+	// 顶层是数组时没有"键"可保真，只能整份写；对象形态走保注释路径。
+	if !isArray {
+		return finishJSON(content, root)
+	}
 	raw, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return nil, err
@@ -805,11 +791,9 @@ func applyCodebuddyModels(content []byte, p ApplyParams) ([]byte, error) {
 
 // applyCodebuddySettings 把 CLI 的默认 model 指向我们的第一个模型（存在才写）。
 func applyCodebuddySettings(content []byte, p ApplyParams) ([]byte, error) {
-	root := map[string]any{}
-	if len(strings.TrimSpace(string(content))) > 0 {
-		if err := json.Unmarshal(content, &root); err != nil {
-			return nil, fmt.Errorf("现有 CodeBuddy settings.json 不是合法 JSON: %w", err)
-		}
+	root, err := parseJSONCObject(content, "CodeBuddy settings.json")
+	if err != nil {
+		return nil, err
 	}
 	rows := modelRows(p)
 	if len(rows) == 0 && p.Model != "" {
@@ -818,11 +802,7 @@ func applyCodebuddySettings(content []byte, p ApplyParams) ([]byte, error) {
 	if len(rows) > 0 {
 		root["model"] = rows[0][0]
 	}
-	raw, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(raw, '\n'), nil
+	return finishJSON(content, root)
 }
 
 func managedCodebuddy(data []byte) *ManagedInfo {
@@ -1185,15 +1165,9 @@ func copilotByokPath(home string) string {
 
 // applyCopilotJetBrains 在 byok.json 里新增/替换 aether provider 的三个键。
 func applyCopilotJetBrains(content []byte, p ApplyParams) ([]byte, error) {
-	root := map[string]any{}
-	if len(strings.TrimSpace(string(content))) > 0 {
-		parsed, err := jsoncToJSON(content)
-		if err != nil {
-			return nil, fmt.Errorf("现有 byok.json 不是合法 JSON: %w", err)
-		}
-		if err := json.Unmarshal(parsed, &root); err != nil {
-			return nil, fmt.Errorf("byok.json 顶层不是对象: %w", err)
-		}
+	root, err := parseJSONCObject(content, "byok.json")
+	if err != nil {
+		return nil, err
 	}
 	rows := modelRows(p)
 	if len(rows) == 0 && p.Model != "" {
@@ -1214,11 +1188,7 @@ func applyCopilotJetBrains(content []byte, p ApplyParams) ([]byte, error) {
 	root[vscodeGroupName+"-provider-config"] = map[string]any{"groupName": vscodeGroupName, "apiType": "chatCompletions"}
 	root[vscodeGroupName+"-api-key"] = p.APIKey
 	root[vscodeGroupName+"-models-config"] = models
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(out, '\n'), nil
+	return finishJSON(content, root)
 }
 
 func managedCopilotJetBrains(data []byte) *ManagedInfo {

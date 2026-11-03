@@ -2,6 +2,9 @@ package redact
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -95,13 +98,14 @@ func TestValueTablesAreBounded(t *testing.T) {
 	e := New()
 	e.SetEnabled(true)
 
-	// 直接构造超量值，避免跑 2 万次正则（慢）。
+	// 直接构造超量值，避免跑 20 万次正则（慢）。
 	e.mu.Lock()
 	for i := 0; i < maxValues+100; i++ {
 		e.placeholderFor("value-"+string(rune('a'+i%26))+string(rune(i)), "TERM")
 	}
 	n := len(e.forward)
 	rev := len(e.reverse)
+	lru := e.lru.Len()
 	e.mu.Unlock()
 
 	if n > maxValues {
@@ -109,6 +113,72 @@ func TestValueTablesAreBounded(t *testing.T) {
 	}
 	if rev != n {
 		t.Fatalf("forward/reverse 不一致：%d vs %d", n, rev)
+	}
+	if lru != n {
+		t.Fatalf("LRU 与 forward 不一致：%d vs %d", lru, n)
+	}
+}
+
+// 淘汰必须是 LRU：被反复用到的老值不能被后续冷值挤掉。
+func TestValueTableEvictsLeastRecentlyUsed(t *testing.T) {
+	e := New()
+	e.SetEnabled(true)
+
+	e.mu.Lock()
+	hot := "hot-value"
+	e.placeholderFor(hot, "TERM")
+	for i := 0; i < maxValues+50; i++ {
+		e.placeholderFor("cold-"+string(rune(i)), "TERM")
+		// 中途反复触碰热点值，模拟"同一份配置里的密钥反复出现"。
+		if i%1000 == 0 {
+			e.placeholderFor(hot, "TERM")
+		}
+	}
+	_, stillThere := e.forward[hot]
+	e.mu.Unlock()
+
+	if !stillThere {
+		t.Fatal("热点值被冷值挤掉了：LRU 退化成 FIFO")
+	}
+}
+
+// 盐必须跨进程稳定：同一个盐文件下，两个引擎给出相同占位符。
+func TestSaltPersistsAcrossEngines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "redact-salt")
+	SetSaltFile(path)
+	defer SetSaltFile("")
+
+	e1 := New()
+	e1.SetEnabled(true)
+	ph1 := firstPlaceholder(t, e1.Mask("mail alice@example.com here", "", "").Text)
+
+	// 模拟重启：新引擎读同一个盐文件。
+	e2 := New()
+	e2.SetEnabled(true)
+	ph2 := firstPlaceholder(t, e2.Mask("mail alice@example.com here", "", "").Text)
+
+	if ph1 != ph2 {
+		t.Fatalf("盐没落盘或没复用：%q vs %q", ph1, ph2)
+	}
+
+	// 盐文件必须存在；类 Unix 上还要求 0600。
+	// Windows 的权限模型不体现在 Mode().Perm() 上（一律报 0666），所以只在
+	// 非 Windows 断言位数——真正的隔离靠 NTFS ACL，不是这 9 个 bit。
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("盐文件未写入：%v", err)
+	}
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
+		t.Errorf("盐文件权限 = %o，期望 600", st.Mode().Perm())
+	}
+
+	// 换一个盐文件 → 占位符必须变（证明盐真的参与派生）。
+	SetSaltFile(filepath.Join(dir, "other-salt"))
+	e3 := New()
+	e3.SetEnabled(true)
+	if ph3 := firstPlaceholder(t, e3.Mask("mail alice@example.com here", "", "").Text); ph3 == ph1 {
+		t.Fatal("换了盐文件却给出相同占位符")
 	}
 }
 
@@ -155,6 +225,51 @@ func TestSecretRulesCoverRealWorldShapes(t *testing.T) {
 				t.Fatalf("命中类型里没有 %s：%v（文本=%q）", tc.kind, kinds, r.Text)
 			}
 		})
+	}
+}
+
+// 语义类（人名/地址/账号/主机名/用户名）靠上下文锚点定位：
+// 命中要遮，裸文本不能乱吃。
+func TestSemanticRulesNeedContext(t *testing.T) {
+	hit := []struct{ in, want, kind string }{
+		{"姓名：张三", "张三", "PERSON"},
+		{"我叫李小明，来自杭州", "李小明", "PERSON"},
+		{"地址：浙江省杭州市西湖区文三路 100 号 3 幢", "浙江省杭州市西湖区文三路", "ADDRESS"},
+		{"浙江省杭州市西湖区文三路100号", "浙江省杭州市西湖区文三路100号", "ADDRESS"},
+		{"账号：alice_w2026", "alice_w2026", "ACCOUNT"},
+		{"hostname: db-01.prod.internal", "db-01.prod.internal", "HOSTNAME"},
+		{"登录名: alice_w", "alice_w", "USERNAME"},
+	}
+	for _, tc := range hit {
+		e := New()
+		e.SetEnabled(true)
+		r := e.Mask(tc.in, "", "")
+		if strings.Contains(r.Text, tc.want) {
+			t.Errorf("%q 未被脱敏：%q", tc.in, r.Text)
+		}
+		found := false
+		for _, h := range r.Hits {
+			if h.Kind == tc.kind {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%q 未命中 %s（命中：%v）", tc.in, tc.kind, r.Hits)
+		}
+	}
+
+	// 裸文本不能被"猜"成人名/地址：没有锚点时宁可漏，也不能误伤。
+	for _, s := range []string{
+		"我们上线了一个新版本",
+		"这个程序员写得不错",
+		"北京市正在优化营商环境",
+		"user 可以做变量名",
+	} {
+		e := New()
+		e.SetEnabled(true)
+		if r := e.Mask(s, "", ""); strings.Contains(r.Text, "{{") {
+			t.Errorf("裸文本被误伤：%q → %q", s, r.Text)
+		}
 	}
 }
 

@@ -126,8 +126,33 @@ func finishJSON(raw []byte, root map[string]any) ([]byte, error) {
 			changed[k] = v
 		}
 	}
-	if len(changed) > 0 {
-		if out, ok := spliceMembers(raw, changed); ok {
+	// 删除也必须体现出来：applier 里 delete(root, ...) 表达的意图是
+	// "把这个键从文件里去掉"，只 splice 新值会让旧键留在原地。
+	var removed []string
+	for k := range old {
+		if _, ok := root[k]; !ok {
+			removed = append(removed, k)
+		}
+	}
+	sort.Strings(removed)
+
+	if len(changed) > 0 || len(removed) > 0 {
+		out := raw
+		ok := true
+		if len(changed) > 0 {
+			out, ok = spliceMembers(out, changed)
+		}
+		if ok {
+			for _, k := range removed {
+				if next, err := jsoncutil.RemoveMember(out, k); err == nil {
+					out = next
+				} else {
+					ok = false
+					break
+				}
+			}
+		}
+		if ok {
 			return out, nil
 		}
 	}
