@@ -13,34 +13,47 @@ import (
 
 // groupPayload 是保存/导入一个路由组的请求体（与 aether 前端字段一致）。
 type groupPayload struct {
-	ID         string           `json:"id"`
-	From       string           `json:"from"`
-	Name       string           `json:"name"`
-	Members    []string         `json:"members"`
-	Match      []string         `json:"match"`
-	Routing    string           `json:"routing"`
-	Pick       string           `json:"pick"`
-	Affinity   string           `json:"affinity"`
-	Fast       []string         `json:"fast"`
-	Off        []string         `json:"off"`
-	Levels     []string         `json:"levels"`
-	Weights    map[string]int   `json:"weights"`
-	Rules      []map[string]any `json:"rules"`
-	Effort     string           `json:"effort"`
-	Classifier string           `json:"classifier"`
-	Family     string           `json:"family"`
-	FirstToken int              `json:"firstToken"`
-	Patience   int              `json:"patience"`
-	Context    int              `json:"context"`
-	Sink       bool             `json:"sink"`
-	Disabled   bool             `json:"disabled"`
-	Hidden     bool             `json:"hidden"`
-	Unlists    bool             `json:"unlists"`
+	ID         string         `json:"id"`
+	From       string         `json:"from"`
+	Name       string         `json:"name"`
+	Members    []string       `json:"members"`
+	Match      []string       `json:"match"`
+	Routing    string         `json:"routing"`
+	Pick       string         `json:"pick"`
+	Affinity   string         `json:"affinity"`
+	Fast       []string       `json:"fast"`
+	Off        []string       `json:"off"`
+	Levels     []string       `json:"levels"`
+	Weights    map[string]int `json:"weights"`
+	Rules      []GroupRule    `json:"rules"`
+	Effort     string         `json:"effort"`
+	Classifier string         `json:"classifier"`
+	Family     string         `json:"family"`
+	FirstToken int            `json:"firstToken"`
+	Patience   int            `json:"patience"`
+	Context    int            `json:"context"`
+	Sink       bool           `json:"sink"`
+	Disabled   bool           `json:"disabled"`
+	Hidden     bool           `json:"hidden"`
+	Unlists    bool           `json:"unlists"`
 }
 
+// chainFromMembers 把页面成员折成路由链。成员两种写法：
+//   - "provider/model"：取渠道 ID 进链（同渠道只出现一次）；
+//   - "group/<id>"：嵌套组，整项保留在链里，由解析期递归展开。
+//
+// 嵌套组的存在性不在这里判断——保存时由 prepareGroupDef 明确报错，
+// 解析时由 expandGroupChain 做环检测与限深。
 func chainFromMembers(members []string) []string {
 	var chain []string
 	for _, id := range members {
+		if _, isGroup := nestedGroupRef(id); isGroup {
+			entry := strings.TrimSpace(id)
+			if !containsString(chain, entry) {
+				chain = append(chain, entry)
+			}
+			continue
+		}
 		pid, _, ok := strings.Cut(id, "/")
 		if !ok || pid == "" || containsString(chain, pid) {
 			continue
@@ -87,12 +100,46 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
+// prepareGroupDef 在落盘前校验并归一化组定义：
+//   - 嵌套成员必须是已存在的组（不能引用不存在的组，也不能指向自己）；
+//   - 组规则必须是合法配置（use 属于成员、档位/时区合法、至少一个条件）。
+//
+// 为什么在保存时拒绝而不是"存下去再说"：仓库既有的原则是「不静默降级」，
+// 一条存了却永不命中的规则，比一条保存失败的规则更难排查。
+func (g *Gateway) prepareGroupDef(def *routingGroupDef) error {
+	defs := g.groupDefsByID()
+	known := make(map[string]bool, len(defs))
+	for id := range defs {
+		known[id] = true
+	}
+	for _, m := range missingNestedGroups(def.Members, def.ID, known) {
+		return fmt.Errorf("嵌套成员 %q 引用的路由组不存在（或指向自身，或缺少组 ID）", m)
+	}
+	// manual 组的 pick 必须是一个具体模型：指向嵌套组时链不会因此重排，
+	// 静默接受会变成"选了却没用"。
+	if def.Routing == "manual" && def.Pick != "" {
+		if _, isGroup := nestedGroupRef(def.Pick); isGroup {
+			return fmt.Errorf("manual 组的 pick 只能指向具体模型，不能指向嵌套组")
+		}
+	}
+	// 规则的 use 可以指向本组成员，也可以指向嵌套组展开后的内层成员
+	// （嵌套组落地后它们就是同一批候选）。
+	members := expandMembersForRules(def.Members, defs, map[string]bool{def.ID: true})
+	rules, err := cleanGroupRules(def.Rules, members)
+	if err != nil {
+		return err
+	}
+	def.Rules = rules
+	return nil
+}
+
 func (g *Gateway) persistGroup(def routingGroupDef, oldID string) error {
 	if len(def.Chain) == 0 {
 		return fmt.Errorf("至少选择一个成员模型")
 	}
-	// 只持久化内核真正读取的字段。未实现的 weight/free/levels/match/rules/
-	// fast/off/affinity 不再写回，避免“保存成功但永远不生效”的假象。
+	// 只持久化内核真正读取的字段：未实现的 weight/free/levels/match/fast/
+	// off/affinity 不再写回，避免"保存成功但永远不生效"的假象；rules 已经
+	// 接入组规则引擎（group_rule.go），因此照常写回。
 	strategy, supported := groupStrategySupport(def.Routing)
 	effectiveRouting := def.Routing
 	if !supported && effectiveRouting != "" {
@@ -104,6 +151,9 @@ func (g *Gateway) persistGroup(def routingGroupDef, oldID string) error {
 		"name":     def.Name,
 		"members":  def.Members,
 		"routing":  effectiveRouting,
+	}
+	if len(def.Rules) > 0 {
+		obj["rules"] = def.Rules
 	}
 	if def.Pick != "" {
 		obj["pick"] = def.Pick
@@ -151,6 +201,20 @@ func (g *Gateway) persistGroup(def routingGroupDef, oldID string) error {
 	g.settingsMu.Unlock()
 	g.rebuildRoutingGroups()
 	return saveErr
+}
+
+// shareGroupDef 是分享文本里的组定义。rules 已接入内核，因此随分享一起
+// 导出；空 rules 不写，保持旧分享文本的形状。嵌套成员（group/<id>）也随
+// members 导出，导入方缺少该组时由 prepareGroupDef 明确报错。
+func shareGroupDef(def routingGroupDef) map[string]any {
+	out := map[string]any{
+		"name": def.Name, "members": def.Members, "routing": def.Routing,
+		"pick": def.Pick,
+	}
+	if len(def.Rules) > 0 {
+		out["rules"] = def.Rules
+	}
+	return out
 }
 
 func removeString(list []string, v string) []string {
@@ -217,12 +281,18 @@ func (g *Gateway) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 			fail(http.StatusBadRequest, "至少选择一个成员模型")
 			return
 		}
+		if err := g.prepareGroupDef(&def); err != nil {
+			fail(http.StatusBadRequest, err.Error())
+			return
+		}
 		if err := g.persistGroup(def, p.From); err != nil {
 			fail(http.StatusInternalServerError, "保存失败: "+err.Error())
 			return
 		}
 		resp := g.buildGroups()
-		if warnings := routingWarnings(def); len(warnings) > 0 {
+		warnings := routingWarnings(def)
+		warnings = append(warnings, nestedGroupWarnings(def.Members, def.ID, g.knownGroupIDs())...)
+		if len(warnings) > 0 {
 			// 保存时立即回告：这些字段没有进内核，已从持久化配置里移除。
 			resp["warnings"] = warnings
 		}
@@ -295,6 +365,10 @@ func (g *Gateway) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 			fail(http.StatusBadRequest, "pick 不在该组的成员里")
 			return
 		}
+		if _, isGroup := nestedGroupRef(body.Pick); isGroup {
+			fail(http.StatusBadRequest, "pick 只能指向具体模型，不能指向嵌套组")
+			return
+		}
 		target.Pick = body.Pick
 		target.Routing = "manual"
 		if err := g.persistGroup(*target, target.ID); err != nil {
@@ -340,10 +414,7 @@ func (g *Gateway) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 			fail(http.StatusNotFound, "路由组不存在: "+body.ID)
 			return
 		}
-		shared, _ := json.Marshal(map[string]any{"aether_group": map[string]any{
-			"name": target.Name, "members": target.Members, "routing": target.Routing,
-			"pick": target.Pick,
-		}})
+		shared, _ := json.Marshal(map[string]any{"aether_group": shareGroupDef(*target)})
 		writeJSON(w, http.StatusOK, map[string]any{"shared": string(shared)})
 
 	case "import":
@@ -385,6 +456,10 @@ func (g *Gateway) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 		def := defFromPayload(p, id)
 		if len(def.Chain) == 0 {
 			fail(http.StatusBadRequest, "分享里的模型在本机都没有对应渠道")
+			return
+		}
+		if err := g.prepareGroupDef(&def); err != nil {
+			fail(http.StatusBadRequest, "导入失败: "+err.Error())
 			return
 		}
 		if err := g.persistGroup(def, ""); err != nil {

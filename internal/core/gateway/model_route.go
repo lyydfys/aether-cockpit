@@ -41,6 +41,9 @@ type ModelRouter struct {
 	virtual map[string][]string
 	// virtualStrategy 虚拟组的排序策略名（priority | rotate | pace，见 routeStrategies）。
 	virtualStrategy map[string]string
+	// virtualRules 虚拟组 -> 组规则（intent / effort / time），见 group_rule.go。
+	// 规则在策略排序之后套用，只重排候选、不改变候选集合。
+	virtualRules map[string][]GroupRule
 	// rotateCounters rotate 策略的轮转计数器，按组名独立。
 	rotateCounters map[string]*atomic.Uint64
 	// quotaLookup 渠道额度查询函数（由网关把账号池接进来，见 SetQuotaLookup）。
@@ -61,6 +64,10 @@ type ModelRouter struct {
 	modelSource atomic.Pointer[func(string) []ir.ModelMeta]
 	// alias 是归一化/规范模型名 -> 跨渠道绑定链（同一模型的不同写法自动成链）。
 	alias map[string][]modelBinding
+	// redirects 是用户配置的重定向：归一化虚拟名 -> 渠道+上游模型候选链。
+	redirects map[string][]modelBinding
+	// redirectRaw 保存原始重定向配置，Rebuild 时按当前渠道注册顺序重算。
+	redirectRaw map[string]map[string]string
 	// aliaser 由网关注入：返回某渠道模型的规范别名（models.dev canonical/显示名）。
 	aliaser atomic.Pointer[func(string, string) []string]
 	// readyLookup 由网关注入：渠道当前是否有可用账号。解析时优先有额度的渠道。
@@ -101,6 +108,32 @@ type RouteContext struct {
 	Intent IntentClassifyFunc
 	// Latency 渠道时延查询（仅 fast 策略使用）。nil = 无样本。
 	Latency LatencyLookup
+	// EffortIn 是请求显式要求的 reasoning effort（已归一化，空 = 未要求）。
+	// 组规则的 effort 条件读它；策略不读。
+	EffortIn string
+	// EffortOut 是组规则命中后要求请求改用的 reasoning effort（UseEffort）。
+	// 规则层只写这个字段，由 dispatch 在拿到候选链后写回 req.ReasoningEffort——
+	// 路由表不应该反过来改请求，否则策略与规则都能偷偷改请求语义。
+	EffortOut string
+	// Now 是规则 time 条件使用的时钟；零值 = time.Now()（测试注入用）。
+	Now time.Time
+	// intentPick / intentPicked 是规则层定格下来的「分类器点名的候选」。
+	//
+	// 为什么要在策略重排之前定格：分类器输出的是候选下标，rotate / smart
+	// 一旦把链重排，同一个下标就指向别的成员。这里存绑定而不是下标。
+	intentPick   modelBinding
+	intentPicked bool
+}
+
+// RouteOutcome 是一次解析的附加输出：它不参与候选顺序，只描述「这次解析
+// 决定了什么」。dispatch 拿到候选链后可以按需写回请求（例如组规则的
+// UseEffort），trace 也可以记下命中的规则序号。
+type RouteOutcome struct {
+	// EffortOut 是组规则命中时要求改用的 reasoning effort（已归一化）；
+	// 空表示规则没有要求，保持客户端原值。
+	EffortOut string
+	// RuleHit 是命中的组规则序号（1 起；0 = 没有规则命中）。
+	RuleHit int
 }
 
 // LatencyLookup 返回渠道的时延估计（首字节毫秒 + 吞吐 token/s）。
@@ -150,9 +183,92 @@ func NewModelRouter() *ModelRouter {
 		bare:            make(map[string][]modelBinding, 64),
 		virtual:         make(map[string][]string, 8),
 		virtualStrategy: make(map[string]string, 8),
+		virtualRules:    make(map[string][]GroupRule, 8),
 		rotateCounters:  make(map[string]*atomic.Uint64, 8),
 		alias:           make(map[string][]modelBinding, 128),
+		redirects:       make(map[string][]modelBinding, 8),
+		redirectRaw:     make(map[string]map[string]string, 8),
 	}
+}
+
+// SetModelRedirects 设置「虚拟模型名 -> 渠道 -> 上游模型名」的重定向表。
+// 目标顺序按渠道注册顺序；解析时仍会把有可用账号的渠道排到前面。
+func (r *ModelRouter) SetModelRedirects(in map[string]map[string]string) {
+	r.mu.Lock()
+	r.redirectRaw = cloneModelRedirects(in)
+	r.rebuildRedirectsLocked()
+	r.mu.Unlock()
+}
+
+// rebuildRedirectsLocked 按当前渠道注册顺序重建重定向候选链。
+// 调用方必须持有 r.mu 写锁。
+func (r *ModelRouter) rebuildRedirectsLocked() {
+	out := make(map[string][]modelBinding, len(r.redirectRaw))
+	for alias, targets := range r.redirectRaw {
+		list := make([]modelBinding, 0, len(targets))
+		for idx, p := range provider.All() {
+			pid := p.Manifest().ID
+			upstream, ok := targets[pid]
+			if !ok {
+				continue
+			}
+			// 用户可能写公开模型名（如 Qoder 的 DeepSeek-Flash），也可能写
+			// 上游 key（dfmodel）。能在目录里对上就换成真正的上游名，避免
+			// 重定向配置看起来生效、实际把显示名发给上游。
+			list = append(list, modelBinding{
+				ProviderID:    pid,
+				UpstreamModel: r.resolveRedirectUpstream(pid, upstream),
+				DisplayName:   alias,
+				Priority:      idx,
+			})
+		}
+		if len(list) > 0 {
+			out[normalizeModelKey(alias)] = list
+		}
+	}
+	r.redirects = out
+}
+
+// resolveRedirectUpstream 把重定向目标折成渠道真正发送的上游模型名。
+// 优先按目录里的公开 ID / 显示名 / 已有上游名匹配；对不上则原样返回，
+// 支持用户直接填上游 key。
+func (r *ModelRouter) resolveRedirectUpstream(pid, target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	if i := strings.LastIndex(target, "/"); i > 0 {
+		if target[:i] == pid {
+			target = target[i+1:]
+		} else {
+			// OpenRouter 等上游的模型名本身就带斜杠；没有本渠道前缀时
+			// 不做目录匹配，原样发送，避免误撞成本渠道的同名模型。
+			return target
+		}
+	}
+	key := normalizeModelKey(target)
+	if src := r.modelSource.Load(); src != nil && *src != nil {
+		for _, m := range (*src)(pid) {
+			if normalizeModelKey(m.ID) != key &&
+				normalizeModelKey(m.UpstreamModel) != key &&
+				normalizeModelKey(m.DisplayName) != key {
+				continue
+			}
+			if up := strings.TrimSpace(m.UpstreamModel); up != "" {
+				return up
+			}
+			return strings.TrimPrefix(m.ID, pid+"/")
+		}
+	}
+	return target
+}
+
+// HasRedirect 报告某个名字是否是已配置的重定向虚拟名。
+func (r *ModelRouter) HasRedirect(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.redirects[normalizeModelKey(name)]
+	return ok
 }
 
 // SetModelAliaser 注入规范别名（models.dev canonical + 显示名）。
@@ -191,6 +307,7 @@ func (r *ModelRouter) Rebuild() {
 	r.bare = make(map[string][]modelBinding, 64)
 	r.alias = make(map[string][]modelBinding, 128)
 	r.chatProviders = r.chatProviders[:0]
+	r.rebuildRedirectsLocked()
 
 	for idx, p := range provider.All() {
 		m := p.Manifest()
@@ -201,8 +318,11 @@ func (r *ModelRouter) Rebuild() {
 
 		models := m.Models
 		if src := r.modelSource.Load(); src != nil {
-			if live := (*src)(m.ID); live != nil {
-				models = live
+			if effective := (*src)(m.ID); effective != nil {
+				// 目录模式（merge / fallback / allowlist）已在模型来源里
+				// 处理；路由层不再自行合并，否则 fallback 与 allowlist
+				// 会被这里的 merge 抵消。
+				models = effective
 			}
 		}
 		for _, mm := range models {
@@ -292,6 +412,7 @@ func (r *ModelRouter) RemoveVirtualGroup(name string) {
 	r.mu.Lock()
 	delete(r.virtual, name)
 	delete(r.virtualStrategy, name)
+	delete(r.virtualRules, name)
 	delete(r.rotateCounters, name)
 	r.mu.Unlock()
 }
@@ -301,8 +422,23 @@ func (r *ModelRouter) ClearVirtualGroups() {
 	r.mu.Lock()
 	r.virtual = make(map[string][]string, 8)
 	r.virtualStrategy = make(map[string]string, 8)
+	r.virtualRules = make(map[string][]GroupRule, 8)
 	r.rotateCounters = make(map[string]*atomic.Uint64, 8)
 	r.mu.Unlock()
+}
+
+// SetVirtualGroupRules 设置虚拟组的组规则（intent / effort / time）。
+// rules 为空时清除。规则只重排候选、不改变候选集合，判定见 group_rule.go。
+func (r *ModelRouter) SetVirtualGroupRules(name string, rules []GroupRule) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(rules) == 0 {
+		delete(r.virtualRules, name)
+		return
+	}
+	cp := make([]GroupRule, len(rules))
+	copy(cp, rules)
+	r.virtualRules[name] = cp
 }
 
 // HasGroup 报告某个名字是否是当前虚拟路由组。
@@ -381,33 +517,61 @@ func (r *ModelRouter) ResolveSmart(model, text, sessionKey string, fromRouter bo
 	return r.resolveLocked(model, text, sessionKey, !fromRouter)
 }
 
+// ResolveSmartEffort 是 ResolveSmart 的增强版：多接受请求显式要求的
+// reasoning effort（组规则的 effort 条件读它），并返回解析附加输出
+// （命中的规则序号与规则要求的 UseEffort）。
+//
+// 为什么单独留一个入口而不是改 ResolveSmart 的签名：dispatch 之外还有大量
+// 只关心候选链的调用方（诊断页、自检、分类器自身），让它们继续用简单签名，
+// 只有真正要把规则结果写回请求的路径才需要 outcome。
+func (r *ModelRouter) ResolveSmartEffort(model, text, sessionKey, effort string, fromRouter bool) ([]modelBinding, RouteOutcome) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if strings.TrimSpace(text) == "" {
+		return r.resolveLockedOut(model, "", "", effort, false)
+	}
+	return r.resolveLockedOut(model, text, sessionKey, effort, !fromRouter)
+}
+
 // resolveLocked 是解析核心。text/sessionKey 非空且 allowIntent 时，
 // smart 组的 RouteContext 会带上文本、会话指纹与意图分类函数。
 // 调用方必须已持有 r.mu.RLock。
 func (r *ModelRouter) resolveLocked(model, text, sessionKey string, allowIntent bool) []modelBinding {
+	out, _ := r.resolveLockedOut(model, text, sessionKey, "", allowIntent)
+	return out
+}
+
+// resolveLockedOut 是解析核心的完整版：多接受请求的 reasoning effort，并把
+// 策略与组规则的附加输出（RouteOutcome）带回给调用方。
+// 调用方必须已持有 r.mu.RLock。
+func (r *ModelRouter) resolveLockedOut(model, text, sessionKey, effort string, allowIntent bool) ([]modelBinding, RouteOutcome) {
+	var none RouteOutcome
+
 	// 1. 精确匹配
 	if b, ok := r.exact[model]; ok {
-		return r.filterEnabled([]modelBinding{b})
+		return r.filterEnabled([]modelBinding{b}), none
 	}
 
-	// 2. 虚拟聚合组
-	if chain, ok := r.virtual[model]; ok {
-		out := make([]modelBinding, 0, len(chain))
-		for _, pid := range chain {
-			// 取该渠道在 Manifest 里登记的第一个模型作为默认上游模型。
-			// 用 manifest 顺序而不是 map 遍历，保证结果确定可复现。
-			if b, ok := defaultBindingFor(pid); ok {
-				out = append(out, b)
-			}
-		}
-		out = r.filterEnabled(out)
-		if len(out) > 0 {
-			out = r.applyGroupStrategy(model, out, text, sessionKey, allowIntent)
-			return out
+	// 2. 模型重定向：用户显式配置的虚拟名优先于同名裸模型与路由组。
+	//    即使目标渠道暂时都不可用也直接返回空链，避免同名真实模型被
+	//    静默顶替——重定向是用户明确选择的语义。
+	if list, ok := r.redirects[normalizeModelKey(model)]; ok {
+		return r.orderByReady(list), none
+	}
+
+	// 3. 虚拟聚合组。chain 里的 group/<id> 在这里递归展开（展开逻辑是
+	//    纯函数，见 group_rule.go 的 expandGroupChain），带环检测与最大深度；
+	//    展开结果再依次过策略与组规则。
+	if _, ok := r.virtual[model]; ok {
+		seats, warns := r.groupSeatsLocked(model, text, sessionKey, allowIntent)
+		logGroupWarnings(warns)
+		seats = r.filterEnabled(seats)
+		if len(seats) > 0 {
+			return r.applyGroupStrategyAndRules(model, seats, text, sessionKey, effort, allowIntent)
 		}
 	}
 
-	// 3. 带前缀但未登记：显式渠道前缀优先于裸名别名。
+	// 4. 带前缀但未登记：显式渠道前缀优先于裸名别名。
 	//    例如 cursor/auto 不是聊天渠道、不在 exact 表里，但 "auto" 同时是
 	//    qoder/trae/workbuddy 的通用模型名；如果先走别名合并，请求会被
 	//    错误地分到别的渠道，连自检都会报"无法路由回自己的渠道"。
@@ -415,11 +579,11 @@ func (r *ModelRouter) resolveLocked(model, text, sessionKey string, allowIntent 
 		pid := model[:i]
 		upstream := model[i+1:]
 		if _, ok := provider.Get(pid); ok {
-			return []modelBinding{{ProviderID: pid, UpstreamModel: upstream}}
+			return []modelBinding{{ProviderID: pid, UpstreamModel: upstream}}, none
 		}
 	}
 
-	// 4. 裸模型名 + 归一化/规范名合并。
+	// 5. 裸模型名 + 归一化/规范名合并。
 	//    精确同名（例如 Qoder 的 "DeepSeek-V4.1-Flash"）不能独占：还要并入
 	//    canonical/别名命中的其他渠道，才能跨渠道失败转移。
 	var merged []modelBinding
@@ -434,10 +598,10 @@ func (r *ModelRouter) resolveLocked(model, text, sessionKey string, allowIntent 
 		}
 	}
 	if len(merged) > 0 {
-		return r.orderByReady(merged)
+		return r.orderByReady(merged), none
 	}
 
-	// 5. 模型家族兜底：客户端发了未登记的新版本号（如 claude-sonnet-4-6-20260101），
+	// 6. 模型家族兜底：客户端发了未登记的新版本号（如 claude-sonnet-4-6-20260101），
 	//    按家族关键词匹配到提供同族模型的渠道。
 	//
 	//    刻意不做"任意请求都路由到所有渠道"的兜底：那会让"模型名拼错"
@@ -449,17 +613,55 @@ func (r *ModelRouter) resolveLocked(model, text, sessionKey string, allowIntent 
 				continue
 			}
 			for _, b := range list {
+				// 家族兜底只用于"同代未登记的新版本号"；V4 与 V4.1 这种
+				// 跨代模型不能被当成同族静默替换，否则回退时会偷换模型。
+				if !bindingMatchesVersion(model, b) {
+					continue
+				}
 				// 家族内优先用上游登记的模型名，而不是客户端传来的未知版本号。
-				out = append(out, b)
+				out = appendBindingUnique(out, b)
 			}
 		}
 		if len(out) > 0 {
-			return r.orderByReady(out)
+			return r.orderByReady(out), none
 		}
 	}
 
-	// 6. 无法判断：返回空，由网关给出明确错误（含可用模型清单）。
-	return nil
+	// 7. 无法判断：返回空，由网关给出明确错误（含可用模型清单）。
+	return nil, none
+}
+
+// mergeCatalogModels 合并上游实时目录与本地静态清单：live 优先（元数据更新），
+// 静态清单补 live 没提到的项。
+//
+// 为什么要合并而不是覆盖：上游 /models 经常漏项（实测 workbuddy-cn 的目录里没有
+// deepseek-v4.1-flash，但该模型名实际可用）。一旦被 live 整体覆盖，清单里写好的
+// 模型就从路由表里消失，客户端发裸名再也匹配不到它。
+//
+// 去重按 normalizeModelKey 而不是原始 ID：上游常把 DeepSeek-V4-Pro 写成
+// deepseek-v4-pro，只按精确 ID 去重会让同一模型在清单里出现两次。
+func mergeCatalogModels(live, static []ir.ModelMeta) []ir.ModelMeta {
+	seen := make(map[string]bool, len(live))
+	out := make([]ir.ModelMeta, 0, len(live)+len(static))
+	for _, m := range live {
+		out = append(out, m)
+		seen[modelMergeKey(m)] = true
+	}
+	for _, m := range static {
+		if seen[modelMergeKey(m)] {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// modelMergeKey 是合并去重用的归一化键；ID 为空时退回原始文本，避免误合并。
+func modelMergeKey(m ir.ModelMeta) string {
+	if k := normalizeModelKey(m.ID); k != "" {
+		return k
+	}
+	return strings.ToLower(strings.TrimSpace(m.ID))
 }
 
 // appendBindingUnique 按渠道+上游模型去重后追加绑定。
@@ -494,17 +696,12 @@ func (r *ModelRouter) orderByReady(list []modelBinding) []modelBinding {
 	return out
 }
 
-// applyGroupStrategy 为虚拟组构造 RouteContext 并套用策略。
-// text/sessionKey 是意图路由的输入（仅 smart 策略消费）；allowIntent 为
-// false 时 RouteContext.Intent 保持 nil——网关自调用的分类请求走这里防递归。
+// groupRouteContextLocked 构造策略与组规则共用的只读上下文。
+// text/sessionKey 是意图路由的输入；allowIntent 为 false 时
+// RouteContext.Intent 保持 nil——网关自调用的分类请求走这里防递归。
 // 调用方必须已持有 r.mu.RLock（resolveLocked 的路径保证），这里直接读内部
 // map；不能在这里再 RLock——同 goroutine 递归 RLock 遇到排队中的写锁会死锁。
-func (r *ModelRouter) applyGroupStrategy(group string, seats []modelBinding, text, sessionKey string, allowIntent bool) []modelBinding {
-	strategy := r.virtualStrategy[group]
-	if strategy == "" {
-		strategy = GroupStrategyPriority
-	}
-
+func (r *ModelRouter) groupRouteContextLocked(group, text, sessionKey string, allowIntent bool) *RouteContext {
 	ctx := &RouteContext{Group: group, Text: text, SessionKey: sessionKey}
 	// 计数器在 SetVirtualGroupWithStrategy 里只创建一次、之后不再替换，
 	// 捕获指针是安全的；Add 本身是原子的。轮转计数器由框架持有而不是
@@ -523,13 +720,43 @@ func (r *ModelRouter) applyGroupStrategy(group string, seats []modelBinding, tex
 	if lookup := r.latencyLookup.Load(); lookup != nil && *lookup != nil {
 		ctx.Latency = *lookup
 	}
-	// 意图分类只挂给 smart 策略，且仅在"下游真实请求 + 有文本"的路径上。
-	if allowIntent && strategy == GroupStrategySmart {
+	// 意图分类：smart 策略要用；带 intent 条件的组规则也要用。两者都只在
+	// "下游真实请求 + 有文本"的路径上注入，否则防递归就失效了。
+	if allowIntent && (r.virtualStrategy[group] == GroupStrategySmart || rulesNeedIntent(r.virtualRules[group])) {
 		if fn := r.intentFn.Load(); fn != nil && *fn != nil {
 			ctx.Intent = *fn
 		}
 	}
+	return ctx
+}
+
+// applyGroupStrategy 为虚拟组构造 RouteContext 并套用排序策略。
+// 调用方必须已持有 r.mu.RLock。
+func (r *ModelRouter) applyGroupStrategy(group string, seats []modelBinding, text, sessionKey string, allowIntent bool) []modelBinding {
+	ctx := r.groupRouteContextLocked(group, text, sessionKey, allowIntent)
+	strategy := r.virtualStrategy[group]
+	if strategy == "" {
+		strategy = GroupStrategyPriority
+	}
 	return applyRouteStrategy(strategy, ctx, seats)
+}
+
+// groupSeatsLocked 把虚拟组的 chain 展开成候选链（group/<id> 递归展开）。
+// 展开本身是纯函数（expandGroupChain），这里只负责把路由表与内层组策略
+// 接进去。
+//
+// 内层组自己声明了 routing 时先按它排序；没声明时策略是 priority（空操作），
+// 外层策略随后作用于整条展开链——这就是「内层组默认继承外层 routing」
+// （对齐 aether Group.Within）。
+// 调用方必须已持有 r.mu.RLock。
+func (r *ModelRouter) groupSeatsLocked(group, text, sessionKey string, allowIntent bool) ([]modelBinding, []string) {
+	return expandGroupChain(groupChainSource{
+		Chains:      r.virtual,
+		DefaultSeat: defaultBindingFor,
+		Segment: func(gid string, seats []modelBinding) []modelBinding {
+			return r.applyGroupStrategy(gid, seats, text, sessionKey, allowIntent)
+		},
+	}, group)
 }
 
 // applyRouteStrategy 是策略执行的统一封装（学 aether 的 routes.Apply）：
@@ -791,6 +1018,23 @@ var familyKeywords = []string{
 	"ernie", "hunyuan", "minimax", "spark", "step",
 }
 
+// bindingMatchesVersion 报告候选绑定是否与请求的版本代际兼容。
+// 请求没有 vX 标签时不限制；请求有标签时，候选必须带同一个标签——
+// 完全不标版本的候选（例如 Qoder 的泛槽位 DeepSeek-Flash）也不参与
+// 家族兜底，否则 V4 Flash 的请求可能被静默换成 V4.1。
+func bindingMatchesVersion(model string, b modelBinding) bool {
+	want := modelVersionTag(model)
+	if want == "" {
+		return true
+	}
+	for _, name := range []string{b.UpstreamModel, b.DisplayName} {
+		if modelVersionTag(name) != want {
+			return false
+		}
+	}
+	return true
+}
+
 // modelFamily 提取模型名所属家族关键词。
 func modelFamily(model string) string {
 	lower := strings.ToLower(model)
@@ -876,8 +1120,11 @@ func (r *ModelRouter) KnownModels() []ir.ModelMeta {
 		m := p.Manifest()
 		models := m.Models
 		if src := r.modelSource.Load(); src != nil {
-			if live := (*src)(m.ID); live != nil {
-				models = live
+			if effective := (*src)(m.ID); effective != nil {
+				// 目录模式（merge / fallback / allowlist）已在模型来源里
+				// 处理；路由层不再自行合并，否则 fallback 与 allowlist
+				// 会被这里的 merge 抵消。
+				models = effective
 			}
 		}
 		for _, mm := range models {

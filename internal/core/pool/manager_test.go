@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -250,5 +251,25 @@ func TestEarliestReset(t *testing.T) {
 	m.Add(ready)
 	if m.EarliestReset("q") != 0 {
 		t.Fatal("就绪账号不应报冷却")
+	}
+}
+
+// 客户端会把 message 原样展示，必须能一眼看出是额度问题而不是"系统异常"。
+func TestNoAvailableErrorExplainsWhy(t *testing.T) {
+	reset := time.Now().Add(72 * time.Hour).Truncate(time.Minute)
+	depleted := provider.NewAccountEnv("qoder-cn-1", "qoder-cn")
+	depleted.MarkDepleted(reset, "额度已用尽，等待恢复")
+	invalid := provider.NewAccountEnv("qoder-cn-2", "qoder-cn")
+	invalid.MarkInvalid("token 失效")
+
+	err := noAvailableError("qoder-cn", []*provider.AccountEnv{depleted, invalid})
+	msg := err.Message
+	for _, want := range []string{"1 个额度用尽", "1 个登录失效", reset.Local().Format("01-02 15:04")} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("错误信息缺少 %q：%s", want, msg)
+		}
+	}
+	if err.Code != ir.ErrCodeNoAccount {
+		t.Errorf("error code = %s, want %s", err.Code, ir.ErrCodeNoAccount)
 	}
 }

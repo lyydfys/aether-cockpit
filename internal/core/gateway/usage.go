@@ -189,14 +189,16 @@ func (s *usageStore) flush() {
 	_ = s.save()
 }
 
-// StartAutoSave 周期落盘，返回停止函数（停止时做最后一次 flush）。
+// StartAutoSave 周期落盘，返回停止函数（停止时做最后一次 flush 并等它写完）。
 func (s *usageStore) StartAutoSave(interval time.Duration) func() {
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	var once sync.Once
 	go func() {
+		defer close(done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -209,7 +211,10 @@ func (s *usageStore) StartAutoSave(interval time.Duration) func() {
 			}
 		}
 	}()
-	return func() { once.Do(func() { close(stop) }) }
+	return func() {
+		once.Do(func() { close(stop) })
+		<-done
+	}
 }
 
 // usageDayQuery 是查询结果里"一天"的聚合视图。

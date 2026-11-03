@@ -249,7 +249,35 @@ func (g *Gateway) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, g.buildAetherState())
 
 	case "keep":
-		// "保持当前设置"：不写配置，只回到最新状态（前端用它清掉漂移提示）。
+		// "保持当前设置"：不写配置，但记住"这个差异是我有意保留的"，
+		// 之后不再报同一条漂移；配置再变化（摘要变了）时会重新提示。
+		//
+		// 以前这里只回一次 state，前端清掉提示后下次刷新又冒出来——
+		// 用户点十次也没用，等于没有这个动作。
+		mgr := g.clientsManager()
+		if mgr == nil {
+			writeJSON(w, http.StatusOK, g.buildAetherState())
+			return
+		}
+		origin := requestOrigin(r, g.PublicAddr())
+		key := strings.TrimSpace(g.cfg.APIKey)
+		if key == "" {
+			key = "aether-local"
+		}
+		digest := ""
+		for _, a := range g.buildAetherState().Agents {
+			if a.ID != id {
+				continue
+			}
+			if changes, err := mgr.PreviewApply(a.ID, g.driftParamsFor(a, origin, key)); err == nil {
+				digest = driftDigest(changes)
+			}
+			break
+		}
+		if err := g.markDriftKept(id, digest); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存失败: " + err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, g.buildAetherState())
 
 	case "stage":

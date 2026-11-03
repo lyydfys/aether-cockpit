@@ -33,6 +33,9 @@ func (g *Gateway) clientsManager() *clients.Manager {
 			if err := m.LoadCustomFile(path); err != nil {
 				log.Printf("[WARN] 自定义客户端定义无效，已忽略: %v", err)
 			}
+			// 键级还原状态：记录"我方写过哪些路径、接入前是什么"，
+			// 断开时只还原这些路径，用户接入后手改的其它键保留。
+			m.SetKeyStatePath(apppaths.Data("clients-state.json"))
 		}
 		g.clientMgr = m
 	})

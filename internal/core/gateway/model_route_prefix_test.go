@@ -15,7 +15,7 @@ type routeChatStub struct{}
 
 func (routeChatStub) Manifest() provider.ProviderManifest {
 	return provider.ProviderManifest{
-		ID:    "route-chat-stub",
+		ID:     "route-chat-stub",
 		Models: []ir.ModelMeta{{ID: "zz-alias-token", UpstreamModel: "zz-alias-token"}},
 	}
 }
@@ -28,7 +28,7 @@ type routePinStub struct{}
 
 func (routePinStub) Manifest() provider.ProviderManifest {
 	return provider.ProviderManifest{
-		ID:    "route-pin-stub",
+		ID:     "route-pin-stub",
 		Models: []ir.ModelMeta{{ID: "route-pin-stub/zz-alias-token", UpstreamModel: "zz-alias-token"}},
 	}
 }

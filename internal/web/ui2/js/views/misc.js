@@ -35,6 +35,48 @@ export const agents = {
             } })));
         }
         const grid = h('div', { class: 'grid-2' });
+
+        // 方案（profile）：把"哪些 agent 用哪个模型"存成一份命名快照，一键切换。
+        // 后端 /api/profiles 早就齐了，但前端一直没有入口——等于这个能力不存在。
+        try {
+          const pf = await api.get('profiles') || {};
+          const list = pf.profiles || [];
+          const pc = card('方案', { chips: [chip(list.length + ' 份', 'plain')] });
+          pc.el.append(h('div', { class: 'meta' }, '把当前各 Agent 的模型存成一份方案，之后一键切换（只改模型，不动其它配置）。'));
+          for (const p of list) {
+            const active = p.id === pf.active;
+            pc.el.append(h('div', { class: 'row' },
+              h('span', { class: 'name' }, p.name),
+              chip(active ? '使用中' : (p.clients || []).length + ' 个客户端', active ? 'green' : 'plain'),
+              h('span', { class: 'grow' }),
+              btn('应用', { primary: !active, ghost: active, onClick: async () => {
+                try { await api.post('profiles/' + encodeURIComponent(p.id) + '/activate', {}); toast('已切到「' + p.name + '」'); await load(); }
+                catch (e) { toast('切换失败：' + (e.message || e)); }
+              } }),
+              iconBtn('trash', '删除方案', async () => {
+                if (!(await confirmDialog('删除方案「' + p.name + '」？', '只删这份快照，不改当前配置。', { danger: true, confirmText: '删除' }))) return;
+                try { await api.del('profiles/' + encodeURIComponent(p.id)); toast('已删除'); await load(); }
+                catch (e) { toast('删除失败：' + (e.message || e)); }
+              }, { danger: true })));
+          }
+          pc.el.append(h('div', { class: 'row', style: 'gap:8px' },
+            h('span', { class: 'grow' }),
+            btn('保存当前为方案', { onClick: async () => {
+              const name = prompt('方案名称（例如「省钱档」「长上下文档」）');
+              if (!name) return;
+              const clients = list.length >= 0
+                ? st.agents.filter((x) => x.wired).map((x) => ({
+                  client_id: x.id,
+                  model: ((x.fields || []).find((f) => f.key === 'model') || {}).value || '',
+                })).filter((c) => c.model)
+                : [];
+              if (!clients.length) { toast('没有已接入且设置了模型的 Agent'); return; }
+              try { await api.post('profiles', { name, clients }); toast('已保存'); await load(); }
+              catch (e) { toast('保存失败：' + (e.message || e)); }
+            } })));
+          host.append(pc.el);
+        } catch { /* 方案不是主流程，读不到就不显示 */ }
+
         await Promise.all(list.map(async (a) => {
           const c = card(a.name || a.id);
           const model = (a.fields || []).find((f) => f.key === 'model');
@@ -161,20 +203,52 @@ export const routing = {
 /* ---------- 脱敏 ---------- */
 export const masking = {
   title: '脱敏',
-  subtitle: '请求离开电脑前的脱敏记录',
+  subtitle: '请求离开电脑前的脱敏记录与处置方式',
   mount(host) {
     host.append(skeleton(6));
     load();
     async function load() {
       clear(host);
       try {
-        const [sum, rec] = await Promise.all([api.get('masking/summary'), api.get('masking/records')]);
+        const [sum, rec, acts] = await Promise.all([
+          api.get('masking/summary'), api.get('masking/records'), api.get('settings/redact-actions').catch(() => ({})),
+        ]);
         const kpis = h('div', { class: 'kpis' },
           kpi('已脱敏请求', sum.requests ?? sum.total ?? 0),
           kpi('拦下的字段', sum.blocked ?? 0),
           kpi('不同值', sum.distinct ?? (sum.values || []).length),
           kpi('按规则 / 模型', (sum.by?.rule ?? 0) + ' / ' + (sum.by?.model ?? 0)));
         host.append(kpis);
+
+        // 处置方式：按类型选 mask / warn / block。
+        // 「拦截」此前只在内核里置了个标志、没有调用方拒发，页面也没有入口；
+        // 现在内核会真的拒发（403 privacy_blocked），这里补上入口。
+        const current = acts.actions || {};
+        const kinds = (sum.kinds || []).map((k) => (typeof k === 'string' ? k : k.name || k.kind)).filter(Boolean);
+        if (kinds.length) {
+          const ac = card('处置方式', { chips: [chip('按类型生效', 'plain')] });
+          ac.el.append(h('div', { class: 'meta' }, '脱敏（默认）换成占位符；只记录不替换；拦截则整个请求不发送。'));
+          for (const kind of kinds.slice(0, 24)) {
+            const value = current[kind] || 'mask';
+            ac.el.append(h('div', { class: 'row' },
+              h('span', { class: 'name' }, kind),
+              h('span', { class: 'grow' }),
+              select([
+                { value: 'mask', label: '脱敏' },
+                { value: 'warn', label: '只记录' },
+                { value: 'block', label: '拦截' },
+              ], value, async (next) => {
+                const merged = { ...current, [kind]: next };
+                try {
+                  await api.post('settings/redact-actions', { actions: merged });
+                  current[kind] = next;
+                  toast(next === 'block' ? kind + '：命中将拒绝发送' : '已更新 ' + kind);
+                } catch (e) { toast('保存失败：' + (e.message || e)); load(); }
+              }, { label: kind + ' 的处置方式' })));
+          }
+          host.append(ac.el);
+        }
+
         const c = card('最近的脱敏记录', { actions: [btn('清空记录', { danger: true, onClick: async () => {
           if (!(await confirmDialog('清空脱敏记录？', '只删本机保留的脱敏历史，不改规则。', { danger: true, confirmText: '清空' }))) return;
           try { await api.post('masking/clear', {}); toast('已清空'); load(); } catch (e) { toast('清空失败：' + (e.message || e)); }

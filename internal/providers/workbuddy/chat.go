@@ -52,22 +52,39 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		return nil, ir.NewAPIError(ir.ErrCodeInternal, "WorkBuddy 请求序列化失败").WithCause(err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL(env)+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, ir.NewAPIError(ir.ErrCodeInternal, "构造 WorkBuddy 请求失败").WithCause(err)
-	}
-	p.applyHeaders(httpReq, env, token, userID, req)
-
 	client := env.Client()
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "WorkBuddy 上游连接失败").
-			WithCause(err).WithProvider(p.profile.id).WithRetryable(true)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	var resp *http.Response
+	// 最多两次：第一次用会话哈希出的 id，被 11128 拦下时换一组全新 id 再试。
+	// 上游的 displayMsg 是"请求被拦截，请重新发送"，但它按会话/请求 id 记住
+	// 被拦的那一次，原样重发还是同一条 id，只会再被拦——所以必须换 id。
+	for attempt := 0; attempt < 2; attempt++ {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost,
+			p.baseURL(env)+"/chat/completions", bytes.NewReader(body))
+		if reqErr != nil {
+			return nil, ir.NewAPIError(ir.ErrCodeInternal, "构造 WorkBuddy 请求失败").WithCause(reqErr)
+		}
+		p.applyHeaders(httpReq, env, token, userID, req, attempt > 0)
+
+		resp, err = client.Do(httpReq)
+		if err != nil {
+			return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "WorkBuddy 上游连接失败").
+				WithCause(err).WithProvider(p.profile.id).WithRetryable(true)
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			break
+		}
+		status, hdr := resp.StatusCode, resp.Header
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
-		return nil, mapUpstreamError(resp.StatusCode, string(raw), resp.Header).WithProvider(p.profile.id)
+		resp = nil
+		if attempt == 0 && channelBlocked(string(raw)) {
+			continue
+		}
+		return nil, mapUpstreamError(status, string(raw), hdr).WithProvider(p.profile.id)
+	}
+	if resp == nil {
+		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "WorkBuddy 拒绝本次调用（通道校验未通过）").
+			WithProvider(p.profile.id)
 	}
 
 	out := make(chan ir.UnifiedStreamEvent, 32)
@@ -94,8 +111,8 @@ func (p *Provider) domain(env *provider.AccountEnv) string {
 }
 
 // applyHeaders 写入 WorkBuddy 客户端要求的自定义头。
-func (p *Provider) applyHeaders(req *http.Request, env *provider.AccountEnv, token, userID string, chat *ir.UnifiedChatRequest) {
-	conversationID, requestID, messageID := conversationIDs(chat)
+func (p *Provider) applyHeaders(req *http.Request, env *provider.AccountEnv, token, userID string, chat *ir.UnifiedChatRequest, fresh bool) {
+	conversationID, requestID, messageID := conversationIDs(chat, fresh)
 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-User-Id", userID)
@@ -133,7 +150,13 @@ func (p *Provider) applyHeaders(req *http.Request, env *provider.AccountEnv, tok
 // X-Conversation-Request-ID 对同一次逻辑发送必须稳定（重试、工具续轮看起来像
 // 同一个请求），因此用会话 + 最近一条用户文本做哈希；X-Request-ID 是每次
 // HTTP 请求唯一的随机 uuid。
-func conversationIDs(req *ir.UnifiedChatRequest) (conversationID, requestID, messageID string) {
+//
+// fresh=true 时三个 id 全部随机：通道校验（11128）按 id 记住被拦的那一次，
+// 原样重发同一条 id 必然再被拦，只能换一组新 id 重放。
+func conversationIDs(req *ir.UnifiedChatRequest, fresh bool) (conversationID, requestID, messageID string) {
+	if fresh {
+		return randomUUID(), randomUUID(), randomUUID()
+	}
 	lastText := req.LastUserText()
 	seed := strings.TrimSpace(req.SessionKey)
 	if seed != "" {
@@ -194,6 +217,13 @@ func buildPayload(req *ir.UnifiedChatRequest, model string, intl bool) map[strin
 	}
 	if req.TopP != nil {
 		payload["top_p"] = *req.TopP
+	}
+	// 重复惩罚照实转发：agent 客户端普遍会带，丢掉以后长输出容易复读。
+	if req.FrequencyPenalty != nil {
+		payload["frequency_penalty"] = *req.FrequencyPenalty
+	}
+	if req.PresencePenalty != nil {
+		payload["presence_penalty"] = *req.PresencePenalty
 	}
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		payload["max_tokens"] = *req.MaxOutputTokens
@@ -422,17 +452,17 @@ func parseSSE(ctx context.Context, out chan<- ir.UnifiedStreamEvent, r io.Reader
 		}
 
 		if chunk.Usage != nil {
-			usage := &ir.Usage{
-				InputTokens:  chunk.Usage.PromptTokens,
-				OutputTokens: chunk.Usage.CompletionTokens,
-				TotalTokens:  chunk.Usage.TotalTokens,
-			}
+			usage := &ir.Usage{OutputTokens: chunk.Usage.CompletionTokens}
 			if chunk.Usage.PromptTokensDetails != nil {
 				usage.CachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 			}
+			// WorkBuddy 的 prompt_tokens 含 cached_tokens，先拆开再落库；
+			// 否则命中量算两遍，总量翻倍、命中率永远不到 50%。
+			usage.InputTokens = ir.SplitPromptCache(chunk.Usage.PromptTokens, usage.CachedTokens)
 			if chunk.Usage.CompletionTokensDetails != nil {
 				usage.ReasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
 			}
+			usage.NormalizeTotal()
 			emit(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: usage})
 		}
 
@@ -510,6 +540,14 @@ var workbuddyBadRequestCodes = map[string]bool{
 	"11133": true,
 	"11153": true,
 	"11140": true,
+}
+
+// channelBlocked 判断上游是不是用 11128（通道校验）拦了这次调用。
+//
+// 这类拒绝不计费、也不代表账号有问题：上游按会话/请求 id 记住被拦的那一次，
+// 换一组新 id 重放通常就能过（它自己的 displayMsg 也只说"请重新发送"）。
+func channelBlocked(raw string) bool {
+	return strings.Contains(raw, `"code":11128`) || strings.Contains(raw, `"code": 11128`)
 }
 
 func mapUpstreamError(status int, body string, hdr http.Header) *ir.APIError {

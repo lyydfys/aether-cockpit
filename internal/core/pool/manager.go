@@ -11,6 +11,7 @@ package pool
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -227,11 +228,21 @@ func (m *Manager) Select(providerID string, opts SelectOptions) (*provider.Accou
 		cands = append(cands, env)
 	}
 	if len(cands) == 0 {
-		return nil, ir.NewAPIError(ir.ErrCodeNoAccount, "渠道 "+providerID+" 当前无可用账号（全部处于冷却/耗尽/失效状态）").WithProvider(providerID)
+		return nil, noAvailableError(providerID, accounts)
 	}
 
 	// 1.5 级：Sink —— 429 后仍有额度、按渠道设置"排到队尾"的账号放到最后。
 	cands = m.orderBySink(cands)
+
+	// 1.6 级：模型级冷却与窗口 cap —— 只调整顺序，不排除。
+	//
+	// 为什么不直接排除：
+	//   - 模型级冷却是"这个模型的这个号刚被限流"，但如果全池都在冷却，
+	//     排除完就没有候选了，等于自己把请求打死；留作最后手段更稳。
+	//   - 窗口 cap 同理：全池都到 cap 时仍然要能发（用户可能就想跑完这一轮）。
+	// 排序后仍在链里，失败会继续往下试，语义与 aether 的"降级而非拒绝"一致。
+	cands = orderByModelRest(cands, opts.Model, now)
+	cands = orderByCap(cands, now)
 
 	// 2 级：粘性命中（受渠道 Stays 控制）。
 	//   auto/turn：TTL 内命中（turn 没有可靠的轮次信号，按 auto 近似）；
@@ -442,6 +453,52 @@ func maxBy(cands []*provider.AccountEnv, score func(*provider.AccountEnv) float6
 		return cands[0]
 	}
 	return best
+}
+
+// orderByModelRest 把"该模型正在冷却"的账号排到末尾。
+//
+// 只排序不排除：全池都在冷却时仍要留一次尝试机会（上游有时限流是瞬时的），
+// 但正常情况下正常账号应该先被选中。
+func orderByModelRest(cands []*provider.AccountEnv, model string, now time.Time) []*provider.AccountEnv {
+	if model == "" || len(cands) < 2 {
+		return cands
+	}
+	head := make([]*provider.AccountEnv, 0, len(cands))
+	tail := make([]*provider.AccountEnv, 0, len(cands))
+	for _, env := range cands {
+		if cooling, _ := env.ModelCoolingDown(model); cooling {
+			tail = append(tail, env)
+		} else {
+			head = append(head, env)
+		}
+	}
+	if len(tail) == 0 {
+		return cands
+	}
+	return append(head, tail...)
+}
+
+// orderByCap 把"已触到窗口 cap"的账号排到末尾。
+//
+// cap 是用户设的"用到 X% 就少用它"，属排序偏好而非不可用：
+// 全池都到 cap 时仍然要能发请求，否则等于自己把自己锁死。
+func orderByCap(cands []*provider.AccountEnv, now time.Time) []*provider.AccountEnv {
+	if len(cands) < 2 {
+		return cands
+	}
+	head := make([]*provider.AccountEnv, 0, len(cands))
+	tail := make([]*provider.AccountEnv, 0, len(cands))
+	for _, env := range cands {
+		if held, _, _ := env.CapHeld(now); held {
+			tail = append(tail, env)
+		} else {
+			head = append(head, env)
+		}
+	}
+	if len(tail) == 0 {
+		return cands
+	}
+	return append(head, tail...)
 }
 
 // orderBySink 把"429 后仍有额度"的账号排到候选末尾。
@@ -679,4 +736,56 @@ func (m *Manager) EarliestReset(providerID string) time.Duration {
 		}
 	}
 	return best
+}
+
+// noAvailableError 说清"为什么一个号都选不出来"。
+//
+// 客户端（Qoder / DSH / Cline 等）多数把 message 原样显示给用户，只写
+// "无可用账号"看不出是额度用尽、登录失效还是正在冷却，也不知道何时恢复，
+// 只能笼统显示"系统发生异常"。这里把原因拆开并给出最早恢复时间。
+func noAvailableError(providerID string, accounts []*provider.AccountEnv) *ir.APIError {
+	var depleted, invalid, cooling, disabled int
+	var soonest time.Time
+	for _, env := range accounts {
+		state, _, resetAt := env.StateDetail()
+		switch {
+		case env.Disabled():
+			disabled++
+		case state == provider.StateDepleted:
+			depleted++
+		case state == provider.StateInvalid:
+			invalid++
+		case state == provider.StateCoolingDown, state == provider.StateRefreshing:
+			cooling++
+		default:
+			// 状态可用却被过滤，只剩"不服务该模型"或官方暂停两种可能。
+			disabled++
+		}
+		if !resetAt.IsZero() && (soonest.IsZero() || resetAt.Before(soonest)) {
+			soonest = resetAt
+		}
+	}
+
+	parts := make([]string, 0, 4)
+	if depleted > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个额度用尽", depleted))
+	}
+	if invalid > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个登录失效", invalid))
+	}
+	if cooling > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个冷却中", cooling))
+	}
+	if disabled > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个不服务该模型或已停用", disabled))
+	}
+
+	msg := "渠道 " + providerID + " 当前无可用账号"
+	if len(parts) > 0 {
+		msg += "（" + strings.Join(parts, "、") + "）"
+	}
+	if !soonest.IsZero() {
+		msg += "，最早 " + soonest.Local().Format("01-02 15:04") + " 恢复"
+	}
+	return ir.NewAPIError(ir.ErrCodeNoAccount, msg).WithProvider(providerID)
 }

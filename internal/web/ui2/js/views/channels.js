@@ -7,11 +7,14 @@ import { chip, btn, iconBtn, card, meter, drawer, empty, errorBox, skeleton, toa
 import { openProvider } from './onboard.js';
 import { brandIcon } from '../brandicons.js';
 import { accountRefreshMode } from '../capabilities.js';
+import { openInBrowser } from '../links.js';
 
-// 授权页统一交给系统默认浏览器打开，避免 Wails/WebView 因 target=_blank 单开窗口。
-const openAuthPage = (url) => {
-  if (!url) return;
-  api.openExternal(url).catch((e) => toast('打开浏览器失败：' + (e.message || e)));
+// 自动关闭的渠道：原因和恢复时间写在一枚 chip 里，免得用户对着灰掉的开关
+// 猜"是我关的，还是它自己关的"。
+const autoOffLabel = (p) => {
+  const why = p.auto_off_reason === 'invalid' ? '登录失效' : '额度用尽';
+  const when = p.auto_off_until ? ' · ' + fmtDate(p.auto_off_until, true) + ' 恢复' : ' · 需重新登录';
+  return why + ' · 已自动关闭' + when;
 };
 
 const POOL = { 'Claude and GPT models': 'Claude', 'Gemini Models': 'Gemini' };
@@ -546,7 +549,7 @@ export default {
         host.replaceChildren(
           h('div', { class: 'meta' }, '1. 打开授权页　2. 完成登录　3. 回到这里自动替换凭证'),
           h('div', { class: 'inline' },
-            btn('打开授权页面', { primary: true, icon: 'external', onClick: () => openAuthPage(s.authorize_url) }),
+            btn('打开授权页面', { primary: true, icon: 'external', onClick: () => openInBrowser(s.authorize_url) }),
             btn('复制链接', { ghost: true, onClick: () => copyText(s.authorize_url) })));
         const timer = setInterval(async () => {
           if (!host.isConnected) { clearInterval(timer); return; }
@@ -703,7 +706,7 @@ export default {
             catch (e) { toast('切换失败：' + (e.message || e)); }
           } }, h('i'));
           const attached = (((state.presets || {}).provider_presets || {})[p.id] || []).length;
-          list.append(h('div', { class: 'row' }, brandIcon(p.id, 16) || icon('channels', 16), h('span', { class: 'name' }, p.name || p.id), h('span', { class: 'meta' }, (p.models || []).filter((m) => m.on).length + ' 个模型'), attached ? chip(attached + ' 预设', 'plain') : null, h('span', { class: 'grow' }), btn('预设', { ghost: true, onClick: () => { d.close(); providerPresetDialog(p); } }), btn('接入', { ghost: true, onClick: () => { d.close(); openProvider(p, load); } }), sw));
+          list.append(h('div', { class: 'row' }, brandIcon(p.id, 16) || icon('channels', 16), h('span', { class: 'name' }, p.name || p.id), h('span', { class: 'meta' }, (p.models || []).filter((m) => m.on).length + ' 个模型'), attached ? chip(attached + ' 预设', 'plain') : null, p.auto_off ? chip(autoOffLabel(p), 'amber') : null, h('span', { class: 'grow' }), btn('预设', { ghost: true, onClick: () => { d.close(); providerPresetDialog(p); } }), btn('接入', { ghost: true, onClick: () => { d.close(); openProvider(p, load); } }), sw));
         }
         body.append(list);
         body.append(h('div', { class: 'inline', style: 'justify-content:flex-end;padding-top:10px' },
@@ -867,6 +870,7 @@ export default {
         name: p.display_name || p.name || p.id,
         chat: p.chat || '', responses: p.responses || '', anthropic: p.anthropic || '', gemini: p.gemini || '',
         key: '', models: (p.models || []).map((m) => m.id).join(', '),
+        modelMode: p.models_mode || 'merge',
         passUserAgent: !!p.passUserAgent, unlisted: !!p.unlisted, insecureTLS: !!p.insecureTLS,
         proxy: '', fallback: (p.fallback || []).join(', '),
         priceRate: p.priceRate == null ? '' : String(p.priceRate),
@@ -880,7 +884,11 @@ export default {
       };
       // 模型选择与倍率：以后端回显的 on/credit_rate 为初始值。
       const modelState = new Map();
-      for (const m of p.models || []) modelState.set(m.id, { on: !!m.on, rate: Number(m.credit_rate) || 0, ctx: Number(m.context || m.max) || 0, costKnown: !!m.cost_known, costIn: Number(m.cost_in) || 0, costOut: Number(m.cost_out) || 0, efforts: m.efforts || [], free: !!m.free, name: m.name || m.id });
+      for (const m of p.models || []) modelState.set(m.id, { on: !!m.on, rate: Number(m.credit_rate) || 0, ctx: Number(m.context || m.max) || 0, costKnown: !!m.cost_known, costIn: Number(m.cost_in) || 0, costOut: Number(m.cost_out) || 0, efforts: m.efforts || [], free: !!m.free, manual: !!m.manual, name: m.name || m.id });
+      // 只有用户真的动过模型勾选/倍率才提交 models，避免在 fallback 模式
+      // 下列表只剩实时目录时，一次无关保存就把静态补缺的模型选择覆盖掉。
+      let modelsDirty = false;
+      let ratesDirty = false;
       const local = { tab: 'basic' };
       let panel = null;
       const dr = drawer('详情 · ' + (p.name || p.id), (body) => { panel = body; draw(); });
@@ -923,10 +931,25 @@ export default {
           fields.append(h('div', { class: 'detail-field' }, h('label', null, 'API Key'), keyInp));
           fields.append(h('div', { class: 'detail-field' }, h('label', null, '账号'), h('span', { class: 'meta' }, state.accounts.filter((x) => x.provider_id === p.id).length + ' 个')));
         } else if (local.tab === 'models') {
-          const srcLabel = p.models_source === 'live'
-            ? '来源：上游实时' + (p.models_fetched ? ' · ' + fmtDate(p.models_fetched) + ' 更新' : '')
-            : '来源：静态目录（该渠道没有上游模型列表）';
-          const refreshBtn = p.models_live_supported ? btn('从上游刷新', { ghost: true, class: 'sm', onClick: async (e) => {
+          const mode = d.modelMode || 'merge';
+          const modePending = mode !== (p.models_mode || 'merge');
+          const modeNote = {
+            merge: '上游实时 + 静态清单，live 优先、静态补缺',
+            fallback: '上游实时优先，拉取失败或为空时用静态清单',
+            allowlist: '只用静态清单，不访问上游 /models',
+          }[mode] || '';
+          const srcLabel = mode === 'allowlist'
+            ? '来源：静态目录（allowlist 模式）'
+            : p.models_source === 'live'
+              ? (mode === 'merge' ? '来源：上游实时 + 静态补缺' : '来源：上游实时（fallback 模式）') + (p.models_fetched ? ' · ' + fmtDate(p.models_fetched) + ' 更新' : '')
+              : '来源：静态目录（' + (mode === 'fallback' ? '上游无可用目录' : '没有上游模型列表') + '）';
+          const modeSel = select(
+            [{ value: 'merge', label: '合并（推荐）' }, { value: 'fallback', label: '回退' }, { value: 'allowlist', label: '白名单' }],
+            mode,
+            (v) => { d.modelMode = v; draw(); },
+            { label: '目录模式' },
+          );
+          const refreshBtn = p.models_live_supported && mode !== 'allowlist' ? btn('从上游刷新', { ghost: true, class: 'sm', onClick: async (e) => {
             const el = e.currentTarget;
             el.disabled = true;
             try {
@@ -939,8 +962,34 @@ export default {
             } catch (err) { toast('刷新失败：' + (err.message || err)); }
             if (el.isConnected) el.disabled = false;
           } }) : null;
-          fields.append(h('div', { class: 'inline', style: 'justify-content:space-between;align-items:center;gap:8px;padding:4px 0' },
-            h('span', { class: 'meta' }, srcLabel), refreshBtn));
+          fields.append(h('div', { class: 'detail-field', style: 'align-items:flex-start' },
+            h('label', null, '目录模式'),
+            h('div', { style: 'width:100%;display:flex;flex-direction:column;gap:6px' },
+              h('div', { class: 'inline', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, modeSel, refreshBtn),
+              h('span', { class: 'meta' }, srcLabel + (modeNote ? ' · ' + modeNote : '') + (modePending ? ' · 保存后生效' : '')))));
+          async function reloadAfterModelChange() {
+            await load();
+            dr.close();
+            const a2 = state.accounts.find((x) => x.account_id === acct.account_id);
+            if (a2) openDetail(a2);
+          }
+          async function changeExtraModel(model, action) {
+            await api.post('providers/' + encodeURIComponent(p.id) + '/models/extra', { model, action });
+            toast(action === 'remove' ? '已移除 ' + model : '已添加 ' + model);
+            await reloadAfterModelChange();
+          }
+          const extraInput = h('input', { class: 'input', placeholder: '输入上游模型名，例如 deepseek-v4.1-flash', style: 'flex:1;min-width:180px' });
+          const addExtra = async () => {
+            const model = extraInput.value.trim();
+            if (!model) { toast('请输入模型名'); return; }
+            try { await changeExtraModel(model, 'add'); } catch (err) { toast('添加失败：' + (err.message || err)); }
+          };
+          extraInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addExtra(); } });
+          fields.append(h('div', { class: 'detail-field', style: 'align-items:flex-start' },
+            h('label', null, '添加缺失模型'),
+            h('div', { style: 'width:100%;display:flex;flex-direction:column;gap:6px' },
+              h('div', { class: 'inline', style: 'gap:8px' }, extraInput, btn('添加', { ghost: true, class: 'sm', onClick: addExtra })),
+              h('span', { class: 'meta' }, '上游 /models 漏报或厂商不实现 /models 时用；添加后参与路由与 /v1/models。V4 Flash 与 V4.1 Flash 是两个模型，请按实际上游名分别添加。'))));
           const list = h('div', { class: 'list', style: 'max-height:320px;overflow:auto;gap:2px' });
           const fmtCtx = (n) => (!n ? '' : n >= 1e6 ? (Math.round(n / 1e5) / 10) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'K' : String(n));
           const fmtPrice = (n) => String(n >= 0.1 ? Math.round(n * 100) / 100 : n);
@@ -951,24 +1000,31 @@ export default {
             if (!ids.length) { list.append(h('div', { class: 'meta' }, '该渠道没有登记模型。')); return; }
             for (const id of ids) {
               const st = modelState.get(id);
-              const rate = h('input', { class: 'input', type: 'number', step: '0.1', min: '0', placeholder: '×1', style: 'width:88px;flex:none', value: st.rate ? String(st.rate) : '', oninput: (e) => { st.rate = Math.max(0, Number(e.target.value) || 0); } });
+              const rate = h('input', { class: 'input', type: 'number', step: '0.1', min: '0', placeholder: '×1', style: 'width:88px;flex:none', value: st.rate ? String(st.rate) : '', oninput: (e) => { st.rate = Math.max(0, Number(e.target.value) || 0); ratesDirty = true; } });
               const price = priceText(st);
               const main = h('div', { style: 'flex:1;min-width:0;display:flex;flex-direction:column;gap:2px' },
                 h('span', { class: 'mono', style: 'font-size:12px;white-space:normal;word-break:break-word;line-height:1.35', title: id }, st.name || id),
                 h('span', { class: 'meta', style: 'display:flex;gap:10px;flex-wrap:wrap' },
+                  st.manual ? chip('手动', 'plain') : null,
                   price ? h('span', { title: '美元 / 百万 tokens（输入/输出）' }, price) : null,
                   fmtCtx(st.ctx) ? h('span', null, fmtCtx(st.ctx)) : null));
+              const del = st.manual ? btn('删除', { ghost: true, class: 'sm', onClick: async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                try { await changeExtraModel(id, 'remove'); } catch (err) { toast('移除失败：' + (err.message || err)); }
+              } }) : null;
               list.append(h('label', { class: 'row', style: 'cursor:pointer;gap:8px;align-items:flex-start', title: st.efforts.length ? '推理档位：' + st.efforts.join(' / ') : '' },
-                h('input', { type: 'checkbox', checked: st.on, style: 'margin-top:2px', onchange: (e) => { st.on = e.target.checked; } }),
+                h('input', { type: 'checkbox', checked: st.on, style: 'margin-top:2px', onchange: (e) => { st.on = e.target.checked; modelsDirty = true; } }),
                 main,
-                rate));
+                rate,
+                del));
             }
           };
           drawList();
           fields.append(h('div', { class: 'detail-field', style: 'align-items:flex-start' }, h('label', null, '暴露的模型'),
             h('div', { style: 'width:100%' }, list,
-              h('div', { class: 'inline', style: 'margin-top:6px' }, btn('全选', { ghost: true, class: 'sm', onClick: () => { for (const st of modelState.values()) st.on = true; drawList(); } }),
-                btn('清空', { ghost: true, class: 'sm', onClick: () => { for (const st of modelState.values()) st.on = false; drawList(); } }),
+              h('div', { class: 'inline', style: 'margin-top:6px' }, btn('全选', { ghost: true, class: 'sm', onClick: () => { for (const st of modelState.values()) st.on = true; modelsDirty = true; drawList(); } }),
+                btn('清空', { ghost: true, class: 'sm', onClick: () => { for (const st of modelState.values()) st.on = false; modelsDirty = true; drawList(); } }),
                 h('span', { class: 'meta' }, '右侧为该模型的积分消耗倍率（留空=未配置）')))));
           fields.append(h('div', { class: 'meta', style: 'padding:6px 0' }, '只有勾选的模型会出现在 /v1/models；未接入账号的渠道整体不出现。'));
         } else if (local.tab === 'limits') {
@@ -1019,7 +1075,9 @@ export default {
         const selected = [...modelState.entries()].filter(([, st]) => st.on).map(([id]) => id);
         const rates = {};
         for (const [id, st] of modelState.entries()) if (st.rate > 0) rates[id] = st.rate;
-        const payload = { id: p.id, name: d.name, models: selected, model_rates: rates, passUserAgent: d.passUserAgent, unlisted: d.unlisted, insecureTLS: d.insecureTLS, systemPrompt: d.systemPrompt, concatSystem: !!d.concatSystem, fallback: d.fallback.split(',').map((x) => x.trim()).filter(Boolean), priceRate: num(d.priceRate), maxConcurrency: num(d.maxConcurrency), maxRPM: num(d.maxRPM), queueLimit: num(d.queueLimit), queueWait: num(d.queueWait) };
+        const payload = { id: p.id, name: d.name, modelMode: d.modelMode, passUserAgent: d.passUserAgent, unlisted: d.unlisted, insecureTLS: d.insecureTLS, systemPrompt: d.systemPrompt, concatSystem: !!d.concatSystem, fallback: d.fallback.split(',').map((x) => x.trim()).filter(Boolean), priceRate: num(d.priceRate), maxConcurrency: num(d.maxConcurrency), maxRPM: num(d.maxRPM), queueLimit: num(d.queueLimit), queueWait: num(d.queueWait) };
+        // 只有模型勾选/倍率真的被改动时才提交，避免无关保存覆盖既有选择。
+        if (modelsDirty || ratesDirty) { payload.models = selected; payload.model_rates = rates; }
         for (const k of ['chat', 'responses', 'anthropic', 'gemini']) if (d[k].trim()) payload[k] = d[k].trim();
         if (d.key) payload.key = d.key;
         if (d.proxy.trim()) payload.proxy = d.proxy.trim();

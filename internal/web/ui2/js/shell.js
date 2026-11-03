@@ -234,6 +234,7 @@ export function createShell({ navigate }) {
     for (const m of MORE) items.push({ label: m.label, hint: '', icon: 'plugin', keywords: '更多 ' + m.id, run: () => navigate(m.id) });
     items.push(
       { label: '刷新全部额度', icon: 'refresh', keywords: 'refresh quota', run: () => { refreshAll(); toast('已刷新'); } },
+      { label: '刷新全部模型目录', icon: 'refresh', keywords: 'refresh models catalog', run: refreshModelCatalogs },
       { label: '切换主题（浅色 / 深色 / 跟随系统）', icon: 'eye', keywords: 'theme dark light', run: cycleTheme },
       { label: '复制网关地址', icon: 'copy', keywords: 'copy url base', run: copyOrigin },
       { label: '导出账号（脱敏）', icon: 'export', keywords: 'export json', run: exportAccounts },
@@ -333,6 +334,7 @@ export function createShell({ navigate }) {
         catch (err) { toast('刷新失败：' + (err.message || err)); }
         finally { b.disabled = false; }
       }),
+      iconBtn('refresh', '刷新全部模型目录', refreshModelCatalogs),
       iconBtn('export', '导出账号（脱敏）', exportAccounts),
     );
 
@@ -426,6 +428,14 @@ export function createShell({ navigate }) {
     } catch (e) {
       console.error('meta', e);
     }
+  }
+
+  async function refreshModelCatalogs() {
+    try {
+      const r = await api.post('providers/models/refresh-all', {});
+      toast('模型目录：' + (r.refreshed || 0) + ' 个渠道成功' + (r.failed ? '，' + r.failed + ' 个失败' : ''));
+      await refreshAll();
+    } catch (err) { toast('刷新失败：' + (err.message || err)); }
   }
 
   async function refreshAll() {

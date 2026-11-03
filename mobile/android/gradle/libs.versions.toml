@@ -6,7 +6,11 @@ minSdk = "26"
 targetSdk = "36"
 composeBom = "2026.05.01"
 activityCompose = "1.13.0"
+lifecycle = "2.10.0"
 junit = "4.13.2"
+orgJson = "20240303"
+androidxTestJunit = "1.2.1"
+androidxTestRunner = "1.6.2"
 mcaDesignSystem = "0.1.0"
 
 [libraries]
@@ -14,7 +18,12 @@ androidx-activity-compose = { module = "androidx.activity:activity-compose", ver
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 junit = { module = "junit:junit", version.ref = "junit" }
+org-json = { module = "org.json:json", version.ref = "orgJson" }
+androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestJunit" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 mca-designsystem = { module = "com.muyuchat.mca:designsystem", version.ref = "mcaDesignSystem" }
 
 [plugins]

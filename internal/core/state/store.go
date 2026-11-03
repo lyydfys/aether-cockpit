@@ -37,6 +37,14 @@ type ResponseRecord struct {
 	CreatedAt int64 `json:"created_at"`
 	// ExpiresAt Unix 秒，0 表示不主动过期（仍受 LRU 约束）。
 	ExpiresAt int64 `json:"expires_at,omitempty"`
+	// Internal 表示这条快照只用于网关内部的会话缝合，不对外提供
+	// GET /v1/responses/{id} 回放。
+	//
+	// 存在的理由：客户端的 "store": false 语义是"**上游**不要保留这条 response"
+	// （Codex 在 WebSocket 上每帧都这么发）。网关为了拼接 previous_response_id
+	// 必须自己记住上下文，这两件事必须解耦——否则 store:false 会让网关也不记账，
+	// 下一帧查不到就直接静默丢历史。
+	Internal bool `json:"internal,omitempty"`
 }
 
 type recordEntry struct {
@@ -404,13 +412,16 @@ func (s *Store) load() {
 	s.dirty = false
 }
 
-// StartAutoSave 启动周期性落盘，返回停止函数。
+// StartAutoSave 启动周期性落盘，返回停止函数（停止时会做最后一次保存并等它写完）。
 func (s *Store) StartAutoSave(interval time.Duration) func() {
 	if s.snapshot == "" || interval <= 0 {
 		return func() {}
 	}
 	stop := make(chan struct{})
+	done := make(chan struct{})
+	var once sync.Once
 	go func() {
+		defer close(done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -423,5 +434,8 @@ func (s *Store) StartAutoSave(interval time.Duration) func() {
 			}
 		}
 	}()
-	return func() { close(stop) }
+	return func() {
+		once.Do(func() { close(stop) })
+		<-done
+	}
 }

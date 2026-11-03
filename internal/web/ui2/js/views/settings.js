@@ -3,6 +3,7 @@ import { h, clear } from '../dom.js';
 import * as api from '../api.js';
 import { card, btn, chip, toggle, select, input, field, toast, confirmDialog, fmtDate, drawer, skeleton, textarea, copyText, empty, iconBtn, trapFocus } from '../components.js';
 import { icon, brandMark } from '../icons.js';
+import { openInBrowser } from '../links.js';
 
 const fmtBytes = (n) => (n >= 1 << 20 ? ((n / (1 << 20)).toFixed(1) + ' MB') : (n >= 1 << 10 ? (n / (1 << 10)).toFixed(1) + ' KB' : n + ' B'));
 
@@ -42,7 +43,7 @@ function fmtPublished(value) {
 
 const TABS = [
   ['general', '常规'], ['network', '网络与共享'], ['tools', '工具服务'], ['presets', '预设'],
-  ['pricing', '定价'], ['privacy', '隐私'], ['observability', '可观测'], ['backup', '同步与备份'], ['about', '关于'],
+  ['pricing', '定价'], ['models', '模型目录'], ['privacy', '隐私'], ['observability', '可观测'], ['backup', '同步与备份'], ['about', '关于'],
 ];
 
 export default {
@@ -50,24 +51,26 @@ export default {
   subtitle: '账号与安全 · 工具服务 · 可观测 · 高级',
 
   mount(host, ctx) {
-    const state = { tab: (ctx.store.get().routeParams || {}).tab || 'general', s: null, v: {}, p: null, pricing: null, error: '', update: null, updateBusy: false };
+    const state = { tab: (ctx.store.get().routeParams || {}).tab || 'general', s: null, v: {}, p: null, pricing: null, redirects: null, error: '', update: null, updateBusy: false };
     host.append(skeleton(6));
     load();
 
     async function load() {
       try {
-        const [s, v, p, pricing, autoImport] = await Promise.all([
+        const [s, v, p, pricing, autoImport, redirects] = await Promise.all([
           api.get('settings'),
           api.version().catch(() => ({})),
           api.get('presets').catch(() => ({ presets: [], provider_presets: {}, route_presets: {} })),
           api.get('pricing').catch(() => ({ currency: 'USD', usd_cny: 7.2, defaults: [], overrides: {} })),
           api.get('importapps/auto').catch(() => ({})),
+          api.get('model-redirects').catch(() => ({ redirects: {} })),
         ]);
         state.s = s;
         state.v = v || {};
         state.p = p || { presets: [], provider_presets: {}, route_presets: {} };
         state.pricing = pricing || { currency: 'USD', usd_cny: 7.2, defaults: [], overrides: {} };
         state.autoImport = autoImport || {};
+        state.redirects = redirects || { redirects: {} };
         render();
       } catch (e) {
         clear(host);
@@ -98,6 +101,7 @@ export default {
       else if (state.tab === 'tools') body.append(...toolsTab(s));
       else if (state.tab === 'presets') body.append(...presetsTab());
       else if (state.tab === 'pricing') body.append(...pricingTab());
+      else if (state.tab === 'models') body.append(...modelsTab());
       else if (state.tab === 'privacy') body.append(...privacy(s));
       else if (state.tab === 'observability') body.append(...observability(s));
       else if (state.tab === 'backup') body.append(...backup(s));
@@ -353,6 +357,54 @@ export default {
           line('状态', ' ', status),
         ]),
       ];
+    }
+
+    function modelsTab() {
+      const redirects = (state.redirects && state.redirects.redirects) || {};
+      const c = card('模型重定向', { chips: [chip('虚拟名 → 渠道上游名', 'plain')] });
+      const ta = textarea({ value: JSON.stringify(redirects, null, 2), label: '模型重定向 JSON' });
+      ta.rows = 12;
+      ta.style.width = '100%';
+      ta.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      const saveBtn = btn('保存重定向', {
+        primary: true,
+        onClick: async () => {
+          let parsed;
+          try { parsed = ta.value.trim() ? JSON.parse(ta.value) : {}; }
+          catch { toast('JSON 格式不正确'); return; }
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            toast('需要对象：{"虚拟名":{"渠道":"上游模型名"}}');
+            return;
+          }
+          try {
+            state.redirects = await api.post('model-redirects', { redirects: parsed });
+            toast('模型重定向已保存');
+            render();
+          } catch (e) { toast('保存失败：' + (e.message || e)); }
+        },
+      });
+      const refreshBtn = btn('刷新全部模型目录', {
+        ghost: true, icon: 'refresh',
+        onClick: async (e) => {
+          const el = e.currentTarget;
+          el.disabled = true;
+          try {
+            const r = await api.post('providers/models/refresh-all', {});
+            toast('模型目录：' + (r.refreshed || 0) + ' 个渠道成功' + (r.failed ? '，' + r.failed + ' 个失败' : ''));
+            await load();
+          } catch (e2) { toast('刷新失败：' + (e2.message || e2)); }
+          finally { if (el.isConnected) el.disabled = false; }
+        },
+      });
+      c.el.append(
+        h('div', { class: 'meta', style: 'padding:4px 0 8px' },
+          '客户端只写虚拟名；路由按渠道顺序尝试，转发时使用该渠道配置的上游名。重定向优先于同名裸模型与路由组，显式 provider/model 仍然直达。'),
+        ta,
+        h('div', { class: 'inline', style: 'justify-content:flex-end;gap:8px;margin-top:8px' }, refreshBtn, saveBtn),
+        h('div', { class: 'meta', style: 'padding:8px 0' },
+          '示例：{"deepseek-v4.1-flash":{"qoder-cn":"DeepSeek-Flash","workbuddy-intl":"deepseek-v4.1-flash-sg"}}。V4 Flash 与 V4.1 Flash 是两个模型，不会被自动合并；只有这里明确写出的映射才会生效。'),
+      );
+      return [c.el, h('div', { class: 'meta', style: 'padding:8px 2px' }, '渠道级模型目录模式（merge / fallback / allowlist）在「账号与额度 → 渠道详情 → 模型」里配置；这里管的是跨渠道虚拟名。')];
     }
 
     function privacy(s) {
@@ -831,7 +883,7 @@ export default {
         } catch (e) { toast('更新记录读取失败：' + (e.message || e)); return; }
       }
       if (u && u.notes) openUpdateModal(u, 'notes');
-      else window.open(repoHome(u && u.repo) + '/releases', '_blank', 'noopener');
+      else openInBrowser(repoHome(u && u.repo) + '/releases');
     }
 
     function aboutLink(iconName, title, desc, onClick) {
@@ -848,7 +900,7 @@ export default {
         h('div', { class: 'star-copy' },
           h('b', null, '如果 Aether Cockpit 帮到了你'),
           h('span', { class: 'meta' }, '请在 GitHub 点个 Star，这对我们意义重大')),
-        btn('去点 Star', { icon: 'github', onClick: () => window.open(repoHome(repo), '_blank', 'noopener') }),
+        btn('去点 Star', { icon: 'github', onClick: () => openInBrowser(repoHome(repo)) }),
         iconBtn('x', '关闭 Star 提示', () => { storage.set(STAR_DISMISS_KEY, '1'); banner.remove(); }));
       return banner;
     }
@@ -898,8 +950,8 @@ export default {
         h('div', { class: 'donate-body' },
           h('p', { class: 'donate-intro' }, '开源项目的持续维护离不开每一份支持。可以点 Star、分享项目，或前往 GitHub 赞助页支持持续开发。'),
           h('div', { class: 'donate-actions' },
-            btn('去赞助', { primary: true, icon: 'heart', onClick: () => window.open(donateURL, '_blank', 'noopener') }),
-            btn('去点 Star', { icon: 'github', onClick: () => window.open(repoHome(repo), '_blank', 'noopener') }),
+            btn('去赞助', { primary: true, icon: 'heart', onClick: () => openInBrowser(donateURL) }),
+            btn('去点 Star', { icon: 'github', onClick: () => openInBrowser(repoHome(repo)) }),
             btn('分享项目', { icon: 'link', onClick: async () => {
               const url = repoHome(repo);
               if (navigator.share) {
@@ -907,7 +959,7 @@ export default {
               }
               await copyText(url);
             } }),
-            btn('意见反馈', { icon: 'message', onClick: () => window.open(repoHome(repo) + '/issues', '_blank', 'noopener') })),
+            btn('意见反馈', { icon: 'message', onClick: () => openInBrowser(repoHome(repo) + '/issues') })),
           h('div', { class: 'donate-note' }, '赞助完全自愿，不影响任何功能。感谢每一份支持！')),
         h('div', { class: 'donate-foot' },
           btn('关闭', { onClick: close })));
@@ -935,7 +987,7 @@ export default {
       if (isUpdate) {
         downloadBtn.addEventListener('click', async () => {
           if (!u.downloadable) {
-            window.open(u.html_url || repoHome(repo) + '/releases', '_blank', 'noopener');
+            openInBrowser(u.html_url || repoHome(repo) + '/releases');
             return;
           }
           downloadBtn.disabled = true;
@@ -966,7 +1018,7 @@ export default {
       } else {
         actions.append(
           btn('关闭', { onClick: close }),
-          u.html_url ? btn('打开 GitHub', { primary: true, icon: 'external', onClick: () => window.open(u.html_url, '_blank', 'noopener') }) : null);
+          u.html_url ? btn('打开 GitHub', { primary: true, icon: 'external', onClick: () => openInBrowser(u.html_url) }) : null);
       }
       const box = h('div', { class: 'modal update-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': isUpdate ? '发现新版本' : '更新记录' },
         h('div', { class: 'update-head' },
@@ -1022,10 +1074,10 @@ export default {
           h('div', { class: 'about-sub' }, 'AI 算力聚合网关 · 本地优先 · 数据不出本机'),
           updateStatus(u, v, repo)),
         h('div', { class: 'about-links' },
-          aboutLink('users', '主作者', owner, () => window.open('https://github.com/' + owner, '_blank', 'noopener')),
-          aboutLink('github', '开源仓库', repo, () => window.open(repoHome(repo), '_blank', 'noopener')),
+          aboutLink('users', '主作者', owner, () => openInBrowser('https://github.com/' + owner)),
+          aboutLink('github', '开源仓库', repo, () => openInBrowser(repoHome(repo))),
           aboutLink('heart', '赞助支持', '支持项目持续开发', () => sponsorDialog(repo)),
-          aboutLink('message', '意见反馈', '报告问题或提交建议', () => window.open(repoHome(repo) + '/issues', '_blank', 'noopener'))),
+          aboutLink('message', '意见反馈', '报告问题或提交建议', () => openInBrowser(repoHome(repo) + '/issues'))),
         ...(star ? [star] : []),
         updateSourceCard(s),
         section('构建信息', [

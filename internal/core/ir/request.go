@@ -81,6 +81,11 @@ type UnifiedChatRequest struct {
 	Stream            bool            `json:"stream"`
 	Temperature       *float64        `json:"temperature,omitempty"`
 	TopP              *float64        `json:"top_p,omitempty"`
+	// FrequencyPenalty / PresencePenalty 是 OpenAI 的重复惩罚。此前没有建模，
+	// 客户端传了也被丢掉：长输出容易滑进复读循环（同一片段刷几百遍），
+	// 而直连官方 API 时参数原样送达，所以不会复读。
+	FrequencyPenalty  *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenalty   *float64        `json:"presence_penalty,omitempty"`
 	MaxOutputTokens   *int            `json:"max_output_tokens,omitempty"`
 	StopSequences     []string        `json:"stop_sequences,omitempty"`
 	ReasoningEffort   string          `json:"reasoning_effort,omitempty"` // low | medium | high

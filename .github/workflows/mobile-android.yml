@@ -4,13 +4,10 @@ on:
   pull_request:
     paths:
       - "mobile/**"
-      - "internal/mobile/**"
-      - "internal/mobilebridge/**"
+      - "internal/**"
       - "cmd/mobilebridge/**"
-      - "internal/core/launcher/**"
-      - "internal/core/apppaths/**"
-      - "internal/core/logging/**"
-      - "internal/providers/workbuddy/**"
+      - "go.mod"
+      - "go.sum"
       - "scripts/build-android-mobilebridge.sh"
       - "scripts/check-mobile-stage0.sh"
       - "scripts/check-mobile-stage1.sh"
@@ -20,13 +17,10 @@ on:
       - master
     paths:
       - "mobile/**"
-      - "internal/mobile/**"
-      - "internal/mobilebridge/**"
+      - "internal/**"
       - "cmd/mobilebridge/**"
-      - "internal/core/launcher/**"
-      - "internal/core/apppaths/**"
-      - "internal/core/logging/**"
-      - "internal/providers/workbuddy/**"
+      - "go.mod"
+      - "go.sum"
       - "scripts/build-android-mobilebridge.sh"
       - "scripts/check-mobile-stage0.sh"
       - "scripts/check-mobile-stage1.sh"
@@ -91,3 +85,64 @@ jobs:
             mobile/android/app/build/outputs/apk/debug/app-debug.apk
             dist/android/arm64-v8a/libaether_mobilebridge.so
             dist/android/arm64-v8a/mobilebridge-probe
+
+  # Stage 0 acceptance includes "Android emulator/device load native library".
+  # The hosted `stage0` job above runs only `--ci`, which cannot touch a device,
+  # so that acceptance item is NOT covered there. This job is the real coverage:
+  # it runs the same script with `--device` against a self-hosted arm64 runner.
+  #
+  # Why arm64 and not an x86_64 emulator: the Go runtime hits a syscall that
+  # Android's untrusted_app seccomp policy blocks on x86_64 (SYS_LSTAT=6), while
+  # arm64 has no lstat syscall at all. See docs/internal/STAGE0_X86_64_BLOCKER.md.
+  #
+  # This job is manual and requires an opt-in repo variable, so it never reports
+  # green without actually running. If AETHER_ARM64_DEVICE is unset, it is
+  # skipped and says so -- that is deliberate: a device gate that silently skips
+  # is worse than no gate.
+  device:
+    name: Stage 0 device gate (self-hosted arm64)
+    if: github.event_name == 'workflow_dispatch' && vars.AETHER_ARM64_DEVICE == 'true'
+    runs-on: [self-hosted, android-arm64]
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Locate a connected device
+        id: device
+        run: |
+          ADB="${ADB:-adb}"
+          command -v "$ADB" >/dev/null 2>&1 || { echo "adb not found; self-hosted runner must provide platform-tools"; exit 1; }
+          SERIAL="$("$ADB" devices | awk '/\tdevice$/ && $1 !~ /^emulator-/ {print $1; exit}')"
+          test -n "$SERIAL" || { echo "no physical device attached to this runner"; "$ADB" devices; exit 1; }
+          echo "serial=$SERIAL" >> "$GITHUB_OUTPUT"
+          echo "using device $SERIAL"
+          echo "ADB=$ADB" >> "$GITHUB_ENV"
+
+      - name: Make scripts executable
+        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh scripts/check-mobile-stage1.sh
+
+      - name: Run Stage 0 gate against the device
+        run: bash scripts/check-mobile-stage0.sh --device "${{ steps.device.outputs.serial }}"
+
+      - name: Upload gate log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage0-device-log
+          path: docs/evidence/stage0-*.log
+          if-no-files-found: ignore

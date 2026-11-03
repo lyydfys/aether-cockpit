@@ -53,7 +53,9 @@ export function post(path, body) {
   }).finally(invalidate);
 }
 
-/* 交给网关用系统默认浏览器打开授权页；避免 WebView 的 target=_blank 单开窗口。 */
+/* 站外链接的底层出口：交给网关用系统默认浏览器打开。
+   WebView 里 window.open 会单开一个没有标题栏、也没有 Wails 运行时的裸窗口，
+   所以外链统一走后端；业务代码请用 links.js 的 openInBrowser（带失败提示）。 */
 export function openExternal(url) {
   return post('open', { url });
 }

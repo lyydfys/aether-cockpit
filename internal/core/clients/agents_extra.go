@@ -87,11 +87,10 @@ func modelRows(p ApplyParams) [][2]string {
 }
 
 func applyQwen(content []byte, p ApplyParams) ([]byte, error) {
-	root := map[string]any{}
-	if len(strings.TrimSpace(string(content))) > 0 {
-		if err := json.Unmarshal(content, &root); err != nil {
-			return nil, fmt.Errorf("现有 qwen settings.json 不是合法 JSON（可能含注释，JSONC 无法安全合并），拒绝改写: %w", err)
-		}
+	// JSONC 感知解析 + 保注释写回（见 jsonc_apply.go）。
+	root, err := parseJSONCObject(content, "qwen settings.json")
+	if err != nil {
+		return nil, err
 	}
 	env, _ := root["env"].(map[string]any)
 	if env == nil {
@@ -138,11 +137,7 @@ func applyQwen(content []byte, p ApplyParams) ([]byte, error) {
 	if m := strings.TrimSpace(p.Model); m != "" {
 		root["model"] = map[string]any{"name": m, "baseUrl": base}
 	}
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(out, '\n'), nil
+	return finishJSON(content, root)
 }
 
 func managedQwen(data []byte) *ManagedInfo {
@@ -170,11 +165,10 @@ func managedQwen(data []byte) *ManagedInfo {
 }
 
 func applyDroid(content []byte, p ApplyParams) ([]byte, error) {
-	root := map[string]any{}
-	if len(strings.TrimSpace(string(content))) > 0 {
-		if err := json.Unmarshal(content, &root); err != nil {
-			return nil, fmt.Errorf("现有 droid settings.json 不是合法 JSON（可能含注释，JSONC 无法安全合并），拒绝改写: %w", err)
-		}
+	// JSONC 感知解析 + 保注释写回。
+	root, err := parseJSONCObject(content, "droid settings.json")
+	if err != nil {
+		return nil, err
 	}
 	list, _ := root["customModels"].([]any)
 	kept := make([]any, 0, len(list)+len(p.ModelOptions)+1)
@@ -210,11 +204,7 @@ func applyDroid(content []byte, p ApplyParams) ([]byte, error) {
 		sess["model"] = droidModelIDPrefix + m
 		root["sessionDefaultSettings"] = sess
 	}
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(out, '\n'), nil
+	return finishJSON(content, root)
 }
 
 func managedDroid(data []byte) *ManagedInfo {
@@ -314,7 +304,7 @@ func applyKimi(content []byte, p ApplyParams) ([]byte, error) {
 	}
 	if p.Model != "" {
 		// 顶层键必须放在第一个表头之前，否则会被 TOML 归进上面那张表。
-		out = append([]string{"default_model = " + tomlQuote("aether/" + p.Model), ""}, out...)
+		out = append([]string{"default_model = " + tomlQuote("aether/"+p.Model), ""}, out...)
 	}
 	out = append(out,
 		"",
@@ -733,11 +723,11 @@ func codebuddyModels(p ApplyParams) []any {
 	out := make([]any, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, map[string]any{
-			"id":              r[0],
-			"name":            r[1],
-			"vendor":          codebuddyVendor,
-			"apiKey":          p.APIKey,
-			"url":             p.BaseURL + "/v1/chat/completions",
+			"id":               r[0],
+			"name":             r[1],
+			"vendor":           codebuddyVendor,
+			"apiKey":           p.APIKey,
+			"url":              p.BaseURL + "/v1/chat/completions",
 			"supportsToolCall": true,
 		})
 	}
@@ -1128,7 +1118,7 @@ func applyVSCode(content []byte, p ApplyParams) ([]byte, error) {
 	for _, r := range rows {
 		models = append(models, map[string]any{
 			"id": r[0], "name": r[1],
-			"url": p.BaseURL + "/v1/chat/completions",
+			"url":         p.BaseURL + "/v1/chat/completions",
 			"toolCalling": true, "vision": true,
 			"contextWindow": 128000, "maxOutputTokens": 8192,
 			"requestHeaders": map[string]string{"Authorization": "Bearer " + p.APIKey},
@@ -1212,9 +1202,9 @@ func applyCopilotJetBrains(content []byte, p ApplyParams) ([]byte, error) {
 	models := map[string]any{}
 	for _, r := range rows {
 		models[r[0]] = map[string]any{
-			"deploymentUrl":  p.BaseURL + "/v1/chat/completions",
-			"isRegistered":   true,
-			"isCustomModel":  true,
+			"deploymentUrl": p.BaseURL + "/v1/chat/completions",
+			"isRegistered":  true,
+			"isCustomModel": true,
 			"modelCapabilities": map[string]any{
 				"name": r[1], "maxInputTokens": 128000, "maxOutputTokens": 8192,
 				"toolCalling": true, "vision": true,

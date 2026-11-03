@@ -78,17 +78,29 @@ func (g *Gateway) imageTaskSnapshot(id string) *imageTask {
 
 // handleImageEdit POST /v1/images/edits（multipart 或 JSON 原样透传）
 func (g *Gateway) handleImageEdit(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.imageConfig()
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置图像生成：请在设置页填写 base_url"})
-		return
-	}
+	cfg, settingsOK := g.imageConfig()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取请求体失败"})
 		return
 	}
+	target, terr := g.mediaTargetFor(r, body)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
+	}
+	if !settingsOK && target.BaseURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置图像生成：请在设置页填写 base_url，或把生图模型挂到某个渠道上"})
+		return
+	}
+	// multipart 里夹着图片二进制，无法安全重写 model 字段；只有 JSON 编辑请求
+	// 能把虚拟名换成渠道的上游名（multipart 场景客户端直接填上游模型名或 ?model=）。
+	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		body = applyModelToBody(body, target, cfg.Model)
+	}
+	cfg = target.applyToImage(cfg)
 	code, out, err := proxyImageEdit(r.Context(), cfg, body, r.Header.Get("Content-Type"))
+	g.noteMediaResult(target, code, err)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
@@ -100,21 +112,29 @@ func (g *Gateway) handleImageEdit(w http.ResponseWriter, r *http.Request) {
 
 // handleImageGenerateAsync POST /v1/images/generations/async
 func (g *Gateway) handleImageGenerateAsync(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.imageConfig()
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置图像生成：请在设置页填写 base_url"})
-		return
-	}
+	cfg, settingsOK := g.imageConfig()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取请求体失败"})
 		return
 	}
+	target, terr := g.mediaTargetFor(r, body)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
+	}
+	if !settingsOK && target.BaseURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置图像生成：请在设置页填写 base_url，或把生图模型挂到某个渠道上"})
+		return
+	}
+	body = applyModelToBody(body, target, cfg.Model)
+	cfg = target.applyToImage(cfg)
 	t := g.imageTaskStart()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		code, out, err := generateImage(ctx, cfg, body)
+		g.noteMediaResult(target, code, err)
 		g.imageTaskFinish(t, code, out, err)
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": t.ID, "request_id": t.ID, "status": "pending"})
@@ -122,22 +142,32 @@ func (g *Gateway) handleImageGenerateAsync(w http.ResponseWriter, r *http.Reques
 
 // handleImageEditAsync POST /v1/images/edits/async
 func (g *Gateway) handleImageEditAsync(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.imageConfig()
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置图像生成：请在设置页填写 base_url"})
-		return
-	}
+	cfg, settingsOK := g.imageConfig()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取请求体失败"})
 		return
 	}
+	target, terr := g.mediaTargetFor(r, body)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
+	}
+	if !settingsOK && target.BaseURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置图像生成：请在设置页填写 base_url，或把生图模型挂到某个渠道上"})
+		return
+	}
 	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(strings.ToLower(ct), "application/json") {
+		body = applyModelToBody(body, target, cfg.Model)
+	}
+	cfg = target.applyToImage(cfg)
 	t := g.imageTaskStart()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		code, out, err := proxyImageEdit(ctx, cfg, body, ct)
+		g.noteMediaResult(target, code, err)
 		g.imageTaskFinish(t, code, out, err)
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": t.ID, "request_id": t.ID, "status": "pending"})
@@ -158,11 +188,6 @@ func (g *Gateway) handleImageTaskGet(w http.ResponseWriter, r *http.Request) {
 // 本地批量包装：最多 16 个生成请求并行（并发 4），返回逐条结果。
 // 上游没有统一的批处理协议，这里只做扇出/聚合，错误按条返回不影响其他条。
 func (g *Gateway) handleImageBatch(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.imageConfig()
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置图像生成：请在设置页填写 base_url"})
-		return
-	}
 	var body struct {
 		Requests []json.RawMessage `json:"requests"`
 	}
@@ -181,6 +206,19 @@ func (g *Gateway) handleImageBatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "一次最多 16 条请求"})
 		return
 	}
+	cfg, settingsOK := g.imageConfig()
+	target, terr := g.mediaTargetFor(r, raw)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
+	}
+	if !settingsOK && target.BaseURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置图像生成：请在设置页填写 base_url，或把生图模型挂到某个渠道上"})
+		return
+	}
+	// 批量里的每一条只补缺省模型、不改写：同一次批量可能故意混用不同模型，
+	// 统一改写会把用户的显式选择覆盖掉。
+	cfg = target.applyToImage(cfg)
 
 	type batchItem struct {
 		Index     int             `json:"index"`
@@ -200,6 +238,7 @@ func (g *Gateway) handleImageBatch(w http.ResponseWriter, r *http.Request) {
 			defer func() { <-sem }()
 			started := time.Now()
 			code, out, err := generateImage(r.Context(), cfg, req)
+			g.noteMediaResult(target, code, err)
 			item := batchItem{Index: i, Status: code, ElapsedMS: time.Since(started).Milliseconds()}
 			if err != nil {
 				item.Error = err.Error()

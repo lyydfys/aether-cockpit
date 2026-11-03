@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/core/mw"
@@ -61,6 +62,11 @@ func Rewrite(deps Deps) Middleware {
 			req.Instructions = instr
 			if mctx.Model != "" && mctx.Model != req.Model {
 				req.Model = mctx.Model
+				// 渠道真正读取的是 UpstreamModel（路由层已回填）；只改
+				// req.Model 会让"模型映射"看起来生效、实际仍发旧模型。
+				if req.UpstreamModel != "" {
+					req.UpstreamModel = strings.TrimPrefix(mctx.Model, req.ProviderID+"/")
+				}
 			}
 
 			return next(ctx, env, req)

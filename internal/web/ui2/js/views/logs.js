@@ -79,6 +79,10 @@ function fromLedger(r) {
     first_byte_ms: Number(r.ttft_ms) || 0,
     input_tokens: Number(r.in) || 0,
     output_tokens: Number(r.out) || 0,
+    est_tokens: Number(r.est_tokens) || 0,
+    // 上游实际处理的量远小于我们发出去的：上下文被上游静默截断，
+    // 模型只看到末尾碎片，表现就是"突然失忆、开始复读"。
+    upstream_truncated: !!r.upstream_truncated,
     cache_read: Number(r.cache_read) || 0,
     cache_write: Number(r.cache_write) || 0,
     reasoning_tokens: Number(r.reasoning) || 0,
@@ -225,7 +229,7 @@ export default {
             h('span', { class: 'log-time mono' }, fmtDate(e.time, true, true).slice(5)),
             h('span', { class: 'log-proto', title: e.protocol || 'http' }, chip(protocolLabel(e.protocol), 'plain')),
             h('div', { class: 'log-model' },
-              h('div', { class: 'log-title' }, h('span', { class: 'name' }, e.model || '—'), e.stream ? chip('流式', 'plain') : null),
+              h('div', { class: 'log-title' }, h('span', { class: 'name' }, e.model || '—'), e.stream ? chip('流式', 'plain') : null, e.upstream_truncated ? chip('上游截断', 'amber') : null),
               h('div', { class: 'log-sub', title: providerLine }, providerLine),
               ex ? h('div', { class: 'log-err' }, ex.title + (e.err_type ? ' · ' + e.err_type : '')) : null),
             h('span', { class: 'log-num log-lat', 'data-label': '首字节 / 总耗时' }, ttft + e.duration_ms + ' ms'),

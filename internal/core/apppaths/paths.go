@@ -10,8 +10,8 @@ import (
 //
 // DataDir is <noBackupFilesDir>/aether, CacheDir is <filesDir>/aether/cache and
 // TempDir is <cacheDir>/aether/tmp. All roots are absolute; the runtime derives
-// StateDB, UsageDir and LogPath under DataDir and never falls back to Base() or
-// the process working directory.
+// every store path under them and never falls back to Base() or the process
+// working directory.
 type Paths struct {
 	DataDir  string
 	StateDB  string
@@ -19,6 +19,16 @@ type Paths struct {
 	LogPath  string
 	CacheDir string
 	TempDir  string
+
+	SettingsPath   string
+	AccountsPath   string
+	SnapshotPath   string
+	MiddlewarePath string
+	ClientsPath    string
+	LibraryPath    string
+	UsagePath      string
+	ModelsDir      string
+	SpecDir        string
 }
 
 // NewPaths validates and derives the mobile path set. Empty, relative or
@@ -50,12 +60,23 @@ func NewPaths(dataDir, cacheDir, tempDir string) (Paths, error) {
 	cleanData := filepath.Clean(strings.TrimSpace(dataDir))
 	cleanCache := filepath.Clean(strings.TrimSpace(cacheDir))
 	cleanTemp := filepath.Clean(strings.TrimSpace(tempDir))
+	usageDir := filepath.Join(cleanData, "usage")
 	return Paths{
 		DataDir:  cleanData,
 		StateDB:  filepath.Join(cleanData, "state.db"),
-		UsageDir: filepath.Join(cleanData, "usage"),
+		UsageDir: usageDir,
 		LogPath:  filepath.Join(cleanData, "logs", "aether.log"),
 		CacheDir: cleanCache,
 		TempDir:  cleanTemp,
+
+		SettingsPath:   filepath.Join(cleanData, "settings.json"),
+		AccountsPath:   filepath.Join(cleanData, "accounts.json"),
+		SnapshotPath:   filepath.Join(cleanData, "state.json"),
+		MiddlewarePath: filepath.Join(cleanData, "middleware.json"),
+		ClientsPath:    filepath.Join(cleanData, "clients.json"),
+		LibraryPath:    filepath.Join(cleanData, "library.json"),
+		UsagePath:      filepath.Join(usageDir, "usage.json"),
+		ModelsDir:      filepath.Join(cleanCache, "models"),
+		SpecDir:        filepath.Join(cleanCache, "spec"),
 	}, nil
 }

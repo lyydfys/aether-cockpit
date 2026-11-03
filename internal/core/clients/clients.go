@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,6 +22,8 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"aether-cockpit/internal/core/jsoncutil"
 )
 
 // Kind 是客户端配置文件的类型。
@@ -506,6 +509,9 @@ func (m *Manager) Apply(id string, p ApplyParams) (string, error) {
 	if err := atomicWrite(path, out); err != nil {
 		return "", err
 	}
+	// 记下"我方写了哪些顶层键、接入前是什么"，供断开时做键级还原
+	// （用户在此期间手改的其它键不该被整份备份回滚掉）。
+	recordManagedKeys(d.id, path, content, out)
 	for _, w := range writes {
 		if err := os.MkdirAll(filepath.Dir(w.path), 0o755); err != nil {
 			return "", err
@@ -592,6 +598,9 @@ func (m *Manager) Restore(id, backup string) error {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("删除首次连接创建的文件失败: %w", err)
 		}
+	} else if restoreManagedKeys(id, path) {
+		// 键级还原成功：只把我方写过的顶层键恢复原值，用户接入后手改的
+		// 其它键原样保留。这是"断开"最符合直觉的语义。
 	} else {
 		data, err := os.ReadFile(backup)
 		if err != nil {
@@ -747,9 +756,17 @@ func (m *Manager) managedOf(d clientDef, path string) *ManagedInfo {
 // --- 各类型的改写逻辑 ---
 
 // applyJSON 合并写 JSON：只动 env 键，其余字段原样保留。
-// 注意：Go 的 json 重编码会规范化键序与缩进——settings.json 本就是
-// 机器管理的文件（无注释），这个代价可接受，且备份可完整还原。
+//
+// 两条路径：
+//  1. 保注释路径（首选）：只替换顶层 env / modelPicker，其余文本（含注释、
+//     键序、缩进）原样保留——jsoncutil.SpliceMember 负责这件事；
+//  2. 回退路径：原文不是可解析的 JSONC 对象时，退回"整文件重写"。
+//     代价是规范化键序与缩进，但备份可完整还原，且总比接不进去好。
 func applyJSON(content []byte, p ApplyParams) ([]byte, error) {
+	if out, ok := spliceMembers(content, claudeMembers(content, p)); ok {
+		return out, nil
+	}
+
 	root := map[string]any{}
 	if len(strings.TrimSpace(string(content))) > 0 {
 		if err := json.Unmarshal(content, &root); err != nil {
@@ -772,12 +789,7 @@ func applyJSON(content []byte, p ApplyParams) ([]byte, error) {
 		env["ANTHROPIC_MODEL"] = p.Model
 		// Claude Code 的 opus/sonnet/haiku 别名与子代理会按 tier 变量取模型；
 		// 不设置时它们会绕过网关写死的模型名，上游无法解析。统一指到所选模型。
-		for _, key := range []string{
-			"ANTHROPIC_DEFAULT_OPUS_MODEL",
-			"ANTHROPIC_DEFAULT_SONNET_MODEL",
-			"ANTHROPIC_DEFAULT_HAIKU_MODEL",
-			"ANTHROPIC_SMALL_FAST_MODEL",
-		} {
+		for _, key := range claudeTierEnvKeys {
 			env[key] = p.Model
 		}
 	}
@@ -788,28 +800,92 @@ func applyJSON(content []byte, p ApplyParams) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
+// claudeTierEnvKeys 是 Claude Code 按 tier 取模型的变量名。
+// 不设置时 opus/sonnet/haiku 别名与子代理会绕过网关写死的模型名，上游无法解析。
+var claudeTierEnvKeys = []string{
+	"ANTHROPIC_DEFAULT_OPUS_MODEL",
+	"ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+	"ANTHROPIC_SMALL_FAST_MODEL",
+}
+
+// claudeMembers 组装 Claude Code settings.json 需要写入的顶层成员。
+func claudeMembers(content []byte, p ApplyParams) map[string]any {
+	env := topLevelObject(content, "env")
+	env["ANTHROPIC_BASE_URL"] = p.BaseURL
+	if p.APIKey != "" {
+		env["ANTHROPIC_AUTH_TOKEN"] = p.APIKey
+	}
+	if p.Model != "" {
+		env["ANTHROPIC_MODEL"] = p.Model
+		for _, key := range claudeTierEnvKeys {
+			env[key] = p.Model
+		}
+	}
+	members := map[string]any{"env": env}
+	if len(p.ModelOptions) > 0 {
+		if picker, ok := claudePickerValue(content, p.ModelOptions); ok {
+			members["modelPicker"] = picker
+		}
+	}
+	return members
+}
+
+// claudePickerValue 计算 modelPicker 的值；ok=false 表示"不该动它"。
+func claudePickerValue(content []byte, opts []ModelOption) (map[string]any, bool) {
+	var cur map[string]any
+	if normalized, err := jsoncutil.Parse(content); err == nil {
+		var root map[string]any
+		if json.Unmarshal(normalized, &root) == nil {
+			cur, _ = root["modelPicker"].(map[string]any)
+		}
+	}
+	if cur != nil {
+		if rows, _ := cur["options"].([]any); len(rows) > 0 && !claudePickerIsOurs(rows) {
+			return nil, false
+		}
+	}
+	rows := claudePickerRows(opts)
+	if len(rows) == 0 {
+		return nil, false
+	}
+	return map[string]any{"options": rows}, true
+}
+
 // writeClaudePicker 写 Claude Code 的 /model 列表（settings.json modelPicker）。
 // 用户自己写的 modelPicker（没有任何 "via Aether Cockpit" 行）原样保留；
 // 只有不存在或整体是我们的才更新，避免覆盖手工配置。
 func writeClaudePicker(root map[string]any, opts []ModelOption) {
-	const mark = "via Aether Cockpit"
 	if cur, ok := root["modelPicker"].(map[string]any); ok {
-		rows, _ := cur["options"].([]any)
-		if len(rows) > 0 {
-			ours := true
-			for _, r := range rows {
-				m, _ := r.(map[string]any)
-				d, _ := m["description"].(string)
-				if !strings.Contains(d, mark) {
-					ours = false
-					break
-				}
-			}
-			if !ours {
-				return
-			}
+		if rows, _ := cur["options"].([]any); len(rows) > 0 && !claudePickerIsOurs(rows) {
+			return
 		}
 	}
+	rows := claudePickerRows(opts)
+	if len(rows) == 0 {
+		return
+	}
+	root["modelPicker"] = map[string]any{"options": rows}
+}
+
+// claudePickerMark 标记"这一行是本工具写的"。
+const claudePickerMark = "via Aether Cockpit"
+
+// claudePickerIsOurs 判断现有 modelPicker 是否整体由本工具生成。
+// 只要有一行不带标记，就视为用户自己维护的，不覆盖。
+func claudePickerIsOurs(rows []any) bool {
+	for _, r := range rows {
+		m, _ := r.(map[string]any)
+		d, _ := m["description"].(string)
+		if !strings.Contains(d, claudePickerMark) {
+			return false
+		}
+	}
+	return true
+}
+
+// claudePickerRows 把模型选项渲染成 modelPicker.options 行。
+func claudePickerRows(opts []ModelOption) []any {
 	rows := make([]any, 0, len(opts))
 	for _, o := range opts {
 		if strings.TrimSpace(o.Value) == "" {
@@ -823,15 +899,12 @@ func writeClaudePicker(root map[string]any, opts []ModelOption) {
 		if desc == "" {
 			desc = "Aether Cockpit"
 		}
-		if !strings.Contains(desc, mark) {
-			desc += " · " + mark
+		if !strings.Contains(desc, claudePickerMark) {
+			desc += " · " + claudePickerMark
 		}
 		rows = append(rows, map[string]any{"model": o.Value, "label": label, "description": desc})
 	}
-	if len(rows) == 0 {
-		return
-	}
-	root["modelPicker"] = map[string]any{"options": rows}
+	return rows
 }
 
 // applyOpenCode 合并写 opencode 的全局配置（~/.config/opencode/opencode.json）：
@@ -859,6 +932,13 @@ func openCodeStyleApplier(npm, fileLabel string) func([]byte, ApplyParams) ([]by
 }
 
 func applyOpenCodeStyle(content []byte, p ApplyParams, npm, fileLabel string) ([]byte, error) {
+	// 保注释路径：provider 与 model 都是顶层成员，整体替换即可保留注释与
+	// 其它 provider。opencode.json 官方允许 JSONC，此前一律拒写等于"用户正常
+	// 配置反而接不进网关"，这里优先走 splice。
+	if out, ok := spliceMembers(content, openCodeMembers(content, p, npm)); ok {
+		return out, nil
+	}
+
 	root := map[string]any{}
 	if len(strings.TrimSpace(string(content))) > 0 {
 		if err := json.Unmarshal(content, &root); err != nil {
@@ -870,13 +950,7 @@ func applyOpenCodeStyle(content []byte, p ApplyParams, npm, fileLabel string) ([
 		provider = map[string]any{}
 		root["provider"] = provider
 	}
-	provider["aether"] = map[string]any{
-		"npm": npm,
-		"options": map[string]any{
-			"baseURL": p.BaseURL + "/v1",
-			"apiKey":  p.APIKey,
-		},
-	}
+	provider["aether"] = openCodeProviderEntry(p, npm)
 	if p.Model != "" {
 		root["model"] = "aether/" + p.Model
 	}
@@ -885,6 +959,31 @@ func applyOpenCodeStyle(content []byte, p ApplyParams, npm, fileLabel string) ([
 		return nil, err
 	}
 	return append(out, '\n'), nil
+}
+
+// openCodeProviderEntry 是写入 provider.aether 的条目。
+func openCodeProviderEntry(p ApplyParams, npm string) map[string]any {
+	return map[string]any{
+		"npm": npm,
+		"options": map[string]any{
+			"baseURL": p.BaseURL + "/v1",
+			"apiKey":  p.APIKey,
+		},
+	}
+}
+
+// openCodeMembers 组装 opencode 系需要写入的顶层成员。
+//
+// provider 是顶层对象：必须先把用户已有的其它 provider 读出来再整体写回，
+// 否则 spliece 会把它们一起覆盖掉。
+func openCodeMembers(content []byte, p ApplyParams, npm string) map[string]any {
+	provider := topLevelObject(content, "provider")
+	provider["aether"] = openCodeProviderEntry(p, npm)
+	members := map[string]any{"provider": provider}
+	if p.Model != "" {
+		members["model"] = "aether/" + p.Model
+	}
+	return members
 }
 
 // managedOpenCode 探测 opencode.json 里的受管理字段（provider.aether 的
@@ -1041,6 +1140,32 @@ func trimBOM(b []byte) []byte {
 	return bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
 }
 
+// bomPrefix 是 UTF-8 BOM。
+var bomPrefix = []byte{0xEF, 0xBB, 0xBF}
+
+// restoreBOM 在"原文件有 BOM"时把 BOM 加回新内容前。
+//
+// 读的时候为了解析必须剥掉（Windows 记事本 / PowerShell 写出的 JSON、TOML 常带
+// BOM，严格解析器会直接拒收），但写完还要还回去，否则用户用记事本再打开就
+// 看到中文乱码。只在原文件确实有 BOM 时加：给无 BOM 文件凭空加一个反而会让
+// 其它工具（Node 的 JSON.parse、多数 TOML 库）解析失败。
+func restoreBOM(path string, data []byte) []byte {
+	if bytes.HasPrefix(data, bomPrefix) {
+		return data
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return data
+	}
+	head := make([]byte, 3)
+	n, _ := io.ReadFull(f, head)
+	f.Close()
+	if n == 3 && bytes.Equal(head, bomPrefix) {
+		return append(append([]byte{}, bomPrefix...), data...)
+	}
+	return data
+}
+
 func fileExists(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && !st.IsDir()
@@ -1080,6 +1205,9 @@ func atomicWrite(path string, data []byte) error {
 			real = target
 		}
 	}
+	// 写回 BOM：读的时候为了解析把它剥掉了（Windows 记事本/PowerShell 常带），
+	// 但写完还回去，否则用户后续用记事本打开会看到中文乱码。
+	data = restoreBOM(real, data)
 	dir := filepath.Dir(real)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(real)+".aether-*")
 	if err != nil {

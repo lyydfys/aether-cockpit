@@ -180,6 +180,10 @@ func (c *agentCLICache) snapshot(ctx context.Context) (map[string]agentCLIStatus
 
 // handleAgentsCLI 替换 compat_api 里的空桩：真实巡检本机 CLI。
 func (g *Gateway) handleAgentsCLI(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.CLIProcessDiscovery {
+		writePlatformUnsupported(w, "本机 Agent CLI 巡检")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	statuses, at := agentCLIs.snapshot(ctx)
@@ -192,6 +196,10 @@ func (g *Gateway) handleAgentsCLI(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentsInstall 返回安装/升级指引（未安装给安装命令，已安装给升级命令）。
 func (g *Gateway) handleAgentsInstall(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.CLIProcessDiscovery {
+		writePlatformUnsupported(w, "本机 Agent CLI 巡检")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	statuses, _ := agentCLIs.snapshot(ctx)
@@ -204,6 +212,10 @@ func (g *Gateway) handleAgentsInstall(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentsCLIUpdate 不代管安装：返回升级命令与原因。
 func (g *Gateway) handleAgentsCLIUpdate(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.CLIProcessDiscovery {
+		writePlatformUnsupported(w, "本机 Agent CLI 巡检")
+		return
+	}
 	id := r.PathValue("id")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()

@@ -2,6 +2,7 @@ package mobile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -72,8 +73,8 @@ func TestStartHealthStop(t *testing.T) {
 	if want := filepath.Join(cfg.DataDir, "state.db"); paths.StateDB != want {
 		t.Fatalf("StateDB = %q, want %q", paths.StateDB, want)
 	}
-	if _, err := os.Stat(paths.StateDB); !os.IsNotExist(err) {
-		t.Fatalf("state.db must not be created before the state layer: %v", err)
+	if _, err := os.Stat(paths.StateDB); err != nil {
+		t.Fatalf("state layer must create %s: %v", paths.StateDB, err)
 	}
 	if want := filepath.Join(cfg.DataDir, "logs", "aether.log"); paths.LogPath != want {
 		t.Fatalf("LogPath = %q, want %q", paths.LogPath, want)
@@ -115,6 +116,37 @@ func TestStartHealthStop(t *testing.T) {
 	}
 }
 
+func TestUsageAggregateFlushedOnStop(t *testing.T) {
+	cfg := testConfig(t)
+	rt := startForTest(t, cfg)
+	paths := rt.Paths()
+	if err := rt.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if info, err := os.Stat(paths.UsagePath); err != nil || info.Size() == 0 {
+		t.Fatalf("usage aggregate %s missing after Stop: %v", paths.UsagePath, err)
+	}
+	var file struct {
+		Days map[string]json.RawMessage `json:"days"`
+	}
+	raw, err := os.ReadFile(paths.UsagePath)
+	if err != nil {
+		t.Fatalf("read usage: %v", err)
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatalf("usage json: %v", err)
+	}
+	if file.Days == nil {
+		t.Fatalf("usage json has no days: %s", raw)
+	}
+
+	// The next runtime must read the same aggregate and stop cleanly.
+	rt2 := startForTest(t, cfg)
+	if err := rt2.Stop(context.Background()); err != nil {
+		t.Fatalf("second Stop: %v", err)
+	}
+}
+
 func TestThreeStartHealthStopCycles(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		rt := startForTest(t, testConfig(t))
@@ -128,6 +160,173 @@ func TestThreeStartHealthStopCycles(t *testing.T) {
 		if _, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
 			t.Fatalf("cycle %d old listener %s still accepts", i+1, addr)
 		}
+	}
+}
+
+func TestRuntimeServesGatewayAndGuardsManagement(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	cfg := testConfig(t)
+	rt := startForTest(t, cfg)
+	paths := rt.Paths()
+	status := rt.Status()
+	if status.AdminSession != cfg.AdminSessionKey {
+		t.Fatalf("AdminSession = %q, want the injected key", status.AdminSession)
+	}
+	if len(status.CallerKey) != 43 || status.CallerKey == status.AdminSession {
+		t.Fatalf("CallerKey = %q, want an independent ephemeral key", status.CallerKey)
+	}
+	if info, err := os.Stat(paths.ModelsDir); err != nil || !info.IsDir() {
+		t.Fatalf("ModelsDir %s: %v", paths.ModelsDir, err)
+	}
+	if info, err := os.Stat(paths.SpecDir); err != nil || !info.IsDir() {
+		t.Fatalf("SpecDir %s: %v", paths.SpecDir, err)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	base := "http://" + status.Addr
+	authorized := func(path, key string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, base+path, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+key)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		return resp
+	}
+
+	resp, err := client.Get(base + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET /v1/models: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("model API without caller key status = %d: %s", resp.StatusCode, body)
+	}
+	var callerGuard struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(body, &callerGuard); err != nil || callerGuard.Code != "caller_auth_required" {
+		t.Fatalf("caller guard = %+v, err = %v", callerGuard, err)
+	}
+
+	resp = authorized("/v1/models", status.CallerKey)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("GET /v1/models with caller key status = %d: %s", resp.StatusCode, body)
+	}
+	var list struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode /v1/models: %v", err)
+	}
+	resp.Body.Close()
+	if list.Object != "list" || list.Data == nil {
+		t.Fatalf("/v1/models = %+v", list)
+	}
+
+	// 两把 key 互不通用。
+	resp = authorized("/v1/models", status.AdminSession)
+	if resp.StatusCode != http.StatusUnauthorized {
+		resp.Body.Close()
+		t.Fatalf("admin key must not unlock /v1, status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp, err = client.Get(base + "/api/providers")
+	if err != nil {
+		t.Fatalf("GET /api/providers: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("management API without session status = %d: %s", resp.StatusCode, body)
+	}
+	var guard struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(body, &guard); err != nil || guard.Code != "admin_auth_required" {
+		t.Fatalf("management guard = %+v, err = %v", guard, err)
+	}
+
+	resp = authorized("/api/providers", status.CallerKey)
+	if resp.StatusCode != http.StatusUnauthorized {
+		resp.Body.Close()
+		t.Fatalf("caller key must not unlock management, status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = authorized("/api/providers", status.AdminSession)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("authorized management API status = %d: %s", resp.StatusCode, body)
+	}
+
+	resp, err = client.Get(base + "/v1/definitely-missing")
+	if err != nil {
+		t.Fatalf("GET /v1/definitely-missing: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown /v1 route status = %d, want 404 from gateway", resp.StatusCode)
+	}
+
+	if err := rt.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	logData, err := os.ReadFile(paths.LogPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if strings.Contains(string(logData), status.AdminSession) || strings.Contains(string(logData), status.CallerKey) {
+		t.Fatalf("log leaked a session key: %s", logData)
+	}
+
+	if _, err := os.Stat(filepath.Join(cwd, "data")); !os.IsNotExist(err) {
+		t.Fatalf("gateway must not use relative data/: %v", err)
+	}
+}
+
+func TestStartGeneratesRandomSessionKeys(t *testing.T) {
+	admins := make([]string, 0, 2)
+	callers := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		cfg := testConfig(t)
+		cfg.AdminSessionKey = ""
+		rt, err := Start(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		status := rt.Status()
+		if len(status.AdminSession) != 43 || len(status.CallerKey) != 43 {
+			t.Fatalf("sessions = %q / %q, want two 43-char keys", status.AdminSession, status.CallerKey)
+		}
+		if status.AdminSession == status.CallerKey {
+			t.Fatal("admin session and caller key must differ")
+		}
+		if err := rt.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		after := rt.Status()
+		if after.AdminSession != "" || after.CallerKey != "" {
+			t.Fatal("Stop should clear both in-memory keys")
+		}
+		admins = append(admins, status.AdminSession)
+		callers = append(callers, status.CallerKey)
+	}
+	if admins[0] == admins[1] || callers[0] == callers[1] {
+		t.Fatal("each start must generate fresh session keys")
 	}
 }
 
@@ -222,5 +421,28 @@ func TestHealthzRejectsNonGET(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestCallerKeysEndpoint(t *testing.T) {
+	cfg := testConfig(t)
+	rt := startForTest(t, cfg)
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, "http://"+rt.Status().Addr+"/api/caller-keys", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+rt.Status().AdminSession)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/caller-keys: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"keys"`) {
+		t.Fatalf("body missing keys: %s", body)
 	}
 }

@@ -27,6 +27,25 @@ func TestNewPathsDerivesMobilePaths(t *testing.T) {
 	if want := filepath.Join(data, "logs", "aether.log"); paths.LogPath != want {
 		t.Fatalf("LogPath = %q, want %q", paths.LogPath, want)
 	}
+	for _, tc := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"SettingsPath", paths.SettingsPath, filepath.Join(data, "settings.json")},
+		{"AccountsPath", paths.AccountsPath, filepath.Join(data, "accounts.json")},
+		{"SnapshotPath", paths.SnapshotPath, filepath.Join(data, "state.json")},
+		{"MiddlewarePath", paths.MiddlewarePath, filepath.Join(data, "middleware.json")},
+		{"ClientsPath", paths.ClientsPath, filepath.Join(data, "clients.json")},
+		{"LibraryPath", paths.LibraryPath, filepath.Join(data, "library.json")},
+		{"UsagePath", paths.UsagePath, filepath.Join(data, "usage", "usage.json")},
+		{"ModelsDir", paths.ModelsDir, filepath.Join(cache, "models")},
+		{"SpecDir", paths.SpecDir, filepath.Join(cache, "spec")},
+	} {
+		if tc.got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
 }
 
 func TestNewPathsRejectsEmptyRoot(t *testing.T) {

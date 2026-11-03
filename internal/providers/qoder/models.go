@@ -157,8 +157,12 @@ func sortEfforts(list []string) {
 // legacyModelKey 把旧静态目录里的模型名映射到上游 key。
 // 这些显示名此前会落到 auto（上游流里 model 一直是 auto），实时目录上线后
 // 改用内部 key，显式请求旧名字时在这里兜一下。
+//
+// 注意：V4 Flash 与 V4.1 Flash 是两个模型。dfmodel 是 Qoder 当前的
+// DeepSeek Flash 槽位（V4.1），不再把 deepseek-v4-flash 自动改写成它；
+// 旧名字原样透传，避免把 V4 Flash 的请求静默换成 V4.1。
 var legacyQoderModelKeys = map[string]string{
-	"deepseek-v4-flash": "dfmodel", "deepseek-v4-pro": "dmodel",
+	"deepseek-v4-pro":     "dmodel",
 	"deepseek-v4.1-flash": "dfmodel", "deepseek-v4.1-pro": "dmodel",
 	"deepseek-flash": "dfmodel",
 	"glm-5.1":        "gmodel", "glm-5.2": "gmodel", "glm-5.3": "gmodel",

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -182,31 +183,88 @@ func (c *modelCatalog) save(pid string, f liveModelFile) error {
 	return os.Rename(tmp, filepath.Join(c.dir, pid+".json"))
 }
 
-// models 返回渠道当前的模型清单：有实时目录时以它为准（元数据从静态
-// 清单按归一化 ID 回填），否则退回静态清单。
+// models 返回渠道当前的模型清单，按渠道目录模式计算：
+//   - allowlist：只用静态清单，忽略上游实时目录；
+//   - fallback：有实时目录时以它为准，否则静态清单；
+//   - merge（默认）：实时目录优先，静态清单补缺。
+//
+// 元数据仍从静态清单按归一化 ID 回填，未知模型用 models.dev 兜底。
 func (c *modelCatalog) models(pid string) []ir.ModelMeta {
 	p, ok := provider.Get(pid)
 	if !ok {
 		return nil
 	}
 	static := p.Manifest().Models
-	index := staticModelIndex(static)
-	c.mu.RLock()
-	live, has := c.live[pid]
-	c.mu.RUnlock()
-	if !has || (len(live.Models) == 0 && len(live.Entries) == 0) {
-		out := make([]ir.ModelMeta, len(static))
-		for i, m := range static {
-			out[i] = c.enrichStatic(m)
+	mode := c.modelMode(pid)
+
+	var base []ir.ModelMeta
+	if mode == ModelModeAllowlist {
+		base = c.enrichedStatic(static)
+	} else {
+		c.mu.RLock()
+		live, has := c.live[pid]
+		c.mu.RUnlock()
+		if !has || (len(live.Models) == 0 && len(live.Entries) == 0) {
+			base = c.enrichedStatic(static)
+		} else {
+			liveModels := c.liveModels(pid, live, static)
+			if mode == ModelModeFallback {
+				base = liveModels
+			} else {
+				base = mergeCatalogModels(liveModels, c.enrichedStatic(static))
+			}
 		}
-		return out
 	}
+	// 手动补的模型在所有模式下都追加：这是用户显式配置的目录项。
+	if extras := c.extraModels(pid, static); len(extras) > 0 {
+		base = mergeCatalogModels(base, extras)
+	}
+	return base
+}
+
+// extraModels 把手动模型转成目录条目；元数据仍从静态清单/models.dev 回填。
+func (c *modelCatalog) extraModels(pid string, static []ir.ModelMeta) []ir.ModelMeta {
+	if c.g == nil {
+		return nil
+	}
+	names := c.g.providerExtraModels(pid)
+	if len(names) == 0 {
+		return nil
+	}
+	return c.modelsFromIDs(pid, names, static)
+}
+
+// modelMode 读取渠道目录模式；catalog 未绑定网关时按默认模式处理。
+func (c *modelCatalog) modelMode(pid string) string {
+	if c.g == nil {
+		return ModelModeDefault
+	}
+	return c.g.providerModelMode(pid)
+}
+
+// enrichedStatic 给静态清单补上 models.dev 的显示名与上下文。
+func (c *modelCatalog) enrichedStatic(static []ir.ModelMeta) []ir.ModelMeta {
+	out := make([]ir.ModelMeta, len(static))
+	for i, m := range static {
+		out[i] = c.enrichStatic(m)
+	}
+	return out
+}
+
+// liveModels 把实时目录转成统一的 ModelMeta（元数据从静态清单回填）。
+func (c *modelCatalog) liveModels(pid string, live liveModelFile, static []ir.ModelMeta) []ir.ModelMeta {
 	if len(live.Entries) > 0 {
 		return c.modelsFromEntries(pid, live.Entries, static)
 	}
-	out := make([]ir.ModelMeta, 0, len(live.Models))
-	seen := make(map[string]bool, len(live.Models))
-	for _, raw := range live.Models {
+	return c.modelsFromIDs(pid, live.Models, static)
+}
+
+// modelsFromIDs 处理只有模型 ID 列表的实时目录（绝大多数 /models 端点）。
+func (c *modelCatalog) modelsFromIDs(pid string, ids []string, static []ir.ModelMeta) []ir.ModelMeta {
+	index := staticModelIndex(static)
+	out := make([]ir.ModelMeta, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, raw := range ids {
 		id := strings.TrimSpace(raw)
 		if id == "" || seen[id] {
 			continue
@@ -386,7 +444,11 @@ func (c *modelCatalog) pickEnv(pid string) *provider.AccountEnv {
 }
 
 // supports 表示该渠道现在是否能执行"从上游刷新"（有账号且端点可用）。
+// allowlist 模式明确不访问上游目录，因此也不支持刷新。
 func (c *modelCatalog) supports(pid string) bool {
+	if c.modelMode(pid) == ModelModeAllowlist {
+		return false
+	}
 	env := c.pickEnv(pid)
 	if env == nil {
 		return false
@@ -395,10 +457,13 @@ func (c *modelCatalog) supports(pid string) bool {
 }
 
 func (c *modelCatalog) source(pid string) (string, int64) {
+	if c.modelMode(pid) == ModelModeAllowlist {
+		return "static", 0
+	}
 	c.mu.RLock()
 	live, ok := c.live[pid]
 	c.mu.RUnlock()
-	if ok && len(live.Models) > 0 {
+	if ok && (len(live.Models) > 0 || len(live.Entries) > 0) {
 		return "live", live.Fetched
 	}
 	return "static", 0
@@ -408,6 +473,9 @@ func (c *modelCatalog) refresh(ctx context.Context, pid string) (int, error) {
 	p, ok := provider.Get(pid)
 	if !ok {
 		return 0, errors.New("渠道未注册: " + pid)
+	}
+	if c.modelMode(pid) == ModelModeAllowlist {
+		return 0, errors.New("渠道处于 allowlist 模式：不访问上游模型目录")
 	}
 	lister, ok := p.(provider.ModelLister)
 	if !ok {
@@ -512,7 +580,7 @@ func (c *modelCatalog) refresh(ctx context.Context, pid string) (int, error) {
 }
 
 func (c *modelCatalog) maybeRefresh(pid string) {
-	if !c.auto.Load() {
+	if !c.auto.Load() || c.modelMode(pid) == ModelModeAllowlist {
 		return
 	}
 	c.mu.RLock()
@@ -575,7 +643,7 @@ func (g *Gateway) handleRefreshProviderModels(w http.ResponseWriter, r *http.Req
 	n, err := g.catalog.refresh(ctx, id)
 	if err != nil {
 		status := http.StatusBadGateway
-		for _, hint := range []string{"不支持", "没有可用", "正在刷新"} {
+		for _, hint := range []string{"不支持", "没有可用", "正在刷新", "allowlist"} {
 			if strings.Contains(err.Error(), hint) {
 				status = http.StatusBadRequest
 				break
@@ -590,6 +658,66 @@ func (g *Gateway) handleRefreshProviderModels(w http.ResponseWriter, r *http.Req
 		"models":      n,
 		"source":      source,
 		"fetched":     fetched,
+	})
+}
+
+// handleRefreshAllProviderModels POST /api/providers/models/refresh-all
+// 一次刷新所有支持上游目录的渠道；allowlist 与无账号渠道自动跳过。
+func (g *Gateway) handleRefreshAllProviderModels(w http.ResponseWriter, r *http.Request) {
+	if g.catalog == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "模型目录未初始化"})
+		return
+	}
+	type refreshResult struct {
+		Provider string `json:"provider"`
+		Models   int    `json:"models,omitempty"`
+		Error    string `json:"error,omitempty"`
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+
+	var (
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		results []refreshResult
+	)
+	sem := make(chan struct{}, 4)
+	for _, p := range provider.All() {
+		pid := p.Manifest().ID
+		if !g.catalog.supports(pid) {
+			continue
+		}
+		wg.Add(1)
+		go func(pid string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			n, err := g.catalog.refresh(ctx, pid)
+			mu.Lock()
+			defer mu.Unlock()
+			row := refreshResult{Provider: pid}
+			if err != nil {
+				row.Error = err.Error()
+			} else {
+				row.Models = n
+			}
+			results = append(results, row)
+		}(pid)
+	}
+	wg.Wait()
+	sort.Slice(results, func(i, j int) bool { return results[i].Provider < results[j].Provider })
+	ok, failed := 0, 0
+	for _, row := range results {
+		if row.Error != "" {
+			failed++
+		} else {
+			ok++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"refreshed": ok,
+		"failed":    failed,
+		"results":   results,
 	})
 }
 
@@ -832,6 +960,10 @@ func (c *modelCatalog) infoFor(pid, modelID string) modelCatalogInfo {
 
 // aliasesFor 返回模型的归一化别名（canonical_model_id 与显示名），
 // 供路由层把 "DeepSeek-V4.1-Flash" 这类写法映射到各渠道的实际模型。
+//
+// 版本守卫：V4 Flash 与 V4.1 Flash 是两个模型，models.dev 里个别渠道会把
+// 旧 ID 标成 V4.1 的 legacy alias；如果直接把 canonical/显示名当路由别名，
+// 两个模型会被串成一条链，回退时静默换模型。这里只接受版本标签不冲突的别名。
 func (c *modelCatalog) aliasesFor(pid, modelID string) []string {
 	keys := make([]string, 0, 3)
 	seen := map[string]bool{}
@@ -844,16 +976,39 @@ func (c *modelCatalog) aliasesFor(pid, modelID string) []string {
 		keys = append(keys, k)
 	}
 	if e, ok := c.lookupMeta(modelID); ok {
-		add(e.Canonical)
-		add(e.Name)
+		if sameModelVersion(e.Name, modelID) {
+			add(e.Name)
+		}
+		// canonical 必须同时与 ID、显示名不冲突，否则宁可不用。
+		if sameModelVersion(e.Canonical, modelID) && sameModelVersion(e.Canonical, e.Name) {
+			add(e.Canonical)
+		}
 	}
 	c.mu.RLock()
 	live, ok := c.liveInfo[liveKey(pid, modelID)]
 	c.mu.RUnlock()
-	if ok {
+	if ok && sameModelVersion(live.Name, modelID) {
 		add(live.Name)
 	}
 	return keys
+}
+
+// modelVersionRe 抓取模型名里的 vX / vX.Y 版本标签。
+// 没有 v 前缀的数字（gpt-5.2、glm-5.2）不参与版本守卫，避免误伤。
+var modelVersionRe = regexp.MustCompile(`(?i)\bv(\d+(?:\.\d+)*)\b`)
+
+func modelVersionTag(s string) string {
+	if m := modelVersionRe.FindStringSubmatch(s); len(m) > 1 {
+		return m[1]
+	}
+	return ""
+}
+
+// sameModelVersion 报告两个名字的版本标签是否兼容；任一方没有版本标签时
+// 视为兼容（例如 "DeepSeek-Flash" 可以归到 "DeepSeek V4.1 Flash"）。
+func sameModelVersion(a, b string) bool {
+	va, vb := modelVersionTag(a), modelVersionTag(b)
+	return va == "" || vb == "" || va == vb
 }
 
 // splitProviderModel 拆出已注册渠道前缀；裸模型名返回空 pid。

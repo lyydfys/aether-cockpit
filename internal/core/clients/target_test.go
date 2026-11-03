@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -99,9 +100,13 @@ func TestApplyToleratesBOM(t *testing.T) {
 		t.Fatalf("带 BOM 的 settings.json 应能改写：%v", err)
 	}
 	raw, _ := os.ReadFile(path)
+	// 解析时剥 BOM；但写完要把 BOM 还回去，否则用户用记事本再打开是乱码。
+	if !bytes.HasPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) {
+		t.Error("原文件有 BOM，写回时应该保留")
+	}
 	var root map[string]any
-	if err := json.Unmarshal(raw, &root); err != nil {
-		t.Fatalf("写入结果不是合法 JSON（BOM 没清掉？）: %v\n%s", err, raw)
+	if err := json.Unmarshal(bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF}), &root); err != nil {
+		t.Fatalf("写入结果不是合法 JSON: %v\n%s", err, raw)
 	}
 	env, _ := root["env"].(map[string]any)
 	if env["KEEP"] != "me" {
@@ -109,6 +114,55 @@ func TestApplyToleratesBOM(t *testing.T) {
 	}
 	if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:7860" {
 		t.Errorf("base_url = %v", env["ANTHROPIC_BASE_URL"])
+	}
+}
+
+// 无 BOM 的文件不能被凭空加上 BOM：那会让 Node 的 JSON.parse / 多数 TOML 库报错。
+func TestApplyDoesNotAddBOM(t *testing.T) {
+	m := NewWithHome(t.TempDir())
+	path := filepath.Join(m.home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"env":{"KEEP":"me"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Apply("claude_code", ApplyParams{BaseURL: "http://127.0.0.1:7860", APIKey: "k"}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	raw, _ := os.ReadFile(path)
+	if bytes.HasPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) {
+		t.Error("原文件没有 BOM，不该凭空加一个")
+	}
+}
+
+// 带注释的 JSONC 不再被拒绝：保注释写盘路径只替换顶层成员。
+func TestApplyPreservesJSONCComments(t *testing.T) {
+	m := NewWithHome(t.TempDir())
+	path := filepath.Join(m.home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := "// 我的说明\n{\n  // 保留我自己的键\n  \"env\": {\"KEEP\": \"me\"},\n  \"customTool\": {\"a\": 1}\n}\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Apply("claude_code", ApplyParams{BaseURL: "http://127.0.0.1:7860", APIKey: "k"}); err != nil {
+		t.Fatalf("带注释的 JSONC 应能改写：%v", err)
+	}
+	raw, _ := os.ReadFile(path)
+	out := string(raw)
+	if !strings.Contains(out, "// 我的说明") {
+		t.Errorf("顶层注释被丢了：\n%s", out)
+	}
+	if !strings.Contains(out, "customTool") {
+		t.Errorf("用户自定义的顶层键被丢了：\n%s", out)
+	}
+	if !strings.Contains(out, "http://127.0.0.1:7860") {
+		t.Errorf("没有写入 base_url：\n%s", out)
+	}
+	if !strings.Contains(out, `"KEEP"`) {
+		t.Errorf("env 里的用户键被丢了：\n%s", out)
 	}
 }
 

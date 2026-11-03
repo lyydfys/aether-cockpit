@@ -195,4 +195,3 @@ func writeFileAtomicQoder(path string, data []byte) error {
 	}
 	return os.Rename(name, path)
 }
-

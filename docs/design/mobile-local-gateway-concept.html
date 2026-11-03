@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>Aether Cockpit Mobile · Local Gateway Concept</title>
+  <link rel="icon" type="image/png" href="../../build/appicon.png">
+  <style>
+    :root {
+      --blue:#1a73e8; --blue-deep:#174f9a; --blue-soft:#e8f0fe;
+      --green:#16834a; --green-soft:#e8f5ec; --amber:#a36505; --amber-soft:#fff4df;
+      --red:#b3261e; --red-soft:#fcebea; --ink:#17181b; --body:#3c4045; --muted:#656b73;
+      --line:#e0e3e8; --line-soft:#eceef2; --surface:#f7f8fa; --white:#fff;
+      --font:Inter,"Noto Sans SC","Microsoft YaHei UI",system-ui,sans-serif;
+    }
+    *{box-sizing:border-box}
+    html{background:#edf0f4;color:var(--ink);font-family:var(--font)}
+    body{margin:0;min-width:320px;min-height:100vh}
+    button,input{font:inherit;color:inherit}
+    button{cursor:pointer}
+    button:focus-visible,input:focus-visible{outline:3px solid rgba(26,115,232,.42);outline-offset:2px}
+    .page{max-width:1320px;min-height:100vh;margin:0 auto;padding:26px 32px 40px}
+    .masthead{display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:20px;border-bottom:1px solid #dce0e6}
+    .brand{display:flex;align-items:center;gap:11px;min-width:0}.brand img{width:36px;height:36px;flex:none}
+    .brand-name{font-size:16px;font-weight:650}.brand-sub{margin-top:2px;color:var(--muted);font-size:12px}
+    .mast-tag{color:var(--muted);font-size:13px;white-space:nowrap}
+    .layout{display:grid;grid-template-columns:minmax(470px,1fr) 320px;gap:62px;align-items:start;padding-top:30px}
+    .preview{min-width:0;display:flex;flex-direction:column;align-items:center}
+    .preview-head{width:min(100%,540px);display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:16px}
+    .preview-head h1{margin:0;font-size:22px;line-height:1.3;font-weight:650}.preview-head p{margin:5px 0 0;color:var(--muted);font-size:13px}
+    .demo-label{flex:none;color:var(--blue-deep);background:var(--blue-soft);border-radius:7px;padding:5px 8px;font-size:11px;font-weight:600}
+    .controls{width:min(100%,540px);display:flex;align-items:center;gap:8px;margin-bottom:16px}
+    .seg{display:flex;gap:3px;padding:3px;background:#e3e7ed;border-radius:9px}
+    .seg button{height:29px;padding:0 10px;border:0;border-radius:7px;color:#59616b;background:transparent;font-size:11px;white-space:nowrap}
+    .seg button[aria-pressed="true"]{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(20,30,45,.1);font-weight:600}
+    .controls .hint{margin-left:auto;color:var(--muted);font-size:10px;text-align:right}
+    .device{width:390px;height:844px;max-height:calc(100vh - 230px);min-height:700px;padding:10px;border:1px solid #b9bec6;border-radius:42px;background:#1c2026;box-shadow:0 22px 58px rgba(34,42,55,.17),0 3px 8px rgba(20,28,40,.1)}
+    .screen{position:relative;width:100%;height:100%;overflow:hidden;border-radius:33px;background:#fff;display:flex;flex-direction:column}
+    .statusbar{height:36px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 21px 0 23px;font-size:12px;font-weight:650;color:#30343a}
+    .system-icons{display:flex;align-items:center;gap:5px}.system-icons svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6}
+    .appbar{height:52px;flex:none;padding:0 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line-soft)}
+    .app-brand{display:flex;align-items:center;gap:9px;min-width:0}.app-brand img{width:28px;height:28px;flex:none}
+    .app-brand b{display:block;font-size:13px;font-weight:620}.app-brand small{display:flex;align-items:center;gap:5px;margin-top:2px;color:var(--muted);font-size:10px}
+    .dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;flex:none}.dot.off{background:#8b929c}.dot.warn{background:#d39a2f}
+    .icon-button{width:36px;height:36px;display:grid;place-items:center;flex:none;padding:0;border:0;border-radius:9px;background:transparent;color:#4f5660}
+    .icon-button:active{background:var(--surface)}.icon-button svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+    .screen-body{flex:1;min-height:0;overflow:auto;padding:16px 18px 20px;scrollbar-width:none}.screen-body::-webkit-scrollbar{display:none}
+    .screen-view[hidden]{display:none!important}
+    .title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}
+    .title{margin:0;font-size:23px;line-height:1.25;font-weight:650}.subline{margin:4px 0 0;color:var(--muted);font-size:11px}
+    .running{display:flex;align-items:center;gap:6px;color:var(--green);font-size:11px;font-weight:620;white-space:nowrap}
+    .running.off{color:var(--muted)}.running .dot{width:7px;height:7px}
+    .gateway-panel{padding:13px;margin:3px 0 16px;border:1px solid #cfdbed;border-radius:12px;background:#f6f9fe}
+    .gateway-head{display:flex;align-items:start;justify-content:space-between;gap:10px}
+    .gateway-head b{display:block;font-size:13px;font-weight:630}.gateway-head small{display:block;margin-top:4px;color:var(--muted);font-size:10px}
+    .power{width:44px;height:44px;display:grid;place-items:center;flex:none;border:0;border-radius:10px;background:var(--blue);color:#fff}
+    .power.stopped{background:#e9ebef;color:#555d68}.power svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+    .gateway-addr{margin-top:12px;padding:9px 10px;border-radius:8px;background:#fff;border:1px solid var(--line-soft)}
+    .gateway-addr label{display:block;color:var(--muted);font-size:9px}.gateway-addr strong{display:block;margin-top:4px;font-family:ui-monospace,Consolas,monospace;font-size:11px;font-weight:600;overflow-wrap:anywhere}
+    .addr-row{display:flex;align-items:center;justify-content:space-between;gap:6px}.addr-row .icon-button{width:40px;height:40px}
+    .local-note{display:flex;align-items:start;gap:7px;margin-top:10px;color:#47617f;font-size:10px;line-height:1.45}
+    .local-note svg{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7}
+    .stats{display:grid;grid-template-columns:1fr 1fr;margin-bottom:17px;border-top:1px solid var(--line);border-left:1px solid var(--line);border-radius:9px;overflow:hidden}
+    .stat{min-height:67px;padding:9px 10px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+    .stat span{color:var(--muted);font-size:10px}.stat b{display:block;margin-top:4px;font-size:19px;font-weight:650;font-variant-numeric:tabular-nums}.stat small{display:block;margin-top:2px;color:var(--muted);font-size:9px}
+    .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:17px 0 7px}.section-head h2{margin:0;font-size:14px;font-weight:640}
+    .action-text{border:0;padding:5px 0;color:var(--blue-deep);background:transparent;font-size:11px;font-weight:600}
+    .channel-row{display:grid;grid-template-columns:29px minmax(0,1fr) auto;gap:9px;align-items:center;min-height:58px;padding:8px 0;border-bottom:1px solid var(--line-soft)}
+    .provider-icon{width:27px;height:27px;display:grid;place-items:center;border:1px solid #e4e7eb;border-radius:8px;background:#fff}.provider-icon img{width:17px;height:17px;object-fit:contain}
+    .channel-info{min-width:0}.channel-info b{display:block;font-size:12px;font-weight:600}.channel-info small{display:block;margin-top:3px;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .quota{font-size:11px;font-weight:650;text-align:right;font-variant-numeric:tabular-nums}.quota small{display:block;margin-top:3px;color:var(--muted);font-size:9px;font-weight:450}
+    .meter{grid-column:2/4;height:4px;margin-top:-3px;border-radius:3px;background:#e9ebef;overflow:hidden}.meter i{height:100%;display:block;border-radius:inherit;background:var(--green)}.meter i.low{background:#d39a2f}
+    .mini-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}
+    .primary,.secondary{min-height:40px;border-radius:9px;font-size:11px;font-weight:600}
+    .primary{border:1px solid var(--blue);background:var(--blue);color:#fff}.secondary{border:1px solid var(--line);background:#fff;color:var(--body)}
+    .banner{padding:10px 11px;margin:12px 0;border-left:3px solid var(--amber);border-radius:0 8px 8px 0;background:var(--amber-soft);color:#725012;font-size:10px;line-height:1.5}
+    .search{height:36px;display:flex;align-items:center;gap:8px;padding:0 10px;margin:10px 0;border:1px solid var(--line);border-radius:9px;color:#7a818b}
+    .search svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.6}.search input{min-width:0;width:100%;border:0;outline:none;background:transparent;font:inherit;font-size:12px}
+    .filters{display:flex;gap:6px;overflow:auto;scrollbar-width:none;margin:5px 0 8px}.filters::-webkit-scrollbar{display:none}
+    .filter{min-height:30px;flex:none;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:#5e646d;font-size:10px}
+    .filter.on{color:var(--blue-deep);border-color:#b8d0f6;background:var(--blue-soft)}
+    .periods{display:grid;grid-template-columns:repeat(3,1fr);padding:3px;background:#eff1f4;border-radius:9px}.periods button{height:29px;border:0;border-radius:7px;color:#60666e;background:transparent;font-size:11px}.periods button.on{color:#1c2738;background:#fff;box-shadow:0 1px 2px rgba(20,30,45,.1);font-weight:600}
+    .usage-total{margin-top:17px}.usage-total small{color:var(--muted);font-size:11px}.usage-total strong{display:block;margin-top:3px;font-size:27px;font-weight:650;font-variant-numeric:tabular-nums}.usage-total span{display:block;margin-top:4px;color:var(--muted);font-size:10px}
+    .chart{width:100%;height:138px;margin:10px 0 4px}.chart text{fill:#777e87;font:9px var(--font)}.chart .grid{stroke:#e7e9ed;stroke-width:1}.chart .line{fill:none;stroke:var(--blue);stroke-width:2.2;stroke-linecap:round}.chart .area{fill:url(#fill)}
+    .legend{display:flex;justify-content:space-between;color:var(--muted);font-size:10px}.legend i{display:inline-block;width:7px;height:7px;margin-right:5px;border-radius:50%;background:var(--blue)}
+    .log-row{display:grid;grid-template-columns:7px minmax(0,1fr) auto;gap:9px;align-items:start;padding:12px 0;border-bottom:1px solid var(--line-soft)}
+    .log-dot{width:7px;height:7px;margin-top:5px;border-radius:50%;background:var(--green)}.log-dot.fail{background:var(--red)}
+    .log-main{min-width:0}.log-main b{display:block;overflow:hidden;font-size:11px;line-height:1.4;font-weight:610;text-overflow:ellipsis;white-space:nowrap}.log-main small{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.4}
+    .log-tail{text-align:right;white-space:nowrap;color:var(--muted);font-size:10px}.log-tail b{display:block;margin-bottom:4px;font-size:10px}.ok{color:var(--green)}.bad{color:var(--red)}
+    .settings-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:58px;padding:9px 0;border-bottom:1px solid var(--line-soft)}
+    .settings-row b{display:block;font-size:11px;font-weight:600}.settings-row small{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.4}
+    .route-list{margin:4px 0 14px}.route-row{width:100%;min-height:58px;display:flex;align-items:center;gap:11px;padding:9px 0;border:0;border-bottom:1px solid var(--line-soft);background:transparent;text-align:left}.route-row[hidden]{display:none}.route-row:active{background:var(--surface)}.route-row .route-icon{width:32px;height:32px;display:grid;place-items:center;flex:none;border:1px solid var(--line);border-radius:8px;color:#4d6075;background:#fff;font-size:14px}.route-row .route-copy{min-width:0;flex:1}.route-row b{display:block;font-size:12px;font-weight:600}.route-row small{display:block;margin-top:3px;color:var(--muted);font-size:10px;line-height:1.4}.route-row .route-arrow{color:#89909a;font-size:17px}.menu-group{margin-top:17px}.menu-group h2{margin:0;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px;font-weight:650}.feature-state{flex:none;color:var(--muted);font-size:10px;text-align:right}.feature-state.on{color:var(--green)}.feature-state.off{color:var(--amber)}
+    .toggle{width:48px;height:44px;position:relative;flex:none;border:0;border-radius:22px;background:transparent}.toggle::before{content:"";position:absolute;top:13px;left:4px;width:38px;height:18px;border-radius:10px;background:#c8cdd4;transition:background .16s}.toggle[aria-checked="true"]::before{background:#abc7f4}.toggle::after{content:"";position:absolute;top:11px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:transform .16s}.toggle[aria-checked="true"]::after{transform:translateX(17px);background:var(--blue)}.toggle:disabled{cursor:not-allowed;opacity:.48}
+    .nav{min-height:64px;flex:none;display:grid;grid-template-columns:repeat(5,1fr);padding:5px 8px calc(5px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);background:#fff}
+    .nav button{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px;min-height:48px;border:0;border-radius:9px;color:#737a84;background:transparent;font-size:9px}.nav button[aria-current="page"]{color:var(--blue-deep);font-weight:620}.nav svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+    .notice{padding:10px 11px;margin-top:12px;border-left:3px solid #5b91d7;border-radius:0 8px 8px 0;background:#f3f7fc;color:#43566e;font-size:10px;line-height:1.5}
+    .sheet-backdrop{position:absolute;inset:0;z-index:5;display:none;align-items:end;background:rgba(17,23,32,.32)}.sheet-backdrop.open{display:flex}
+    .sheet{width:100%;max-height:78%;overflow:auto;padding:10px 18px calc(18px + env(safe-area-inset-bottom,0px));border-radius:19px 19px 0 0;background:#fff;box-shadow:0 -5px 24px rgba(20,30,45,.14)}.grip{width:34px;height:4px;margin:0 auto 13px;border-radius:3px;background:#c9cdd3}.sheet-head{display:flex;justify-content:space-between;gap:10px}.sheet-head h3{margin:0;font-size:16px}.sheet-copy{font-size:11px;line-height:1.6;color:var(--body)}
+    .switch-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line-soft);font-size:11px}
+    .caption{width:min(100%,540px);margin-top:12px;color:#6a717b;font-size:11px;line-height:1.5}
+    .notes{padding-top:5px}.notes h2{margin:0 0 7px;font-size:18px;font-weight:650}.intro{margin:0 0 24px;color:var(--muted);font-size:13px;line-height:1.65}
+    .note{padding:16px 0;border-top:1px solid #dce0e6}.note h3{margin:0 0 9px;font-size:13px;font-weight:650}.note p,.note li{margin:0;color:#535a64;font-size:12px;line-height:1.65}.note ul{padding-left:17px;margin:0}
+    .callout{padding:12px;margin-top:12px;border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:0 9px 9px 0;background:#fff}.callout b{font-size:12px}.callout p{margin-top:5px;color:var(--muted);font-size:11px;line-height:1.55}
+    @media(max-width:860px){.page{padding:18px}.layout{grid-template-columns:1fr;gap:30px}.notes{width:min(100%,540px);margin:0 auto}.device{max-height:none}}
+    @media(max-width:440px){html,body{height:100%;min-height:100%;overflow:hidden}.page{height:100dvh;min-height:0;padding:0;display:flex;flex-direction:column}.masthead,.preview-head,.caption,.notes{display:none}.layout{flex:1;min-height:0;display:flex;padding:0}.preview{width:100%;height:100%;min-height:0;align-items:stretch;gap:0}.controls{width:100%;min-height:52px;flex:none;justify-content:space-between;padding:0 14px;margin:0;background:#fff;border-bottom:1px solid var(--line)}.controls .hint{width:auto;margin-left:8px;text-align:right;font-size:10px}.device{width:100%;height:calc(100dvh - 52px);max-height:none;min-height:0;flex:none;padding:0;border:0;border-radius:0;background:#fff;box-shadow:none}.screen{border-radius:0}.statusbar{padding-top:env(safe-area-inset-top,0px);height:calc(36px + env(safe-area-inset-top,0px))}.nav{padding-bottom:calc(5px + env(safe-area-inset-bottom,0px))}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="masthead"><div class="brand"><img src="../../build/appicon.png" alt=""><div><div class="brand-name">Aether Cockpit</div><div class="brand-sub">Local Mobile Gateway · 独立本地网关概念</div></div></div><div class="mast-tag">不依赖电脑 · 数据留在手机</div></header>
+    <div class="layout">
+      <section class="preview" aria-label="手机独立网关预览">
+        <div class="preview-head"><div><h1>手机就是网关主机</h1><p>本机启动 · 本地渠道 · 本机日志</p></div><span class="demo-label">设计原型</span></div>
+        <div class="controls"><div class="seg" role="group" aria-label="平台行为"><button type="button" data-platform="android" aria-pressed="true">Android</button><button type="button" data-platform="ios" aria-pressed="false">iOS</button></div><span class="hint" id="platformHint">前台服务运行 · 通知常驻</span></div>
+        <div class="device"><div class="screen">
+          <div class="statusbar"><span>9:41</span><span class="system-icons" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M3 7.5a10 10 0 0 1 14 0M5.5 10a6.3 6.3 0 0 1 9 0M8.2 12.7a2.6 2.6 0 0 1 3.6 0"/><circle cx="10" cy="15.3" r=".7" fill="currentColor" stroke="none"/></svg><svg viewBox="0 0 20 20"><path d="M2.5 7.5h15M4.5 5h11M6.5 2.5h7M5.5 10h9v6.5h-9z"/></svg><svg viewBox="0 0 20 20"><rect x="2.5" y="5.5" width="14" height="9" rx="2"/><path d="M18 8v4M5 8h8" stroke-width="2.5"/></svg></span></div>
+          <div class="appbar"><div class="app-brand"><img src="../../build/appicon.png" alt=""><span><b>Aether Cockpit</b><small><i class="dot" id="appDot"></i><span id="appStatus">本机网关运行中</span></small></span></div><button class="icon-button" type="button" data-go="settings" aria-label="网关设置"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M15.1 4.9l-1.4 1.4M6.3 13.7l-1.4-1.4"/></svg></button></div>
+          <div class="screen-body" id="screenBody">
+            <section class="screen-view" data-view="overview">
+              <div class="title-row"><div><h1 class="title">概览</h1><p class="subline">此手机独立运行 · 无需电脑或云端</p></div><span class="running" id="runningLabel"><i class="dot" id="runningDot"></i><span id="runningText">运行中</span></span></div>
+              <div class="gateway-panel"><div class="gateway-head"><div><b id="gatewayStateTitle">网关正在运行</b><small id="gatewayStateSubtitle">本机应用可通过回环地址接入</small></div><button class="power" id="powerButton" type="button" aria-label="停止本机网关"><svg viewBox="0 0 20 20"><path d="M10 2.5v7M5.1 5.7a7 7 0 1 0 9.8 0"/></svg></button></div>
+                <div class="gateway-addr"><label>OpenAI-compatible · 仅本机</label><div class="addr-row"><strong>http://127.0.0.1:7860/v1</strong><button class="icon-button" type="button" data-action="copy-endpoint" aria-label="复制本机 API 地址"><svg viewBox="0 0 20 20"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7"/></svg></button></div></div>
+                <div class="local-note"><svg viewBox="0 0 20 20"><path d="M10 2.5 16 5v4.6c0 3.5-2.4 6.2-6 7.6-3.6-1.4-6-4.1-6-7.6V5z"/><path d="m7.5 9.8 1.7 1.7 3.4-3.4"/></svg><span>只接受此手机上的本地连接。局域网共享默认关闭。</span></div>
+              </div>
+              <div class="stats"><div class="stat"><span>今日请求</span><b>128</b><small>成功率 98.4%</small></div><div class="stat"><span>已启用账号</span><b>8 <small style="display:inline;font-size:10px">/ 10</small></b><small>2 个需要关注</small></div><div class="stat"><span>今日 Token</span><b>2.4M</b><small>缓存命中 63%</small></div><div class="stat"><span>今日成本</span><b>$18.42</b><small>本机估算</small></div></div>
+              <div class="section-head"><h2>入口协议</h2><button class="action-text" type="button" data-go="gateway">配置</button></div>
+              <div class="switch-row"><span>OpenAI Chat / Responses</span><b>7860</b></div><div class="switch-row"><span>Anthropic Messages</span><b>7860</b></div><div class="switch-row"><span>Gemini API</span><b>7860</b></div>
+              <div class="section-head"><h2>本地渠道余量</h2><button class="action-text" type="button" data-go="channels">查看全部</button></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/qoder.svg" alt=""></span><span class="channel-info"><b>Qoder CN</b><small>本机账号 · 5 小时窗口</small></span><span class="quota">12%<small>2h 14m 重置</small></span><span class="meter"><i class="low" style="width:12%"></i></span></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/workbuddy.svg" alt=""></span><span class="channel-info"><b>WorkBuddy CN</b><small>本机账号 · 今日额度</small></span><span class="quota">68%<small>明日重置</small></span><span class="meter"><i style="width:68%"></i></span></div>
+              <div class="mini-actions"><button class="secondary" type="button" data-action="refresh">刷新额度</button><button class="secondary" type="button" data-go="logs">查看本机日志</button></div>
+              <div class="notice" id="runtimeNotice">此原型使用演示数据。正式版网关、账号凭据与日志留在手机；模型请求会直接发送到你配置的上游服务商，不经过桌面主机或项目云端。</div>
+            </section>
+
+            <section class="screen-view" data-view="channels" hidden>
+              <div class="title-row"><div><h1 class="title">渠道</h1><p class="subline">账号与凭据存储在此手机</p></div><button class="icon-button" type="button" data-action="refresh" aria-label="刷新渠道额度"><svg viewBox="0 0 20 20"><path d="M16 9a6 6 0 1 1-1.6-3.8"/><path d="M16 3v4h-4"/></svg></button></div>
+              <div class="search"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input type="search" placeholder="搜索渠道或账号"></div>
+              <div class="filters"><button class="filter on">全部 10</button><button class="filter">可用 8</button><button class="filter">需关注 2</button></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/qoder.svg" alt=""></span><span class="channel-info"><b>Qoder CN</b><small>主力账号 · 额度 12%</small></span><span class="quota" style="color:var(--amber)">关注<small>2h 14m 后重置</small></span></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/workbuddy.svg" alt=""></span><span class="channel-info"><b>WorkBuddy CN</b><small>2 个账号 · 余量 68%</small></span><span class="quota" style="color:var(--green)">可用<small>最近刷新 12:41</small></span></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/claude.svg" alt=""></span><span class="channel-info"><b>Claude 订阅</b><small>Pro · 5 小时额度 74%</small></span><span class="quota" style="color:var(--green)">可用<small>最近刷新 12:38</small></span></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/antigravity.svg" alt=""></span><span class="channel-info"><b>Antigravity</b><small>本机 OAuth · 7 天额度 91%</small></span><span class="quota" style="color:var(--green)">可用<small>最近刷新 12:31</small></span></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/opencode.svg" alt=""></span><span class="channel-info"><b>OpenCode Go</b><small>本机订阅 · 周额度 53%</small></span><span class="quota" style="color:var(--green)">可用<small>最近刷新 12:24</small></span></div>
+              <button class="primary" type="button" style="width:100%;margin-top:15px" data-action="add-channel">添加本机渠道</button>
+              <button class="secondary" type="button" style="width:100%;margin-top:8px" data-go="channel-detail">管理账号、模型、标签与并发</button>
+            </section>
+
+            <section class="screen-view" data-view="usage" hidden>
+              <div class="title-row"><div><h1 class="title">用量</h1><p class="subline">统计数据保存在此手机</p></div></div>
+              <div class="periods" role="group"><button class="on">今日</button><button>7 天</button><button>30 天</button></div>
+              <div class="filters" style="margin-top:12px"><button class="filter on">渠道</button><button class="filter">模型</button><button class="filter">调用方</button><button class="filter">日历</button></div>
+              <div class="usage-total"><small>本机估算成本 · USD</small><strong>$18.42</strong><span>比昨天同期 <b class="ok">↓ 8.6%</b></span></div>
+              <svg class="chart" viewBox="0 0 320 138" role="img" aria-label="本机今日用量趋势"><defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1a73e8" stop-opacity=".17"/><stop offset="1" stop-color="#1a73e8" stop-opacity="0"/></linearGradient></defs><path class="grid" d="M30 20H318M30 53H318M30 86H318M30 119H318"/><text x="0" y="23">$8</text><text x="0" y="56">$6</text><text x="0" y="89">$3</text><text x="0" y="122">$0</text><path class="area" d="M30 106 C51 98 58 99 75 87 S105 72 121 79 S146 53 166 60 S194 39 211 51 S240 65 255 56 S287 74 318 43 L318 119 L30 119Z"/><path class="line" d="M30 106 C51 98 58 99 75 87 S105 72 121 79 S146 53 166 60 S194 39 211 51 S240 65 255 56 S287 74 318 43"/></svg>
+              <div class="legend"><span><i></i>请求费用</span><span>今日 · 本机时区</span></div>
+              <div class="section-head"><h2>渠道分布</h2><button class="action-text">按请求数</button></div>
+              <div class="switch-row"><span>Claude</span><b>$7.26 · 42 次</b></div><div class="switch-row"><span>Qoder CN</span><b>$5.91 · 38 次</b></div><div class="switch-row"><span>WorkBuddy CN</span><b>$3.84 · 29 次</b></div><div class="switch-row"><span>其他渠道</span><b>$1.41 · 19 次</b></div>
+            </section>
+
+            <section class="screen-view" data-view="logs" hidden>
+              <div class="title-row"><div><h1 class="title">本机日志</h1><p class="subline">此设备 · 近 7 天 · 316 条</p></div><button class="icon-button" type="button" data-action="refresh" aria-label="刷新日志"><svg viewBox="0 0 20 20"><path d="M16 9a6 6 0 1 1-1.6-3.8"/><path d="M16 3v4h-4"/></svg></button></div>
+              <div class="search"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input type="search" placeholder="搜索模型、渠道或错误码"></div>
+              <div class="filters"><button class="filter on">全部 316</button><button class="filter">失败 7</button><button class="filter">成功</button></div>
+              <div class="log-row" tabindex="0" role="button" data-detail><i class="log-dot fail"></i><span class="log-main"><b>gpt-5.6 · HTTP 429</b><small>Codex · 额度已用尽 · 已重试 2 次</small></span><span class="log-tail"><b class="bad">失败</b>12:42 · 1.2s</span></div>
+              <div class="log-row" tabindex="0" role="button" data-detail><i class="log-dot"></i><span class="log-main"><b>claude-sonnet-4-6</b><small>Claude · Anthropic Messages · 流式</small></span><span class="log-tail"><b class="ok">成功</b>12:40 · 4.8s</span></div>
+              <div class="log-row" tabindex="0" role="button" data-detail><i class="log-dot"></i><span class="log-main"><b>deepseek-v4.1-flash</b><small>Qoder CN · OpenAI Chat</small></span><span class="log-tail"><b class="ok">成功</b>12:35 · 2.1s</span></div>
+              <div class="log-row" tabindex="0" role="button" data-detail><i class="log-dot"></i><span class="log-main"><b>gemini-3.8-flash</b><small>Antigravity · 工具调用</small></span><span class="log-tail"><b class="ok">成功</b>12:30 · 6.4s</span></div>
+              <div class="notice">请求正文不默认显示；错误信息可能包含上游返回内容。账本与日志保存在本机。</div>
+            </section>
+
+            <section class="screen-view" data-view="settings" hidden>
+              <div class="title-row"><div><h1 class="title">本机设置</h1><p class="subline">网关与数据均由此设备管理</p></div></div>
+              <div class="section-head"><h2>运行方式</h2></div>
+              <div class="settings-row"><span><b id="gatewaySettingTitle">网关运行中</b><small id="gatewayModeDescription">Android 使用前台服务保持运行</small></span><button class="toggle" type="button" role="switch" aria-checked="true" data-setting="gateway" aria-label="本机网关运行"></button></div>
+              <div class="settings-row"><span><b id="startupTitle">开机后启动</b><small id="startupDescription">由系统允许后自动恢复本机服务</small></span><button class="toggle" type="button" role="switch" aria-checked="false" data-setting="startup" aria-label="开机后启动"></button></div>
+              <div class="settings-row"><span><b>局域网访问</b><small>关闭 · 仅 127.0.0.1 可连接</small></span><button class="toggle" type="button" role="switch" aria-checked="false" data-setting="lan" aria-label="局域网访问"></button></div>
+              <div class="notice" id="platformNotice">Android：网关运行时显示系统常驻通知。停止服务后，本机客户端将无法连接。</div>
+              <div class="section-head"><h2>本机数据</h2></div>
+              <div class="settings-row"><span><b>加密账号与凭据</b><small>使用系统安全存储保护密钥</small></span><b>已启用</b></div>
+              <div class="settings-row"><span><b>用量账本</b><small>保存在应用私有目录</small></span><b>近 30 天</b></div>
+              <div class="settings-row"><span><b>运行位置</b><small>不依赖网络配对或桌面主机</small></span><b>本机</b></div>
+              <button class="secondary" style="width:100%;margin-top:16px" type="button" data-action="backup">导出加密备份</button>
+              <button class="secondary" style="width:100%;margin-top:8px;color:var(--red)" type="button" data-action="clear-data">清除此手机上的全部数据</button>
+              <div class="notice">删除数据会移除本机账号、凭据和用量历史；执行前会要求系统生物识别或设备解锁确认。</div>
+              <div class="section-head"><h2>Windows 版设置分组</h2><span class="feature-state">9 个分组</span></div>
+              <div class="route-list">
+                <button class="route-row" type="button" data-setting-section="general"><span class="route-icon">01</span><span class="route-copy"><b>常规</b><small>外观、语言、通知、更新与启动策略</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-setting-section="network"><span class="route-icon">02</span><span class="route-copy"><b>网络与共享</b><small>监听端口、局域网、代理、CORS 与访问控制</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-setting-section="tools"><span class="route-icon">03</span><span class="route-copy"><b>工具服务</b><small>搜索、图像、音频、视频与实时语音</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-setting-section="presets"><span class="route-icon">04</span><span class="route-copy"><b>预设</b><small>客户端、模型与请求参数模板</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-setting-section="pricing"><span class="route-icon">05</span><span class="route-copy"><b>定价</b><small>模型价格、自定义倍率与成本估算</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-setting-section="privacy"><span class="route-icon">06</span><span class="route-copy"><b>隐私</b><small>脱敏规则、请求正文与本机日志留存</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-setting-section="observability"><span class="route-icon">07</span><span class="route-copy"><b>可观测</b><small>OTLP、指标、链路与运行诊断</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-setting-section="backup"><span class="route-icon">08</span><span class="route-copy"><b>同步与备份</b><small>本机加密包；外部同步需主动配置</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-setting-section="about"><span class="route-icon">09</span><span class="route-copy"><b>关于与更新</b><small>版本、更新通道、许可与诊断包</small></span><span class="route-arrow">›</span></button>
+              </div>
+            </section>
+
+            <section class="screen-view" data-view="more" hidden>
+              <div class="title-row"><div><h1 class="title">更多功能</h1><p class="subline">Windows 版完整功能目录 · 本机独立数据</p></div></div>
+              <div class="search"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="featureSearch" type="search" placeholder="搜索功能名称"></div>
+              <div class="mini-actions"><button class="secondary" type="button" data-action="refresh">刷新全部额度</button><button class="secondary" type="button" data-go="gateway">网关与密钥</button></div>
+              <div class="menu-group" data-feature-group><h2>工作</h2><div class="route-list">
+                <button class="route-row" type="button" data-go="onboard" data-feature="接入渠道 登录 新增账号 导入"><span class="route-icon">↗</span><span class="route-copy"><b>接入渠道</b><small>浏览服务商、登录、导入与自定义端点</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="scheduler" data-feature="唤醒任务 签到 队列"><span class="route-icon">◷</span><span class="route-copy"><b>唤醒任务</b><small>签到队列、依赖顺序与定时执行</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="launcher" data-feature="应用启动 客户端 隔离实例"><span class="route-icon">▶</span><span class="route-copy"><b>应用启动</b><small>手机客户端直达；Windows 进程操作按平台适配</small></span><span class="route-arrow">›</span></button>
+              </div></div>
+              <div class="menu-group" data-feature-group><h2>资产</h2><div class="route-list">
+                <button class="route-row" type="button" data-go="sessions" data-feature="会话 对话历史 导出"><span class="route-icon">▤</span><span class="route-copy"><b>会话</b><small>本机 Agent 会话、检索与导出</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="library" data-feature="库 指令 技能 MCP 子代理 Hooks"><span class="route-icon">▧</span><span class="route-copy"><b>库</b><small>指令、技能、MCP、子代理与 Hooks</small></span><span class="route-arrow">›</span></button>
+              </div></div>
+              <div class="menu-group" data-feature-group><h2>网关与诊断</h2><div class="route-list">
+                <button class="route-row" type="button" data-go="gateway" data-feature="网关 探针 key API metrics 版本"><span class="route-icon">⌘</span><span class="route-copy"><b>网关与探针</b><small>协议入口、调用方密钥、健康检查与指标</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="agents" data-feature="Agent 接入 CLI 版本"><span class="route-icon">A</span><span class="route-copy"><b>Agent 接入</b><small>本机客户端连接状态与配置片段</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="hud" data-feature="额度悬浮 小组件 通知"><span class="route-icon">◉</span><span class="route-copy"><b>额度快捷查看</b><small>Android 通知 / 小组件；iOS 桌面小组件</small></span><span class="route-arrow">›</span></button>
+              </div></div>
+              <div class="menu-group" data-feature-group><h2>安全与高级</h2><div class="route-list">
+                <button class="route-row" type="button" data-go="twofa" data-feature="2FA 验证码 TOTP"><span class="route-icon">◈</span><span class="route-copy"><b>2FA 管理</b><small>本机 TOTP 密钥与验证码</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="routing" data-feature="路由 模型 分流 失败转移"><span class="route-icon">⇄</span><span class="route-copy"><b>路由</b><small>模型映射、渠道顺序、权重与失败回退</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="masking" data-feature="脱敏 隐私 正则"><span class="route-icon">⛨</span><span class="route-copy"><b>脱敏</b><small>匹配规则、预览与请求前处理</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="plugins" data-feature="插件 扩展"><span class="route-icon">⊞</span><span class="route-copy"><b>插件</b><small>本机扩展、权限与启停</small></span><span class="route-arrow">›</span></button>
+                <button class="route-row" type="button" data-go="settings" data-feature="设置 常规 网络 工具服务 预设 定价 隐私 OTLP 备份 更新"><span class="route-icon">⚙</span><span class="route-copy"><b>设置</b><small>9 组完整设置，包括同步与备份</small></span><span class="route-arrow">›</span></button>
+              </div></div>
+              <div class="notice" id="featureNoResults" hidden>没有匹配的功能</div>
+              <div class="notice">纯本机模式只管理这台手机的数据。Windows 托盘、WSL 和 Windows 客户端进程不会自动同步；需要管理 PC 时属于另一种远程连接模式。</div>
+            </section>
+
+            <section class="screen-view" data-view="setting-detail" hidden>
+              <div class="title-row"><button class="icon-button" type="button" data-go="settings" aria-label="返回设置"><svg viewBox="0 0 20 20"><path d="m12 4-6 6 6 6M6 10h11"/></svg></button><div style="flex:1"><h1 class="title" id="settingDetailTitle">常规</h1><p class="subline" id="settingDetailSubtitle">设备外观与应用行为</p></div></div>
+              <div id="settingDetailContent"></div>
+              <div class="notice">高级设置与 Windows 版字段对齐；不支持的系统功能会显示平台说明，不会静默忽略。</div>
+            </section>
+
+            <section class="screen-view" data-view="onboard" hidden>
+              <div class="title-row"><div><h1 class="title">接入渠道</h1><p class="subline">选择服务商，再按支持方式授权</p></div></div>
+              <div class="search"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input type="search" placeholder="搜索渠道或协议"></div>
+              <div class="filters"><button class="filter on">推荐</button><button class="filter">订阅登录</button><button class="filter">API Key</button><button class="filter">自定义</button></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/openai.svg" alt=""></span><span class="channel-info"><b>OpenAI / Codex</b><small>浏览器授权 · Token JSON · 手动 Key</small></span><button class="action-text" type="button" data-action="add-channel">接入</button></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/claude.svg" alt=""></span><span class="channel-info"><b>Claude</b><small>OAuth 登录 · API Key</small></span><button class="action-text" type="button" data-action="add-channel">接入</button></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/deepseek.svg" alt=""></span><span class="channel-info"><b>DeepSeek</b><small>API Key · 兼容端点</small></span><button class="action-text" type="button" data-action="add-channel">接入</button></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/qoder.svg" alt=""></span><span class="channel-info"><b>Qoder CN</b><small>设备登录 · 本机导入</small></span><button class="action-text" type="button" data-action="add-channel">接入</button></div>
+              <div class="channel-row"><span class="provider-icon"><img src="../../internal/web/ui2/assets/icons/workbuddy.svg" alt=""></span><span class="channel-info"><b>WorkBuddy</b><small>设备登录 · 本机导入</small></span><button class="action-text" type="button" data-action="add-channel">接入</button></div>
+              <button class="secondary" type="button" style="width:100%;margin-top:12px" data-action="add-channel">添加自定义 OpenAI 兼容渠道</button>
+              <button class="secondary" type="button" style="width:100%;margin-top:8px" data-action="add-channel">从本机文件导入账号</button>
+              <div class="notice">登录凭据写入手机系统安全存储。此独立网关不会扫描 Windows 或其它设备上的登录态。</div>
+            </section>
+
+            <section class="screen-view" data-view="scheduler" hidden>
+              <div class="title-row"><div><h1 class="title">唤醒任务</h1><p class="subline">签到队列、周期计划与执行结果</p></div></div>
+              <div class="gateway-panel"><div class="gateway-head"><div><b>渠道签到</b><small>按依赖顺序执行 · 2–6 秒间隔</small></div><button class="primary" type="button" data-action="run-tasks">全部运行</button></div><div class="settings-row"><span><b>自动刷新额度</b><small>每 30 分钟 · 仅本机启用账号</small></span><button class="toggle" type="button" role="switch" aria-checked="true" aria-label="自动刷新额度"></button></div></div>
+              <div class="section-head"><h2>队列任务</h2><button class="action-text" type="button" data-action="run-tasks">运行全部</button></div>
+              <div class="switch-row"><span>Qoder CN · 每日签到</span><b class="ok">成功 · 08:02</b></div><div class="switch-row"><span>WorkBuddy · 额度刷新</span><b>等待 · 2 分钟</b></div><div class="switch-row"><span>OpenCode Go · 每周检查</span><b>明日 · 09:00</b></div>
+              <div class="section-head"><h2>执行规则</h2></div><div class="settings-row"><span><b>失败后重试</b><small>最多 3 次 · 指数退避</small></span><span class="feature-state on">开启</span></div><button class="secondary" type="button" style="width:100%;margin-top:12px" data-action="backup">编辑计划</button>
+            </section>
+
+            <section class="screen-view" data-view="launcher" hidden>
+              <div class="title-row"><div><h1 class="title">应用启动</h1><p class="subline">接入此手机上已安装的兼容客户端</p></div></div>
+              <div class="notice">Windows 版可发现和启动桌面客户端、管理隔离实例；独立手机版改为打开手机应用与系统分享，不会控制 PC 进程。</div>
+              <div class="section-head"><h2>手机客户端</h2></div>
+              <div class="settings-row"><span><b>Claude</b><small>已安装 · 可打开自定义 API 配置</small></span><button class="secondary" type="button" data-action="open-app">打开</button></div>
+              <div class="settings-row"><span><b>Chatbox</b><small>未检测到 · 可使用兼容 API 地址</small></span><button class="action-text" type="button" data-action="open-app">查看</button></div>
+              <div class="section-head"><h2>本机入口配置</h2></div><div class="settings-row"><span><b>复制 API 地址与密钥</b><small>供支持自定义端点的移动客户端使用</small></span><button class="action-text" type="button" data-action="copy-endpoint">复制</button></div>
+            </section>
+
+            <section class="screen-view" data-view="sessions" hidden>
+              <div class="title-row"><div><h1 class="title">会话</h1><p class="subline">仅显示此手机上的 Agent 会话</p></div><button class="icon-button" type="button" data-action="refresh" aria-label="刷新会话">↻</button></div>
+              <div class="search"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input type="search" placeholder="搜索标题、模型或项目"></div>
+              <div class="filters"><button class="filter on">全部 24</button><button class="filter">今天</button><button class="filter">有用量</button></div>
+              <div class="log-row"><i class="log-dot"></i><span class="log-main"><b>重构 API 路由</b><small>Codex CLI · 12 分钟 · 18,420 tokens</small></span><span class="log-tail">14:32</span></div>
+              <div class="log-row"><i class="log-dot"></i><span class="log-main"><b>分析渠道额度</b><small>Claude Code · 8 分钟 · 9,310 tokens</small></span><span class="log-tail">13:51</span></div>
+              <div class="log-row"><i class="log-dot"></i><span class="log-main"><b>完善请求日志</b><small>OpenCode · 23 分钟 · 21,045 tokens</small></span><span class="log-tail">昨天</span></div>
+              <button class="secondary" type="button" style="width:100%;margin-top:14px" data-action="backup">导出 CSV / Markdown</button>
+            </section>
+
+            <section class="screen-view" data-view="library" hidden>
+              <div class="title-row"><div><h1 class="title">资源库</h1><p class="subline">指令、技能、MCP、子代理与 Hooks</p></div><button class="primary" type="button" data-action="add-channel">新增</button></div>
+              <div class="filters"><button class="filter on">指令</button><button class="filter">技能</button><button class="filter">MCP</button><button class="filter">子代理</button><button class="filter">Hooks</button></div>
+              <div class="settings-row"><span><b>代码审查规范</b><small>共享指令 · 适配 Codex / Claude</small></span><button class="action-text" type="button" data-action="backup">管理</button></div>
+              <div class="settings-row"><span><b>frontend-design</b><small>技能 · 已安装于 3 个本机 Agent</small></span><button class="action-text" type="button" data-action="backup">应用</button></div>
+              <div class="settings-row"><span><b>GitHub MCP</b><small>服务器 · 需要凭据</small></span><button class="action-text" type="button" data-action="backup">配置</button></div>
+              <div class="notice">资源写入手机上兼容的 Agent 目录；Windows 资源不会自动同步到此独立设备。</div>
+            </section>
+
+            <section class="screen-view" data-view="channel-detail" hidden>
+              <div class="title-row"><button class="icon-button" type="button" data-go="channels" aria-label="返回渠道"><svg viewBox="0 0 20 20"><path d="m12 4-6 6 6 6M6 10h11"/></svg></button><div style="flex:1"><h1 class="title">Qoder CN</h1><p class="subline">账号、额度与模型策略</p></div><span class="feature-state on">运行中</span></div>
+              <div class="gateway-panel"><div class="gateway-head"><div><b>主力账号</b><small>最后检查 12:41 · 本机加密存储</small></div><button class="toggle" type="button" role="switch" aria-checked="true" aria-label="启用 Qoder 账号"></button></div><div class="usage-total"><small>5 小时额度</small><strong>12%</strong><span>重置倒计时 · 2h 14m</span></div></div>
+              <div class="mini-actions"><button class="secondary" type="button" data-action="refresh">刷新额度</button><button class="secondary" type="button" data-action="backup">轮换凭据</button></div>
+              <div class="section-head"><h2>模型与路由</h2><button class="action-text" type="button" data-go="routing">规则</button></div><div class="settings-row"><span><b>deepseek-v4.1-flash</b><small>对外模型名 · deepseek-chat</small></span><span class="feature-state on">已启用</span></div><div class="settings-row"><span><b>并发上限</b><small>每账号最大活动请求数</small></span><b>4</b></div><div class="settings-row"><span><b>价格倍率</b><small>用于本机成本估算</small></span><b>1.00×</b></div>
+              <div class="section-head"><h2>高级配置</h2></div><div class="settings-row"><span><b>标签与备注</b><small>生产 · 高优先级</small></span><button class="action-text" type="button" data-action="backup">编辑</button></div><div class="settings-row"><span><b>代理与自定义 Headers</b><small>继承全局设置</small></span><button class="action-text" type="button" data-action="backup">配置</button></div><button class="secondary" type="button" style="width:100%;margin-top:14px;color:var(--red)" data-action="clear-data">移除此账号</button>
+            </section>
+
+            <section class="screen-view" data-view="gateway" hidden>
+              <div class="title-row"><div><h1 class="title">网关与探针</h1><p class="subline">一个本机地址 · 多协议兼容</p></div><span class="feature-state on">就绪</span></div>
+              <div class="gateway-panel"><div class="gateway-head"><div><b>仅本机监听</b><small>LAN 访问默认关闭 · 127.0.0.1</small></div><button class="action-text" type="button" data-go="settings">网络设置</button></div><div class="gateway-addr"><label>Base URL</label><div class="addr-row"><strong>http://127.0.0.1:7860/v1</strong><button class="icon-button" type="button" data-action="copy-endpoint" aria-label="复制网关地址">⧉</button></div></div></div>
+              <div class="section-head"><h2>接入协议</h2><span class="feature-state">4 种</span></div><div class="filters"><button class="filter on">OpenAI Chat</button><button class="filter">Responses</button><button class="filter">Anthropic</button><button class="filter">Gemini</button></div><button class="secondary" type="button" style="width:100%" data-action="backup">复制客户端接入片段</button>
+              <div class="section-head"><h2>调用方密钥</h2><button class="action-text" type="button" data-action="backup">新建密钥</button></div><div class="settings-row"><span><b>mobile-client</b><small>RPM 60 · 模型限制 3 · **** 8a3f</small></span><button class="action-text" type="button" data-action="backup">管理</button></div><div class="settings-row"><span><b>本机回环</b><small>127.0.0.1 请求不需要调用方密钥</small></span><span class="feature-state on">可信</span></div>
+              <div class="section-head"><h2>诊断与探针</h2><button class="action-text" type="button" data-action="refresh">全部探测</button></div><div class="settings-row"><span><b>健康 / 就绪</b><small>/healthz · /readyz</small></span><span class="feature-state on">正常</span></div><div class="settings-row"><span><b>Prometheus 指标</b><small>/metrics · 当前进程</small></span><button class="action-text" type="button" data-action="backup">查看</button></div><div class="settings-row"><span><b>版本与 Agent CLI</b><small>版本信息、已安装状态与命令</small></span><button class="action-text" type="button" data-go="agents">打开</button></div>
+            </section>
+
+            <section class="screen-view" data-view="twofa" hidden>
+              <div class="title-row"><div><h1 class="title">2FA 管理</h1><p class="subline">验证码在此设备本地生成</p></div><button class="primary" type="button" data-action="add-channel">添加密钥</button></div>
+              <div class="notice">TOTP 种子属于高敏感凭据；使用系统安全存储，隐藏锁屏预览。删除前要求设备解锁确认。</div>
+              <div class="settings-row"><span><b>GitHub</b><small>添加于 10 月 28 日 · 自动复制关闭</small></span><span style="text-align:right"><b style="font:650 20px ui-monospace,monospace">482 193</b><small>23 秒后更新</small></span></div>
+              <div class="settings-row"><span><b>OpenAI</b><small>添加于 10 月 16 日</small></span><span style="text-align:right"><b style="font:650 20px ui-monospace,monospace">715 604</b><small>23 秒后更新</small></span></div>
+              <button class="secondary" type="button" style="width:100%;margin-top:14px" data-action="backup">导出加密恢复包</button>
+            </section>
+
+            <section class="screen-view" data-view="agents" hidden>
+              <div class="title-row"><div><h1 class="title">Agent 接入</h1><p class="subline">连接支持自定义 Base URL 的本机客户端</p></div><button class="icon-button" type="button" data-action="refresh" aria-label="重新检测">↻</button></div>
+              <div class="settings-row"><span><b>OpenAI-compatible</b><small>Base URL · http://127.0.0.1:7860/v1</small></span><button class="action-text" type="button" data-action="copy-endpoint">复制</button></div>
+              <div class="settings-row"><span><b>Anthropic-compatible</b><small>同一端口 · Messages API</small></span><button class="action-text" type="button" data-action="backup">片段</button></div>
+              <div class="section-head"><h2>手机端客户端</h2></div><div class="settings-row"><span><b>Claude</b><small>已发现配置入口</small></span><span class="feature-state on">已连接</span></div><div class="settings-row"><span><b>通用 API 客户端</b><small>使用调用方密钥 · 60 RPM</small></span><button class="action-text" type="button" data-action="backup">配置</button></div>
+              <div class="notice">Windows CLI 的安装检测、版本管理与配置文件写入仅在 Windows 主机上运行；此处只展示手机侧 API 接入。</div>
+            </section>
+
+            <section class="screen-view" data-view="routing" hidden>
+              <div class="title-row"><div><h1 class="title">路由</h1><p class="subline">模型别名、渠道顺序与失败回退</p></div><button class="primary" type="button" data-action="add-channel">新增规则</button></div>
+              <div class="section-head"><h2>模型映射</h2></div><div class="settings-row"><span><b>gpt-4o-mini</b><small>Qoder CN → WorkBuddy → OpenAI</small></span><button class="action-text" type="button" data-action="backup">编辑</button></div><div class="settings-row"><span><b>claude-sonnet</b><small>Claude 订阅 → Anthropic API</small></span><button class="action-text" type="button" data-action="backup">编辑</button></div>
+              <div class="section-head"><h2>调度策略</h2></div><div class="filters"><button class="filter on">优先级</button><button class="filter">加权轮询</button><button class="filter">最低成本</button></div><div class="settings-row"><span><b>失败自动切换</b><small>429 / 5xx · 最多 2 次</small></span><button class="toggle" type="button" role="switch" aria-checked="true" aria-label="失败自动切换"></button></div><div class="settings-row"><span><b>冷却与并发队列</b><small>按账号额度与 RPM 限制</small></span><button class="action-text" type="button" data-action="backup">配置</button></div>
+            </section>
+
+            <section class="screen-view" data-view="masking" hidden>
+              <div class="title-row"><div><h1 class="title">隐私脱敏</h1><p class="subline">请求发送到上游前处理匹配内容</p></div><button class="primary" type="button" data-action="add-channel">新增规则</button></div>
+              <div class="settings-row"><span><b>全局脱敏</b><small>应用于所有渠道与协议</small></span><button class="toggle" type="button" role="switch" aria-checked="true" aria-label="全局脱敏"></button></div>
+              <div class="settings-row"><span><b>邮箱地址</b><small>正则规则 · 替换为 [EMAIL]</small></span><button class="toggle" type="button" role="switch" aria-checked="true" aria-label="邮箱地址脱敏"></button></div>
+              <div class="settings-row"><span><b>API 密钥</b><small>常见 Key 前缀 · 替换为 [SECRET]</small></span><button class="toggle" type="button" role="switch" aria-checked="true" aria-label="API 密钥脱敏"></button></div>
+              <div class="gateway-addr"><label>规则预览</label><strong style="font:11px ui-monospace,monospace">alice@example.com → [EMAIL]</strong></div><div class="notice">脱敏规则保存在手机，并在请求转发前执行；原始请求正文不默认写入日志。</div>
+            </section>
+
+            <section class="screen-view" data-view="plugins" hidden>
+              <div class="title-row"><div><h1 class="title">插件</h1><p class="subline">本机扩展与权限管理</p></div><button class="action-text" type="button" data-action="refresh">检查更新</button></div>
+              <div class="settings-row"><span><b>OpenAI 兼容转换</b><small>内置 · 处理 Chat / Responses</small></span><span class="feature-state on">启用</span></div>
+              <div class="settings-row"><span><b>用量账本</b><small>内置 · 保存请求元数据与成本</small></span><span class="feature-state on">启用</span></div>
+              <div class="settings-row"><span><b>渠道扩展</b><small>5 个 · 权限：网络与凭据</small></span><button class="action-text" type="button" data-action="backup">查看</button></div>
+              <button class="secondary" type="button" style="width:100%;margin-top:14px" data-action="backup">从文件安装扩展</button><div class="notice">插件只在手机本地安装。未知来源扩展安装前显示权限清单。</div>
+            </section>
+
+            <section class="screen-view" data-view="hud" hidden>
+              <div class="title-row"><div><h1 class="title">额度快捷查看</h1><p class="subline">按系统能力显示可用渠道额度</p></div></div>
+              <div class="gateway-panel"><div class="gateway-head"><div><b id="quotaWidgetTitle">Android 常驻通知</b><small id="quotaWidgetSubtitle">运行中显示网关状态与低额度提醒</small></div><button class="toggle" type="button" role="switch" aria-checked="true" aria-label="额度快捷提醒"></button></div></div>
+              <div class="settings-row"><span><b>低额度提醒</b><small>低于 15% 时通知</small></span><button class="toggle" type="button" role="switch" aria-checked="true" aria-label="低额度提醒"></button></div>
+              <div class="settings-row"><span><b>桌面小组件</b><small>展示 Qoder、WorkBuddy 与 Claude 余量</small></span><button class="action-text" type="button" data-action="backup">预览</button></div>
+              <div class="notice" id="hudNotice">Windows 额度悬浮窗由手机系统通知与小组件替代；iOS 小组件刷新频率由系统决定。</div>
+            </section>
+
+          </div>
+          <nav class="nav" aria-label="主导航">
+            <button type="button" data-tab="overview" aria-current="page"><svg viewBox="0 0 20 20"><path d="M3 10 10 3l7 7M5 8.5V17h10V8.5M8 17v-5h4v5"/></svg><span>概览</span></button>
+            <button type="button" data-tab="channels" aria-current="false"><svg viewBox="0 0 20 20"><circle cx="7" cy="10" r="3"/><path d="M10 10h7M14 10v3M16.5 10v2"/></svg><span>渠道</span></button>
+            <button type="button" data-tab="usage" aria-current="false"><svg viewBox="0 0 20 20"><path d="M3 16V9M8 16V4M13 16v-5M18 16V7"/></svg><span>用量</span></button>
+            <button type="button" data-tab="logs" aria-current="false"><svg viewBox="0 0 20 20"><path d="M4 5h12M4 10h12M4 15h8"/></svg><span>请求</span></button>
+            <button type="button" data-tab="more" aria-current="false"><svg viewBox="0 0 20 20"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg><span>更多</span></button>
+          </nav>
+          <div class="sheet-backdrop" id="detailSheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"><div class="sheet"><div class="grip"></div><div class="sheet-head"><div><h3 id="sheetTitle">请求失败 · HTTP 429</h3><p class="subline">Codex · gpt-5.6 · 12:42</p></div><button class="icon-button" type="button" data-action="close-sheet" aria-label="关闭详情"><svg viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div><p class="sheet-copy">上游额度已用尽。本机网关尝试了 2 个候选账号后仍未成功。</p><div class="switch-row"><span>总耗时 · 首字节</span><b>1.2s · 420ms</b></div><div class="switch-row"><span>请求 Token</span><b>1,248</b></div><div class="notice">原始错误详情留在本机账本；默认折叠，避免敏感上游内容在锁屏或分享预览中泄露。</div></div></div>
+        </div></div>
+        <p class="caption">底部导航进入概览、渠道、用量、请求与更多；“更多”提供 Windows 版全部工作区及设置分组。</p>
+      </section>
+
+      <aside class="notes" aria-label="本地网关产品设计说明">
+        <h2>独立本地网关</h2><p class="intro">手机本身运行 Aether Cockpit，不依赖电脑、配对工作站或项目云端。网关、账号凭据、用量账本与日志保存在手机；调用模型时，手机仍需联网访问你配置的上游服务商。</p>
+        <section class="note"><h3>01 · 本机闭环</h3><ul><li>网关、账号凭据、用量账本都保存在手机</li><li>本机应用通过 127.0.0.1 连接 API</li><li>不需要桌面配对、云账户或常驻服务器</li></ul></section>
+        <section class="note"><h3>02 · 全功能入口</h3><p>移动端覆盖 Windows 版 17 个工作区：概览、渠道接入、账号额度、用量、任务、应用、会话、资源库、请求、网关探针、2FA、设置、Agent、路由、脱敏、插件与额度快捷查看。首页保持轻量，其余入口可在“更多”中搜索。</p></section>
+        <div class="callout"><b>平台生命周期差异</b><p>Android 可用前台服务和常驻通知维持网关。iOS 应明确显示“仅在应用前台运行”，切入后台或系统挂起后，依赖本地 API 的其他应用可能暂时不可用。</p></div>
+        <section class="note"><h3>03 · 纯本地默认值</h3><p>默认监听回环地址、不打开局域网端口。局域网共享要单独授权，并明确提示网络边界；不能默认把无 TLS 的 HTTP 暴露给同网段设备。</p></section>
+        <section class="note"><h3>04 · 九组设置</h3><p>常规、网络与共享、工具服务、预设、定价、隐私、可观测、同步与备份、关于与更新，均保留独立入口；密集配置使用单独详情页。</p></section>
+        <section class="note"><h3>05 · 平台等价能力</h3><p>Windows 托盘与悬浮窗映射为手机通知 / 小组件；Windows 客户端启动映射为打开已安装的手机客户端。WSL、Windows CLI 扫描、PC 进程与隔离目录属于主机能力，不能在独立手机上原样执行。</p></section>
+        <section class="note"><h3>06 · 数据边界</h3><p>独立手机网关和 Windows 网关各有自己的账号、会话与账本，不自动跨设备同步。若要操作 PC 上同一份数据，需另行设计授权远程连接，这不属于纯本地独立模式。</p></section>
+        <section class="note"><h3>07 · 工程路径</h3><p>复用 Go 网关与 Provider 核心，Android 连接前台服务，iOS 只承诺前台运行；移动端重做文件选择器、系统安全存储、通知与客户端跳转。</p></section>
+      </aside>
+    </div>
+  </main>
+  <script>
+    const views=[...document.querySelectorAll('[data-view]')],tabs=[...document.querySelectorAll('[data-tab]')],screens=[...document.querySelectorAll('[data-platform]')],sheet=document.getElementById('detailSheet');
+    const tabForView={overview:'overview',channels:'channels','channel-detail':'channels',usage:'usage',logs:'logs',more:'more',onboard:'more',scheduler:'more',launcher:'more',sessions:'more',library:'more',gateway:'more',twofa:'more',agents:'more',routing:'more',masking:'more',plugins:'more',hud:'more',settings:'more','setting-detail':'more'};
+    function show(name){views.forEach(v=>v.hidden=v.dataset.view!==name);const active=tabForView[name]||'more';tabs.forEach(b=>{if(b.dataset.tab===active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});document.getElementById('screenBody').scrollTop=0}
+    document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>show(b.dataset.tab)));
+    document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>show(b.dataset.go)));
+    const settingsSections={
+      general:{title:'常规',subtitle:'外观、语言、通知与运行策略',rows:[['外观','浅色 / 深色 / 跟随系统','value','跟随系统'],['界面语言','简体中文 / English','value','简体中文'],['额度与任务通知','由系统通知渠道管理','toggle',true],['开机后启动','iOS 不支持；Android 受系统电池策略影响','toggle',false],['检查更新','稳定版 · 自动提示更新','action','检查更新']]},
+      network:{title:'网络与共享',subtitle:'本机回环优先，跨设备访问需显式开放',rows:[['API 监听地址','仅此手机可连接','value','127.0.0.1:7860'],['局域网共享','开启后须设置调用方密钥与访问控制','toggle',false],['HTTP / SOCKS 代理','上游请求使用的本机代理','action','配置代理'],['CORS 来源','默认拒绝未配置的浏览器来源','action','编辑来源'],['IP 访问白名单','LAN 模式下生效','action','管理白名单']]},
+      tools:{title:'工具服务',subtitle:'搜索、图像、音频、视频与实时语音',rows:[['Web Search','Tavily · 5 条结果 · 2 个 Key','action','测试 / 配置'],['图像生成','OpenAI compatible · gpt-image-1','action','配置'],['音频转写与语音','Whisper / TTS','action','配置'],['视频生成','xAI compatible','action','配置'],['Realtime 语音','WebSocket · API Key 已加密','toggle',false]]},
+      presets:{title:'预设',subtitle:'将客户端、模型与请求参数保存为可复用配置',rows:[['Codex CLI · 默认','Responses API · 工作主路由','action','编辑'],['Claude Code · 低成本','Anthropic Messages','action','编辑'],['请求预设','System Prompt、温度与额外 Body','action','管理预设'],['导入 / 导出','在此手机的本地配置间迁移','action','导出']]},
+      pricing:{title:'定价',subtitle:'使用服务商价格或自定义倍率估算成本',rows:[['价格来源','内置价格表 · 更新于 10/30','action','检查价格'],['自定义价格','按模型设置输入与输出单价','action','编辑价格'],['账号倍率','用于订阅与折扣额度估算','action','管理倍率'],['显示货币','USD · 可切换 CNY','value','USD']]},
+      privacy:{title:'隐私',subtitle:'控制日志字段、正文留存与脱敏',rows:[['请求前脱敏','邮箱、API Key 与自定义规则','toggle',true],['保存请求正文','默认关闭，仅保留元数据','toggle',false],['日志保留期','超期自动清理本机记录','value','30 天'],['脱敏导出','账号 JSON 不包含密钥','action','导出账号'],['安全存储','系统 Keychain / Keystore','value','已启用']]},
+      observability:{title:'可观测',subtitle:'本地诊断与可选 OTLP 导出',rows:[['OpenTelemetry','向你配置的 Collector 发送','toggle',false],['OTLP Endpoint','留空时不产生网络传输','action','配置端点'],['Prometheus','本机 /metrics','action','查看指标'],['诊断包','日志脱敏后导出到文件','action','生成诊断包']]},
+      backup:{title:'同步与备份',subtitle:'本机加密备份默认开启；远端同步由你配置',rows:[['凭据加密包','使用口令加密后保存到文件','action','创建备份'],['JSON 配置导出','默认脱敏 API Key 与 Token','action','导出配置'],['从备份恢复','导入后先预览覆盖范围','action','选择文件'],['WebDAV / S3 / GitHub','端到端加密；默认关闭','toggle',false],['立即同步','仅在配置并显式启用后可用','action','配置目标']]},
+      about:{title:'关于与更新',subtitle:'版本信息、更新通道与许可',rows:[['当前版本','移动独立网关设计目标','value','概念版'],['更新通道','稳定版 / 预览版','value','稳定版'],['检查更新','显示版本说明与校验信息','action','立即检查'],['开源许可','依赖组件与许可证清单','action','查看清单'],['诊断信息','导出本机运行环境摘要','action','生成报告']]}
+    };
+    function renderSettingsSection(key){const data=settingsSections[key];if(!data)return;document.getElementById('settingDetailTitle').textContent=data.title;document.getElementById('settingDetailSubtitle').textContent=data.subtitle;const host=document.getElementById('settingDetailContent');host.replaceChildren();for(const [title,detail,type,value] of data.rows){const copy=document.createElement('span'),label=document.createElement('b'),sub=document.createElement('small');label.textContent=title;sub.textContent=detail;copy.append(label,sub);let control;if(type==='toggle'){control=document.createElement('button');control.className='toggle';control.type='button';control.setAttribute('role','switch');control.setAttribute('aria-label',title);control.setAttribute('aria-checked',String(value));control.addEventListener('click',()=>{const on=control.getAttribute('aria-checked')==='true';control.setAttribute('aria-checked',String(!on));message(title+(on?' 已关闭':' 已开启')+'；此原型仅展示界面状态。')})}else if(type==='action'){control=document.createElement('button');control.className='action-text';control.type='button';control.textContent=value;control.addEventListener('click',()=>message(value+'：正式版会在本机执行此设置。'))}else{control=document.createElement('span');control.className='feature-state';control.textContent=value}const row=document.createElement('div');row.className='settings-row';row.append(copy,control);host.append(row)}}
+    document.querySelectorAll('[data-setting-section]').forEach(b=>b.addEventListener('click',()=>{renderSettingsSection(b.dataset.settingSection);show('setting-detail')}));
+    document.querySelectorAll('[data-detail]').forEach(row=>{row.addEventListener('click',()=>sheet.classList.add('open'));row.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();sheet.classList.add('open')}})});
+    const closeSheet=()=>sheet.classList.remove('open');document.querySelectorAll('[data-action="close-sheet"]').forEach(b=>b.addEventListener('click',closeSheet));sheet.addEventListener('click',e=>{if(e.target===sheet)closeSheet()});document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet()});
+    const platformHint=document.getElementById('platformHint'),platformNotice=document.getElementById('platformNotice');
+    screens.forEach(b=>b.addEventListener('click',()=>{screens.forEach(x=>x.setAttribute('aria-pressed',String(x===b)));const ios=b.dataset.platform==='ios',startup=document.querySelector('[data-setting="startup"]');platformHint.textContent=ios?'应用前台运行 · 后台可能暂停':'前台服务运行 · 通知常驻';platformNotice.textContent=ios?'iOS：网关服务依赖应用处于前台。切到后台后，iOS 可能挂起服务；回到应用后自动恢复。':'Android：网关运行时显示系统常驻通知。停止服务后，本机客户端将无法连接。';document.getElementById('gatewayModeDescription').textContent=ios?'iOS 仅在应用前台运行；切到后台可能暂停':'Android 使用前台服务保持运行';document.getElementById('startupTitle').textContent='开机后启动';document.getElementById('startupDescription').textContent=ios?'iOS 不支持应用开机自启；回到应用后手动恢复':'由系统允许后自动恢复本机服务';startup.disabled=ios;startup.setAttribute('aria-label','开机后启动');document.getElementById('quotaWidgetTitle').textContent=ios?'iOS 桌面小组件':'Android 常驻通知';document.getElementById('quotaWidgetSubtitle').textContent=ios?'由系统按需刷新额度摘要':'运行中显示网关状态与低额度提醒';document.getElementById('hudNotice').textContent=ios?'iOS 小组件由系统定期刷新；需要实时网关状态时请保持应用在前台。':'Android 通知可显示网关运行状态与低额度提醒；桌面小组件用于快速查看。'}));
+    const status=document.createElement('div');status.className='notice';status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.hidden=true;document.querySelector('.screen-body').append(status);
+    function message(text){status.textContent=text;status.hidden=false}
+    document.querySelectorAll('[data-action="copy-endpoint"]').forEach(b=>b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText('http://127.0.0.1:7860/v1');message('已复制本机 API 地址。仅此手机上的应用可以连接。')}catch{message('本机 API 地址：http://127.0.0.1:7860/v1')}}));
+    document.querySelectorAll('[data-action="refresh"]').forEach(b=>b.addEventListener('click',()=>message('正式版会在本机向所选上游刷新额度；此原型未发起网络请求。')));
+    document.querySelectorAll('[data-action="add-channel"]').forEach(b=>b.addEventListener('click',()=>message('添加账号向导将在本机安全存储凭据；此原型未连接登录服务。')));
+    document.querySelectorAll('[data-action="backup"]').forEach(b=>b.addEventListener('click',()=>message('正式版会生成口令加密的本机备份。')));
+    document.querySelectorAll('[data-action="clear-data"]').forEach(b=>b.addEventListener('click',()=>message('正式版会先要求系统生物识别或解锁确认，然后停止网关并清理本地数据。')));
+    document.querySelectorAll('[data-action="run-tasks"]').forEach(b=>b.addEventListener('click',()=>message('任务已加入本机队列；正式版会显示逐渠道执行与重试结果。')));
+    document.querySelectorAll('[data-action="open-app"]').forEach(b=>b.addEventListener('click',()=>message('正式版会尝试打开此手机中已安装的兼容客户端。')));
+    document.getElementById('featureSearch').addEventListener('input',e=>{const q=e.target.value.trim().toLowerCase();let visible=0;document.querySelectorAll('[data-feature-group]').forEach(group=>{let count=0;group.querySelectorAll('[data-feature]').forEach(row=>{const match=!q||(row.dataset.feature+' '+row.textContent).toLowerCase().includes(q);row.hidden=!match;if(match)count++});group.hidden=count===0;visible+=count});document.getElementById('featureNoResults').hidden=!q||visible>0});
+    document.querySelectorAll('.toggle').forEach(b=>b.addEventListener('click',()=>{const on=b.getAttribute('aria-checked')==='true';b.setAttribute('aria-checked',String(!on));if(b.dataset.setting==='gateway'){document.getElementById('appStatus').textContent=on?'本机网关已停止':'本机网关运行中';document.getElementById('gatewayStateTitle').textContent=on?'网关已停止':'网关正在运行';document.getElementById('gatewayStateSubtitle').textContent=on?'本机 API 暂不可用':'本机应用可通过回环地址接入';document.getElementById('runningText').textContent=on?'已停止':'运行中';document.getElementById('runningLabel').classList.toggle('off',on);document.getElementById('runningDot').classList.toggle('off',on);document.getElementById('appDot').classList.toggle('off',on);document.getElementById('gatewaySettingTitle').textContent=on?'网关已停止':'网关运行中';document.getElementById('powerButton').classList.toggle('stopped',on);document.getElementById('powerButton').setAttribute('aria-label',on?'启动本机网关':'停止本机网关')}if(b.dataset.setting==='lan'&&!on){message('局域网访问保持关闭；只有本机应用可连接。')}else if(b.dataset.setting==='lan'&&on){message('正式版会先显示本机 IP、访问控制和传输安全说明，再要求确认开放。')}else if(b.dataset.setting==='startup'){message(!on?'正式版会请求系统允许后台自启动。':'已关闭开机启动。')}}));
+    document.getElementById('powerButton').addEventListener('click',()=>document.querySelector('[data-setting="gateway"]').click());
+    document.querySelectorAll('.filter').forEach(b=>b.addEventListener('click',()=>{b.parentElement.querySelectorAll('.filter').forEach(x=>x.classList.toggle('on',x===b))}));
+    document.querySelectorAll('.periods button').forEach(b=>b.addEventListener('click',()=>b.parentElement.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b))));
+  </script>
+</body>
+</html>

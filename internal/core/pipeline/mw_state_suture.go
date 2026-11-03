@@ -59,6 +59,16 @@ func StateSuture(deps Deps) Middleware {
 						merged = append(merged, work.Items...)
 						work.Items = merged
 					}
+				} else {
+					// 引用了网关里不存在（或已过期）的上一轮。
+					//
+					// 不能静默跳过：那样上游只看到本轮的新输入，模型"突然失忆"，
+					// 客户端拿不到任何信号。显式报 previous_response_not_found
+					// （与 OpenAI 同名），Codex 一类客户端收到后会重开连接、
+					// 把整段会话重发，从而自愈。
+					return nil, ir.NewAPIErrorf(ir.ErrCodePreviousResponseNotFound,
+						"previous_response_id %q 在本网关不存在或已过期，请重发完整会话",
+						work.PreviousResponseID).WithProvider(work.ProviderID)
 				}
 			}
 
@@ -145,8 +155,14 @@ func StateSuture(deps Deps) Middleware {
 }
 
 // persistResponse 把本轮完整上下文写入状态存储。
-func persistResponse(deps Deps, req *ir.UnifiedChatRequest, respID, upstreamSession string, acc *ir.Accumulator, enabled bool) {
-	if deps.State == nil || respID == "" || !enabled {
+//
+// store 是客户端的 "store" 字段，它只说"**上游**要不要保留这条 response"，
+// 不是"网关能不能记上下文"。所以两种情况下都要落库，只是外部可见性不同：
+//   - store=true：正常快照，GET /v1/responses/{id} 可以回放；
+//   - store=false：仍然记账（否则上一轮之后的 previous_response_id 必然查不到），
+//     但标记 Internal，不对外提供回放。
+func persistResponse(deps Deps, req *ir.UnifiedChatRequest, respID, upstreamSession string, acc *ir.Accumulator, store bool) {
+	if deps.State == nil || respID == "" {
 		return
 	}
 	res := acc.Result()
@@ -163,6 +179,7 @@ func persistResponse(deps Deps, req *ir.UnifiedChatRequest, respID, upstreamSess
 		UpstreamSessionID: upstreamSession,
 		Model:             req.Model,
 		AccumulatedItems:  items,
+		Internal:          !store,
 	}
 	deps.State.PutResponse(rec)
 }

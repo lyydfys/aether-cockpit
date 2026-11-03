@@ -66,6 +66,14 @@ func (g *Gateway) handleCallerKeysModels(w http.ResponseWriter, r *http.Request)
 			models = append(models, map[string]any{"id": mm.ID, "name": mm.DisplayName, "provider": m.ID})
 		}
 	}
+	// 模型重定向虚拟名也是可授权的模型。
+	for _, name := range g.redirectNames() {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		models = append(models, map[string]any{"id": name, "name": name, "provider": "redirect"})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": models, "accounts": []any{}})
 }
 

@@ -53,6 +53,9 @@ var cnModels = []modelSpec{
 	{name: "qwen-3.7-plus", display: "Qwen3.7-Plus", reasoning: true, vision: true},
 	{name: "DeepSeek-V4-Pro", display: "DeepSeek-V4-Pro", reasoning: true},
 	{name: "DeepSeek-V4-Flash", display: "DeepSeek-V4-Flash", reasoning: true},
+	// 上游同时接受小写的新版本名（实测 200），列出来才能被裸名
+	// deepseek-v4.1-flash 路由到。
+	{name: "deepseek-v4.1-flash", display: "DeepSeek V4.1 Flash", reasoning: true},
 	{name: "glm-5.1", display: "GLM-5.1", reasoning: true},
 	{name: "glm-4.7", display: "GLM-4.7", reasoning: true},
 	{name: "kimi-k2", display: "Kimi-K2-0905"},

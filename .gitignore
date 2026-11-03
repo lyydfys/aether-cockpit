@@ -41,6 +41,8 @@ frontend/.vite/
 .qoder-credits/
 .ref/
 .workbuddy/
+# CLI / 测试跑出来的会话探测结果（{"found":false,...} 之类），属运行产物
+output/
 *.tmp
 
 # 冒烟/审计临时产物：build/probe 里有账号加密副本，绝不能入库

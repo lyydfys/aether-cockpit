@@ -43,7 +43,8 @@ type routingGroupDef struct {
 	Levels   []string
 	Match    []string
 	Weights  map[string]int
-	Rules    []map[string]any
+	// Rules 是组规则（intent / effort / time），见 group_rule.go。
+	Rules    []GroupRule
 	Disabled bool
 	Hidden   bool
 	Unlists  bool
@@ -94,8 +95,9 @@ func groupStrategyFor(routing string) string {
 	return strategy
 }
 
-// routingWarnings 返回页面必须展示的“配置未生效”提示。
-// 这些字段只存在于旧配置或导入数据里，内核从未读取。
+// routingWarnings 返回页面必须展示的「配置未生效」提示。
+// 只对内核确实没读的字段报警，不能把已经接入的能力（rules）也报成未接入——
+// 那会让用户以为改了没用。
 func routingWarnings(def routingGroupDef) []string {
 	var out []string
 	if _, ok := groupStrategySupport(def.Routing); !ok && def.Routing != "" {
@@ -104,14 +106,24 @@ func routingWarnings(def routingGroupDef) []string {
 	if def.Affinity != "" {
 		out = append(out, fmt.Sprintf("组级亲和 %q 尚未实现，已忽略（渠道级亲和仍生效）", def.Affinity))
 	}
-	if len(def.Levels) > 0 || len(def.Match) > 0 || len(def.Weights) > 0 || len(def.Rules) > 0 ||
+	if len(def.Levels) > 0 || len(def.Match) > 0 || len(def.Weights) > 0 ||
 		len(def.Fast) > 0 || len(def.Off) > 0 {
-		out = append(out, "levels / match / weights / rules / fast / off 尚未接入路由器，已忽略")
+		out = append(out, "levels / match / weights / fast / off 尚未接入路由器，已忽略")
+	}
+	// manual 组用 pick 指定唯一成员；再让规则改顺序会与用户的显式选择冲突
+	// （对齐 aether Group.Live：manual 组的规则只保存、不生效）。
+	if def.Routing == "manual" && len(def.Rules) > 0 {
+		out = append(out, "manual 组的 rules 不生效（pick 优先），已保存但不会改动候选顺序")
 	}
 	for _, m := range def.Members {
+		if _, isGroup := nestedGroupRef(m); isGroup {
+			// 嵌套组的问题由 nestedGroupWarnings 按"组是否存在"判定，
+			// 这里不再一律报"不支持"。
+			continue
+		}
 		if !strings.Contains(m, "/") {
 			if _, ok := provider.Get(m); !ok {
-				out = append(out, fmt.Sprintf("成员 %q 不是渠道模型，嵌套组尚未支持，已忽略", m))
+				out = append(out, fmt.Sprintf("成员 %q 不是渠道模型，已忽略", m))
 			}
 		}
 	}
@@ -150,6 +162,26 @@ func (g *Gateway) groupTombstones() map[string]bool {
 	return out
 }
 
+// groupDefsByID 把当前全部组按 ID 建索引（页面与保存校验共用）。
+func (g *Gateway) groupDefsByID() map[string]routingGroupDef {
+	defs := g.groupDefsForView()
+	out := make(map[string]routingGroupDef, len(defs))
+	for _, def := range defs {
+		out[def.ID] = def
+	}
+	return out
+}
+
+// knownGroupIDs 返回当前可引用的路由组 ID 集合（基线 + 覆盖 + 自动发现）。
+func (g *Gateway) knownGroupIDs() map[string]bool {
+	defs := g.groupDefsForView()
+	out := make(map[string]bool, len(defs))
+	for _, def := range defs {
+		out[def.ID] = true
+	}
+	return out
+}
+
 // rebuildRoutingGroups 按基线 + 覆盖 + 自动发现重建 ModelRouter 里的虚拟组。
 func (g *Gateway) rebuildRoutingGroups() {
 	g.settingsMu.Lock()
@@ -172,6 +204,15 @@ func (g *Gateway) rebuildRoutingGroups() {
 		merged[name] = raw
 	}
 
+	// 嵌套成员只在这里校验存在性：真正的展开在解析时按当前路由表递归进行
+	// （带环检测与最大深度），所以注册顺序无关紧要。
+	known := make(map[string]bool, len(merged))
+	for name := range merged {
+		if !deleted[name] {
+			known[name] = true
+		}
+	}
+
 	g.models.ClearVirtualGroups()
 	for name, raw := range merged {
 		if deleted[name] {
@@ -187,18 +228,31 @@ func (g *Gateway) rebuildRoutingGroups() {
 			strategy = groupStrategyFor(def.Routing)
 		}
 		if def.Routing == "manual" && def.Pick != "" {
-			if pid, _, ok := strings.Cut(def.Pick, "/"); ok {
+			if pid, _, ok := strings.Cut(def.Pick, "/"); ok && pid != "group" {
 				chain = moveProviderFirst(chain, pid)
 			}
 		}
 		valid := make([]string, 0, len(chain))
-		for _, pid := range chain {
-			if _, ok := provider.Get(pid); ok {
-				valid = append(valid, pid)
+		for _, entry := range chain {
+			if gid, isGroup := nestedGroupRef(entry); isGroup {
+				// 自引用在这里就挡掉：链里留着它只会让每次解析都记一条
+				// warning，页面上的 nestedGroupWarnings 仍会提示用户。
+				if known[gid] && gid != name {
+					valid = append(valid, entry)
+				}
+				continue
+			}
+			if _, ok := provider.Get(entry); ok {
+				valid = append(valid, entry)
 			}
 		}
 		if len(valid) > 0 {
 			g.models.SetVirtualGroupWithStrategy(name, valid, strategy)
+			// manual 组不挂规则（对齐 aether Group.Live）：pick 已经是用户
+			// 的显式选择，规则再改顺序会两边都不生效。
+			if len(def.Rules) > 0 && def.Routing != "manual" {
+				g.models.SetVirtualGroupRules(name, def.Rules)
+			}
 		}
 	}
 	if found {
@@ -355,8 +409,14 @@ func (g *Gateway) groupDefsForView() []routingGroupDef {
 
 func expandChainMembers(chain []string) []string {
 	var out []string
-	for _, pid := range chain {
-		m, ok := provider.Get(pid)
+	for _, entry := range chain {
+		if _, isGroup := nestedGroupRef(entry); isGroup {
+			// 嵌套组按 group/<id> 原样回显：页面据此展示"组里套组"，
+			// 而不是把它当成一个不存在的渠道吞掉。
+			out = append(out, entry)
+			continue
+		}
+		m, ok := provider.Get(entry)
 		if !ok {
 			continue
 		}
@@ -365,10 +425,34 @@ func expandChainMembers(chain []string) []string {
 			if up == "" {
 				up = mm.ID
 			}
-			out = append(out, pid+"/"+up)
+			out = append(out, entry+"/"+up)
 		}
 	}
 	return out
+}
+
+// groupDefReady 判断组的成员里是否有可用账号；嵌套组递归判断（带环检测）。
+// 只用于页面上的"就绪"标记，因此用 best-effort：环或缺失一律视为不就绪。
+func groupDefReady(def routingGroupDef, byID map[string]routingGroupDef, byModel map[string]routingMember, seen map[string]bool) bool {
+	if seen[def.ID] {
+		return false
+	}
+	seen[def.ID] = true
+	defer delete(seen, def.ID)
+	for _, id := range def.Members {
+		if info, ok := byModel[id]; ok {
+			if !info.ProviderOff {
+				return true
+			}
+			continue
+		}
+		if gid, isGroup := nestedGroupRef(id); isGroup {
+			if inner, ok := byID[gid]; ok && groupDefReady(inner, byID, byModel, seen) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // handleGroups 返回全部路由组与可选模型。
@@ -410,29 +494,52 @@ func (g *Gateway) buildGroups() map[string]any {
 	}
 
 	defs := g.groupDefsForView()
+	// 嵌套成员的展示名与就绪状态都要看内层组，先建索引。
+	defsByID := make(map[string]routingGroupDef, len(defs))
+	for _, def := range defs {
+		defsByID[def.ID] = def
+	}
+	knownIDs := make(map[string]bool, len(defs))
+	for id := range defsByID {
+		knownIDs[id] = true
+	}
+
 	groups := make([]map[string]any, 0, len(defs))
 	for _, def := range defs {
 		members := make([]string, 0, len(def.Members))
 		infos := make([]routingMember, 0, len(def.Members))
-		ready := false
 		for _, id := range def.Members {
 			members = append(members, id)
 			if info, ok := byModel[id]; ok {
 				infos = append(infos, info)
-				if !info.ProviderOff {
-					ready = true
+				continue
+			}
+			// 嵌套组成员不是某个渠道的模型：单独给一行展示信息，否则
+			// 页面上只剩一个裸 ID。可用性由内层组成员递归判断。
+			if gid, isGroup := nestedGroupRef(id); isGroup {
+				name := gid
+				if inner, ok := defsByID[gid]; ok && inner.Name != "" {
+					name = inner.Name
 				}
+				infos = append(infos, routingMember{ID: id, Name: name})
 			}
 		}
+		ready := groupDefReady(def, defsByID, byModel, map[string]bool{})
 		routingForView := def.Routing
 		if _, ok := groupStrategySupport(routingForView); !ok {
 			// 旧配置里的 weight/free 等不再回显，避免页面继续展示未实现选项。
 			routingForView = "order"
 		}
+		warnings := routingWarnings(def)
+		warnings = append(warnings, nestedGroupWarnings(def.Members, def.ID, knownIDs)...)
 		gm := map[string]any{
 			"id": def.ID, "name": def.Name, "members": members, "memberInfo": infos,
 			"routing": routingForView, "routingEffective": groupStrategyFor(def.Routing),
-			"warnings": routingWarnings(def), "ready": ready, "auto": def.Auto,
+			"warnings": warnings, "ready": ready, "auto": def.Auto,
+		}
+		// rules 已接入组规则引擎，回显给页面（旧字段 weights/levels 等仍不回显）。
+		if len(def.Rules) > 0 {
+			gm["rules"] = def.Rules
 		}
 		if def.Pick != "" {
 			gm["pick"] = def.Pick

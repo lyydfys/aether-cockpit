@@ -29,6 +29,11 @@ import (
 // syncWSLEnabled 把"WSL 接入"开关同步给会话扫描器——它也要停止枚举 WSL 根，
 // 否则关掉开关后 /api/sessions 仍在跑 wsl.exe 与 UNC stat。
 func (g *Gateway) syncWSLEnabled() {
+	if !g.platform.WSL {
+		// 移动端没有 WSL；同时让会话扫描器别再尝试枚举 WSL 根。
+		sessions.SetWSLEnabled(false)
+		return
+	}
 	g.settingsMu.Lock()
 	off := g.settings.WSLDisabled
 	g.settingsMu.Unlock()
@@ -38,16 +43,37 @@ func (g *Gateway) syncWSLEnabled() {
 // warmSessions 在 WSL 关闭时后台预热会话列表：首次要读几百个 jsonl 的文件头
 // （实测 ~4 s），热了之后是毫秒级。WSL 开着时不预热——那会顺带枚举 WSL。
 func (g *Gateway) warmSessions() {
+	if !g.platform.LocalSessions {
+		return
+	}
 	g.settingsMu.Lock()
 	off := g.settings.WSLDisabled
 	g.settingsMu.Unlock()
 	if off {
-		go sessions.Scan()
+		g.goBackground(func() {
+			if g.sessionsWarm != nil {
+				g.sessionsWarm()
+				return
+			}
+			sessions.Scan()
+		})
 	}
+}
+
+// warmWSL 预热 WSL 家目录检测（首次 wsl.exe 冷启动很慢）。
+func (g *Gateway) warmWSL() {
+	if g.wslWarm != nil {
+		g.wslWarm()
+		return
+	}
+	wsl.Homes()
 }
 
 // wslTargets 把检测到的 WSL 家目录映射成客户端注入目标。
 func (g *Gateway) wslTargets() []clients.Target {
+	if !g.platform.WSL {
+		return nil
+	}
 	g.settingsMu.Lock()
 	off := g.settings.WSLDisabled
 	g.settingsMu.Unlock()
@@ -171,11 +197,19 @@ func (g *Gateway) servedOnWSL(r *http.Request) bool {
 
 // handleWSL GET /api/wsl —— WSL 发行版检测结果与接入入口。
 func (g *Gateway) handleWSL(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.WSL {
+		writePlatformUnsupported(w, "WSL 接入")
+		return
+	}
 	writeJSON(w, http.StatusOK, g.wslView())
 }
 
 // handleWSLRefresh POST /api/wsl/refresh —— 丢掉检测缓存重扫一次。
 func (g *Gateway) handleWSLRefresh(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.WSL {
+		writePlatformUnsupported(w, "WSL 接入")
+		return
+	}
 	wsl.Invalidate()
 	writeJSON(w, http.StatusOK, g.wslView())
 }

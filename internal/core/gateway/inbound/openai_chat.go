@@ -27,6 +27,8 @@ func ParseChatCompletions(body []byte, requestID string) (*ir.UnifiedChatRequest
 		Stream:             wire.Stream,
 		Temperature:        wire.Temperature,
 		TopP:               wire.TopP,
+		FrequencyPenalty:   wire.FrequencyPenalty,
+		PresencePenalty:    wire.PresencePenalty,
 		ReasoningEffort:    wire.ReasoningEffort,
 		ParallelToolCalls:  wire.ParallelToolCalls,
 		StopSequences:      decodeStringOrArray(wire.Stop),
@@ -139,6 +141,9 @@ type chatRequestWire struct {
 	Stream              bool              `json:"stream"`
 	Temperature         *float64          `json:"temperature"`
 	TopP                *float64          `json:"top_p"`
+	// 重复惩罚：客户端几乎都会带（尤其是 agent），丢了就可能复读。
+	FrequencyPenalty    *float64          `json:"frequency_penalty"`
+	PresencePenalty     *float64          `json:"presence_penalty"`
 	MaxTokens           *int              `json:"max_tokens"`
 	MaxCompletionTokens *int              `json:"max_completion_tokens"`
 	Stop                json.RawMessage   `json:"stop"`

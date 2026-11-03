@@ -68,6 +68,10 @@ func (g *Gateway) handleLauncherInfo(w http.ResponseWriter, r *http.Request) {
 // 先把网关写进桌面端的正常用户配置（自动备份），再打开应用；桌面端
 // 已在运行时配置要重启后才会重新读取。
 func (g *Gateway) handleLauncherDesktopLaunch(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.CLIProcessDiscovery {
+		writePlatformUnsupported(w, "桌面应用进程探测")
+		return
+	}
 	var body struct {
 		App string `json:"app"`
 	}

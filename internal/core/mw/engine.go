@@ -89,6 +89,35 @@ func New(path string) *Engine {
 	return e
 }
 
+// knownKinds 是 Apply 真正会执行的规则类型。
+//
+// 单独列一张表而不是在 switch 里数 default：Enabled 要回答的问题是
+// "直通会不会让某条本来会生效的规则失效"，而未知 Kind 在 Apply 里本来就被跳过，
+// 把它算进来只会白白牺牲直通性能。
+var knownKinds = map[Kind]bool{
+	KindParamOverride: true,
+	KindModelMap:      true,
+	KindWordGuard:     true,
+	KindSystemPrompt:  true,
+}
+
+// Enabled 报告是否至少有一条会生效的规则。
+//
+// 存在的理由是 Fast-Path：直通路径不解析请求体，所有改写规则都没有机会执行。
+// 所以只要有一条启用规则，调用方就必须放弃直通、退回 IR 路径；
+// 这里刻意按"启用 + 已知类型"从严判断，不看规则的字段是否填满 ——
+// 空白规则也可能在运行期被热更新填上内容，少挡一次就是静默丢掉用户配置。
+func (e *Engine) Enabled() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, r := range e.rules {
+		if r.Enabled && knownKinds[r.Kind] {
+			return true
+		}
+	}
+	return false
+}
+
 // Rules 返回规则快照。
 func (e *Engine) Rules() []Rule {
 	e.mu.RLock()

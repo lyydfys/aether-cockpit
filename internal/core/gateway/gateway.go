@@ -45,7 +45,6 @@ import (
 	"aether-cockpit/internal/core/spec"
 	"aether-cockpit/internal/core/state"
 	"aether-cockpit/internal/core/transport"
-	"aether-cockpit/internal/core/wsl"
 	"aether-cockpit/internal/provider"
 )
 
@@ -58,10 +57,18 @@ type Config struct {
 	// DesktopApp 表示当前进程是桌面端：仅桌面端暴露"开机自启"等壳能力。
 	DesktopApp bool `json:"desktop_app,omitempty"`
 	// APIKey 为空表示本地免鉴权（仅监听 127.0.0.1 时的合理默认）。
-	APIKey      string        `json:"api_key"`
-	GlobalProxy string        `json:"global_proxy"`
-	StateTTL    time.Duration `json:"state_ttl"`
-	MaxRecords  int           `json:"max_records"`
+	APIKey      string `json:"api_key"`
+	GlobalProxy string `json:"global_proxy"`
+	// AdminSessionKey 非空时启用移动管理会话：管理面（/api/*、/mcp、
+	// /metrics、/readyz、/version）必须携带 Authorization: Bearer <key>，
+	// 回环来源不再自动放行。只存内存，绝不落盘或写日志。
+	AdminSessionKey string `json:"-"`
+	// RequireCallerKey 为真时，模型协议 /v1* 必须携带独立的 CallerKey。
+	// 移动运行时始终开启；桌面零值保持原有本机免鉴权行为。
+	RequireCallerKey bool          `json:"-"`
+	CallerKey        string        `json:"-"`
+	StateTTL         time.Duration `json:"state_ttl"`
+	MaxRecords       int           `json:"max_records"`
 	// SnapshotPath 会话快照落盘路径（SQLite 不可用时的降级方案）。
 	SnapshotPath string `json:"snapshot_path"`
 	// SQLitePath 会话状态持久化路径。非空时优先于 SnapshotPath。
@@ -70,6 +77,11 @@ type Config struct {
 	MiddlewarePath string `json:"middleware_path"`
 	// AccountStorePath 账号落盘路径。留空则纯内存（重启即丢账号）。
 	AccountStorePath string `json:"account_store_path"`
+	// CredentialKey 非空时账号凭证使用 envelope v2（AES-GCM + AAD）。
+	// 桌面留空保持 simplecrypt 行为；移动端由 Android Keystore 解封后注入。
+	CredentialKey []byte `json:"-"`
+	// LibraryPath prompts / MCP / skills 库的落盘路径。留空用 data/library.json。
+	LibraryPath string `json:"library_path,omitempty"`
 	// CustomClientsPath 自定义客户端定义（默认 data/clients.json）。
 	CustomClientsPath string `json:"custom_clients_path,omitempty"`
 	// ModelsDir 上游实时模型目录缓存（默认 data/models）。
@@ -128,14 +140,24 @@ type Config struct {
 	IntentClassifyModel string `json:"intent_classify_model"`
 	// IntentTimeoutSeconds 分类调用超时。0 用默认 8 秒。
 	IntentTimeoutSeconds int `json:"intent_timeout_seconds"`
+	// LifecycleContext 取消时后台循环退出；nil 等价 context.Background()。
+	LifecycleContext context.Context `json:"-"`
+	// Platform 声明宿主平台能力；nil = 桌面默认（全部开启）。
+	Platform *PlatformCapabilities `json:"-"`
+	// 以下仅测试注入；nil 时使用真实实现。
+	wslWarm        func()
+	sessionsWarm   func()
+	keepAwakeApply func(bool) error
 }
 
 // Gateway 是网关主体。
 type Gateway struct {
-	cfg    Config
-	pool   *pool.Manager
-	store  *state.Store
-	models *ModelRouter
+	cfg  Config
+	pool *pool.Manager
+	// accountStoreErr 记录账号文件加载失败；移动端据此拒绝启动。
+	accountStoreErr error
+	store           *state.Store
+	models          *ModelRouter
 	// catalog 是上游实时模型目录（data/models/<provider>.json）。
 	catalog *modelCatalog
 	// intent 是 smart 策略的意图分类器（见 intent.go）。
@@ -144,6 +166,25 @@ type Gateway struct {
 	tr     *transport.Factory
 	deps   pipeline.Deps
 	mux    *http.ServeMux
+
+	// 生命周期：New 启动的后台循环统一登记，Close 取消并等待（见 lifecycle.go）。
+	ctx       context.Context
+	cancel    context.CancelFunc
+	bg        sync.WaitGroup
+	bgMu      sync.Mutex
+	bgClosed  bool
+	closeOnce sync.Once
+	// storeCloseOnce 在后台循环退出后关闭 SQLite 句柄。
+	storeCloseOnce sync.Once
+
+	// platform 在 New 时解析；移动端传零值关闭桌面集成。
+	platform PlatformCapabilities
+	// keepAwakeOn 记录本网关是否真的开了保持唤醒，Close 时成对关闭。
+	keepAwakeOn atomic.Bool
+	// 测试注入点；nil 走真实实现。
+	keepAwakeApply func(bool) error
+	wslWarm        func()
+	sessionsWarm   func()
 
 	// handlers 缓存每个渠道组装好的管道（base 固定，中间件由 Manifest 决定）。
 	handlers sync.Map // providerID -> pipeline.StreamHandler
@@ -321,6 +362,9 @@ func (g *Gateway) SetScheduler(s *scheduler.Scheduler) {
 func (g *Gateway) Scheduler() *scheduler.Scheduler { return g.sched.Load() }
 
 // New 创建网关。
+// AccountStoreError 返回本次启动时账号文件加载失败的原因（无失败为 nil）。
+func (g *Gateway) AccountStoreError() error { return g.accountStoreErr }
+
 func New(cfg Config) *Gateway {
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = 5
@@ -335,35 +379,51 @@ func New(cfg Config) *Gateway {
 		SQLitePath:   cfg.SQLitePath,
 	})
 
+	lifecycleCtx := cfg.LifecycleContext
+	if lifecycleCtx == nil {
+		lifecycleCtx = context.Background()
+	}
+	lifecycleCtx, cancel := context.WithCancel(lifecycleCtx)
+
 	g := &Gateway{
-		cfg:          cfg,
-		autoStartGet: appstart.Get,
-		autoStartSet: appstart.Set,
-		pool:         pool.New(),
-		store:        st,
-		models:       NewModelRouter(),
-		tr:           transport.NewFactory(cfg.GlobalProxy),
-		logs:         NewLogBuffer(500),
-		identities:   &identityRing{},
-		traces:       newTraceStore(),
-		mmLogins:     newMiniMaxLoginStore(),
-		settingsPath: cfg.SettingsPath,
-		startedAt:    time.Now(),
+		cfg:            cfg,
+		autoStartGet:   appstart.Get,
+		autoStartSet:   appstart.Set,
+		pool:           pool.New(),
+		store:          st,
+		models:         NewModelRouter(),
+		tr:             transport.NewFactory(cfg.GlobalProxy),
+		logs:           NewLogBuffer(500),
+		identities:     &identityRing{},
+		traces:         newTraceStore(),
+		mmLogins:       newMiniMaxLoginStore(),
+		settingsPath:   cfg.SettingsPath,
+		startedAt:      time.Now(),
+		ctx:            lifecycleCtx,
+		cancel:         cancel,
+		platform:       resolvePlatformCapabilities(cfg.Platform),
+		keepAwakeApply: cfg.keepAwakeApply,
+		wslWarm:        cfg.wslWarm,
+		sessionsWarm:   cfg.sessionsWarm,
 	}
 	if g.settingsPath == "" {
 		g.settingsPath = apppaths.Data("settings.json")
 	}
 	g.loadSettings()
+	// 模型重定向是路由层的显式虚拟名，启动时先注入；保存设置后会立即更新。
+	g.models.SetModelRedirects(g.modelRedirects())
 	g.syncWSLEnabled()
 	g.warmSessions()
-	if !g.settings.WSLDisabled {
+	if g.platform.WSL && !g.settings.WSLDisabled {
 		// 预热 WSL 检测：wsl.exe 要起进程，第一次别卡在界面首个请求上。
 		// 关掉 WSL 接入时这里一步都不跑（用户就是不想让网关碰 WSL）。
-		go wsl.Homes()
+		g.goBackground(g.warmWSL)
 	}
-	if g.settings.KeepAwake {
-		if err := setKeepAwake(true); err != nil {
+	if g.platform.KeepAwake && g.settings.KeepAwake {
+		if err := g.applyKeepAwake(true); err != nil {
 			log.Printf("[WARN] 恢复保持唤醒失败: %v", err)
+		} else {
+			g.keepAwakeOn.Store(true)
 		}
 	}
 	if v := strings.TrimSpace(g.settings.ListenAddr); v != "" {
@@ -398,9 +458,12 @@ func New(cfg Config) *Gateway {
 	}
 	g.deps = pipeline.Deps{State: st, Redact: g.redactEngine(), Rewrite: g.rewriteEngine()}
 
-	// 库存储。路径暂固定为 data/library.json（与 settings/usage 等
-	// 运行时文件同目录），刻意没有加进 Config——等前端需要可配置时再开放。
-	g.library = library.NewStore(apppaths.Data("library.json"))
+	// 库存储。留空沿用桌面便携默认 data/library.json；移动端注入沙箱路径。
+	libraryPath := cfg.LibraryPath
+	if libraryPath == "" {
+		libraryPath = apppaths.Data("library.json")
+	}
+	g.library = library.NewStore(libraryPath)
 	// 已登录的远程 MCP：下发给 Agent 的配置改写成本机中继地址。
 	g.library.SetMCPApplyHook(g.rewriteMCPForRelay)
 
@@ -444,8 +507,13 @@ func New(cfg Config) *Gateway {
 	g.rebuildRoutingGroups()
 
 	// 账号恢复必须在 routes() 之前完成，否则第一批管理请求会看到空池。
+	if len(cfg.CredentialKey) > 0 {
+		g.pool.SetCredentialKey(cfg.CredentialKey)
+	}
 	if cfg.AccountStorePath != "" {
 		if err := g.pool.SetStorePath(cfg.AccountStorePath, g.tr); err != nil {
+			// 加载失败时账号池保持只读，避免后续空池回写覆盖原文件。
+			g.accountStoreErr = err
 			log.Printf("[WARN] 账号文件加载失败: %v", err)
 		}
 	}
@@ -462,6 +530,10 @@ func New(cfg Config) *Gateway {
 
 	// 加载渠道参数 spec。它必须在 routes() 之前就绪。
 	// 否则第一波请求会拿不到热更新过的参数。
+	//
+	// 顺序有讲究：先给"编译期已注册的渠道"拍个快照，再加载 spec。
+	// 之后 spec 里声明的 reverse 渠道才能注册，且不会被允许覆盖内置渠道。
+	provider.SnapshotRegistry()
 	specStore := spec.Default()
 	if cfg.SpecDir != "" {
 		if err := specStore.LoadDir(cfg.SpecDir); err != nil {
@@ -473,6 +545,9 @@ func New(cfg Config) *Gateway {
 			log.Printf("[WARN] 远程 spec 地址被拒绝: %v", err)
 		}
 	}
+	// spec 里声明了 extra.reverse_profile 的条目会在这里变成真实渠道。
+	// 失败只记日志，不让一个写错的 spec 拖垮启动。
+	provider.ReconcileSpecChannels()
 	// 上游实时模型目录：加载磁盘缓存，并在路由表重建前注入模型来源。
 	// 静态 Manifest 仍是兜底；没有缓存的渠道行为完全不变。
 	g.catalog = newModelCatalog(cfg.ModelsDir, g)
@@ -495,14 +570,23 @@ func New(cfg Config) *Gateway {
 	// spec 里的 models / middlewares 会改写 Manifest，必须在加载后重建路由表。
 	g.models.Rebuild()
 	specStore.SetOnChange(func() {
+		// spec 里声明的 reverse 渠道要跟着上线/下线，再重建路由表，
+		// 否则新渠道不会出现在候选里、删掉的还会被路由到。
+		provider.ReconcileSpecChannels()
 		g.models.Rebuild()
+		// 管道是按 Manifest 里的中间件清单组装后缓存的，spec 改了 middlewares
+		// 就得整表作废；不做这一步的话，新清单要等进程重启才生效。
+		// 只改 base_url / 请求头这类参数不用动缓存（它们每请求现读，见 handlerFor）。
+		g.invalidateHandlers()
 		eventbus.Emit(eventbus.TopicSpec+".updated", specStore.Status())
 	})
 
 	g.routes()
-	go g.monitorLoop()
+	g.goBackground(g.monitorLoop)
+	if g.platform.WindowsAutoImport {
+		g.initAutoImport()
+	}
 	g.initWake()
-	g.initAutoImport()
 	return g
 }
 
@@ -560,7 +644,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, "/api/") &&
+	if g.cfg.AdminSessionKey != "" {
+		// 移动模式：回环不再等于可信。管理面统一要求内存会话凭据，
+		// 且只认 Authorization 头——不接受 query 传 key。
+		if g.mobileAdminPath(r.URL.Path) && !g.mobileAdminAllowed(r) {
+			g.setCORS(w, r)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error": "管理接口需要移动会话凭据",
+				"code":  "admin_auth_required",
+			})
+			return
+		}
+	} else if strings.HasPrefix(r.URL.Path, "/api/") &&
 		r.URL.Path != "/api/health" &&
 		!g.adminAllowed(r) {
 		g.setCORS(w, r)
@@ -642,6 +737,15 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /v1/systemone", g.auth(g.handleSystemOne))
 	m.HandleFunc("POST /v1/messages/count_tokens", g.auth(g.handleCountTokens))
 	m.HandleFunc("GET /v1/models", g.auth(g.handleModels))
+
+	// --- 裸路径别名：Base URL 少写 /v1 时也能用 ---
+	// 各家客户端对 Base URL 的拼法不一致：有的把 /chat/completions 直接拼在
+	// 用户填的地址后面，用户填 http://host:7860 就会打到 /chat/completions。
+	// 补一份别名，省掉"到底要不要带 /v1"的猜谜（/responses/compact 早已这么做过）。
+	m.HandleFunc("POST /chat/completions", g.auth(g.handleChat))
+	m.HandleFunc("POST /responses", g.auth(g.handleResponses))
+	m.HandleFunc("POST /messages", g.auth(g.handleMessages))
+	m.HandleFunc("GET /models", g.auth(g.handleModels))
 
 	// --- Gemini 协议端点（/v1beta） ---
 	// {target...} 通配段：模型名可能自带渠道前缀斜杠（如 kiro/claude-sonnet-4-6）。
@@ -963,7 +1067,11 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/providers/{id}/local-scan", g.handleLocalScan)
 	m.HandleFunc("POST /api/providers/{id}/local-import", g.handleLocalImport)
 	m.HandleFunc("POST /api/providers/{id}/models/refresh", g.handleRefreshProviderModels)
+	m.HandleFunc("POST /api/providers/{id}/models/extra", g.handleProviderExtraModel)
+	m.HandleFunc("POST /api/providers/models/refresh-all", g.handleRefreshAllProviderModels)
 	m.HandleFunc("GET /api/models/resolve", g.handleResolveModel)
+	m.HandleFunc("GET /api/model-redirects", g.handleModelRedirects)
+	m.HandleFunc("POST /api/model-redirects", g.handleSaveModelRedirects)
 	m.HandleFunc("POST /api/accounts/{id}/refresh", g.handleTokenRefresh)
 	m.HandleFunc("POST /api/accounts/{id}/inject", g.handleInjectAccount)
 	m.HandleFunc("GET /api/accounts/{id}/binding", g.handleAccountBinding)
@@ -1066,6 +1174,19 @@ func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
 		g.setCORS(w, r)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if g.cfg.RequireCallerKey {
+			// 移动模式：模型协议与管理会话使用两把不同的内存 key。
+			// 只认请求头，绝不读取 query。
+			if !g.mobileCallerAllowed(r) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{
+					"error": "模型接口需要 caller key",
+					"code":  "caller_auth_required",
+				})
+				return
+			}
+			next(w, r)
 			return
 		}
 		// 远程来源先过 IP 白名单（本机回环不受限）。
@@ -1284,7 +1405,9 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, proto ir.Protoco
 			return
 		}
 	}
-	// 推理档位按模型目录收窄：不支持的值映射到最近档，避免上游 400。
+	// 推理档位先按模型目录收窄：不支持的值映射到最近档，避免上游 400。
+	// "没指定时按请求难度自适应"放在 dispatch 里做——组规则可能强制档位
+	// （UseEffort），必须等规则跑完再决定，否则规则永远被自适应抢先覆盖。
 	req.ReasoningEffort = g.clampReasoningEffort(req.Model, req.ReasoningEffort)
 
 	entry.Stream = req.Stream
@@ -1364,6 +1487,8 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, proto ir.Protoco
 		if fromRouter {
 			led.rec.Purpose = "aether"
 		}
+		// 发出前先估算输入量，事后拿上游的 prompt_tokens 一比就知道有没有被截断。
+		led.noteEstimate(ir.EstimateTokens(req))
 	}
 	res, apiErr := g.dispatch(ctx, req, entry, tm, fromRouter, trace)
 	if apiErr != nil {
@@ -1421,7 +1546,20 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 	// （跨轮稳定，见 conversationFingerprint），分类器据此实现
 	// "短追问直接继承上一轮意图"。非 smart 组 / 空文本时这些输入
 	// 会被框架忽略，行为与原来的 Resolve 完全一致。
-	bindings := g.models.ResolveSmart(req.Model, req.LastUserText(), conversationFingerprint(req), fromRouter)
+	//
+	// 传 req.ReasoningEffort 进去是为了让组规则能按"请求要求的推理档"出规则
+	// （例如高强度推理只走贵模型）。RouteOutcome.EffortOut 是规则强制指定的
+	// 档位，非空时覆盖请求——只在客户端没有显式指定时生效，用户意图优先。
+	bindings, outcome := g.models.ResolveSmartEffort(req.Model, req.LastUserText(),
+		conversationFingerprint(req), req.ReasoningEffort, fromRouter)
+	if outcome.EffortOut != "" && req.ReasoningEffort == "" {
+		req.ReasoningEffort = g.clampReasoningEffort(req.Model, outcome.EffortOut)
+	}
+	// 规则没指定、客户端也没指定：按请求难度自适应（短问题 low、改代码/长上下文 high）。
+	// 放在这里而不是入口处，是为了让组规则的 UseEffort 优先——两条都不能省。
+	if req.ReasoningEffort == "" {
+		req.ReasoningEffort = g.autoEffortFor(req)
+	}
 	if len(bindings) == 0 {
 		avail := g.models.AvailableModelIDs(12)
 		hint := strings.Join(avail, ", ")
@@ -1694,6 +1832,13 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 
 // attachResetHint 在全池冷却/耗尽时，把最近一次恢复时间作为 Retry-After。
 // 调用方不必盲目重试，和账号冷却用同一窗口。
+//
+// 上限 120 秒：带自动重试的 agent 会把 Retry-After 当成硬等待，而额度恢复
+// 可能是几小时后（实测出现过 85538 秒 ≈ 23.8 小时），那期间客户端会一直挂在
+// "正在重试(1/10)"上，既不会换渠道也不会回落。给个短上限，让它到期重试——
+// 这段时间里用户往往已经充值、加号或者启用了别的渠道。
+const maxResetHint = 120 * time.Second
+
 func (g *Gateway) attachResetHint(ae *ir.APIError, bindings []modelBinding) *ir.APIError {
 	if ae == nil || ae.RetryAfter > 0 || g.pool == nil {
 		return ae
@@ -1711,6 +1856,9 @@ func (g *Gateway) attachResetHint(ae *ir.APIError, bindings []modelBinding) *ir.
 	if best <= 0 {
 		return ae
 	}
+	if best > maxResetHint {
+		best = maxResetHint
+	}
 	return ae.WithRetryAfter(best)
 }
 
@@ -1723,13 +1871,29 @@ func (g *Gateway) handlerFor(p provider.BaseProvider, chat provider.ChatCapabili
 	base := pipeline.BuildBase(chat)
 	// spec_overrides 必须排在 system_role_merge 之前：先注入 spec 声明的系统提示词，
 	// 再让 system_role_merge 把 Instructions 折进首条 user 消息，顺序反了就注不进去。
-	// 中间件每次请求都读 spec.Load(req.ProviderID)，所以改 spec 即改即生效，缓存无需失效。
+	// 中间件每次请求都读 spec.Load(req.ProviderID)，所以改 spec 里的 base_url / 请求头
+	// 这类参数即改即生效，缓存无需失效。
+	// 但"管道由哪些中间件组成"是这里就定死的（spec.middlewares 会并进
+	// Manifest.RequiredMiddlewares），改清单必须调 invalidateHandlers 让缓存作废，
+	// 否则热更新的中间件清单永远不会被用上。
 	// redact 排在最外层：先脱敏再让其他中间件动内容，
 	// 这样 spec 注入的系统提示词也会被一并脱敏。
 	names := append([]string{"redact", "rewrite", "spec_overrides"}, p.Manifest().RequiredMiddlewares...)
 	h, _ := pipeline.Build(base, g.deps, names)
 	g.handlers.Store(id, h)
 	return h
+}
+
+// invalidateHandlers 丢弃全部已组装的管道缓存。
+//
+// 只在"中间件清单可能变了"时调用（目前是 spec 热更新）。sync.Map 没有 Clear，
+// 逐个删即可：旧管道对象不可变，删到一半被并发 Load 到最多多用一次旧清单，
+// 不会出错；而且这条路径不在请求热路径上。
+func (g *Gateway) invalidateHandlers() {
+	g.handlers.Range(func(k, _ any) bool {
+		g.handlers.Delete(k)
+		return true
+	})
 }
 
 // openStream 调用上游并窥探首个事件，确保"首字节之前"才允许重试。
@@ -2289,6 +2453,14 @@ func (g *Gateway) handleGemini(w http.ResponseWriter, r *http.Request) {
 // handleGeminiGetModel GET /v1beta/models/{id} —— 返回单个模型的元信息。
 func (g *Gateway) handleGeminiGetModel(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.PathValue("target"), "models/")
+	if g.availableRedirectNames()[name] {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"name":                       "models/" + name,
+			"displayName":                name,
+			"supportedGenerationMethods": []string{"generateContent", "countTokens"},
+		})
+		return
+	}
 	for _, m := range g.models.KnownModels() {
 		if m.ID == name || strings.HasSuffix(m.ID, "/"+name) {
 			writeJSON(w, http.StatusOK, g.geminiModelMeta(m))
@@ -2319,6 +2491,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	order := g.modelOrderForAgent(agent)
 	avail := g.availableModelIDs()
 	groupsAvail := g.availableGroups()
+	redirectsAvail := g.availableRedirectNames()
 	metas := make([]ir.ModelMeta, 0, len(g.models.KnownModels()))
 	for _, m := range g.models.KnownModels() {
 		if !g.modelVisible(m.ID) || hidden[m.ID] || !avail[m.ID] {
@@ -2361,7 +2534,8 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	groups := make([]string, 0, 8)
 	for name := range g.models.VirtualGroups() {
-		if !hidden[name] && groupsAvail[name] {
+		// 重定向优先于同名路由组（Resolve 也是这个顺序），清单里不重复列。
+		if !hidden[name] && groupsAvail[name] && !redirectsAvail[name] {
 			groups = append(groups, name)
 		}
 	}
@@ -2372,6 +2546,22 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 			"object":   "model",
 			"created":  g.startedAt.Unix(),
 			"owned_by": "aether-cockpit/virtual",
+		})
+	}
+	// 模型重定向的虚拟名也作为可发现的逻辑模型列出。
+	redirects := make([]string, 0, 8)
+	for name := range redirectsAvail {
+		if !hidden[name] {
+			redirects = append(redirects, name)
+		}
+	}
+	sort.SliceStable(redirects, func(i, j int) bool { return orderLess(order, redirects[i], redirects[j]) })
+	for _, name := range redirects {
+		data = append(data, map[string]any{
+			"id":       name,
+			"object":   "model",
+			"created":  g.startedAt.Unix(),
+			"owned_by": "aether-cockpit/redirect",
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
@@ -2446,6 +2636,7 @@ func (g *Gateway) handleGeminiModels(w http.ResponseWriter, r *http.Request) {
 	order := g.modelOrderForAgent(agent)
 	avail := g.availableModelIDs()
 	groupsAvail := g.availableGroups()
+	redirectsAvail := g.availableRedirectNames()
 	metas := make([]ir.ModelMeta, 0, len(g.models.KnownModels()))
 	for _, m := range g.models.KnownModels() {
 		if !g.modelVisible(m.ID) || hidden[m.ID] || !avail[m.ID] {
@@ -2460,12 +2651,26 @@ func (g *Gateway) handleGeminiModels(w http.ResponseWriter, r *http.Request) {
 	}
 	groups := make([]string, 0, 8)
 	for name := range g.models.VirtualGroups() {
-		if !hidden[name] && groupsAvail[name] {
+		if !hidden[name] && groupsAvail[name] && !redirectsAvail[name] {
 			groups = append(groups, name)
 		}
 	}
 	sort.SliceStable(groups, func(i, j int) bool { return orderLess(order, groups[i], groups[j]) })
 	for _, name := range groups {
+		out = append(out, map[string]any{
+			"name":                       "models/" + name,
+			"displayName":                name,
+			"supportedGenerationMethods": []string{"generateContent", "countTokens"},
+		})
+	}
+	redirects := make([]string, 0, 8)
+	for name := range redirectsAvail {
+		if !hidden[name] {
+			redirects = append(redirects, name)
+		}
+	}
+	sort.SliceStable(redirects, func(i, j int) bool { return orderLess(order, redirects[i], redirects[j]) })
+	for _, name := range redirects {
 		out = append(out, map[string]any{
 			"name":                       "models/" + name,
 			"displayName":                name,
@@ -2531,7 +2736,9 @@ func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) handleGetResponse(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	rec, ok := g.store.GetResponse(id)
-	if !ok {
+	// Internal 快照是网关为了拼接 previous_response_id 自己记的，
+	// 客户端说过 store:false，就不该能读回来。
+	if !ok || rec.Internal {
 		transducer.WriteError(w, ir.ProtocolOpenAIResponses,
 			ir.NewAPIError(ir.ErrCodeBadRequest, "response "+id+" 不存在或已过期").WithStatus(http.StatusNotFound))
 		return

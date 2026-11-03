@@ -226,6 +226,9 @@ func (p *Provider) streamDevinFrames(ctx context.Context, out chan<- ir.UnifiedS
 		}
 	}
 	if usagePrompt > 0 || usageCompletion > 0 {
+		// 注意：Devin 的 cached_input_tokens 是维度组里的独立指标，没有样本能
+		// 证明它是否已包含在 input_tokens 内，因此这里不做 SplitPromptCache。
+		// 一旦拿到真实帧能确认是子集，改成 ir.SplitPromptCache(usagePrompt, usageCached)。
 		emitDevinEvent(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: &ir.Usage{
 			InputTokens:  int(usagePrompt),
 			OutputTokens: int(usageCompletion),

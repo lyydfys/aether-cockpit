@@ -126,19 +126,19 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 	if w, ok := quotaWindow("加量包", out.AddOnQuota, 0, true); ok {
 		q.Windows = append(q.Windows, w)
 	}
-	if out.UserQuota.Total > 0 {
-		q.Total = int(out.UserQuota.Total)
-		q.Used = int(out.UserQuota.Used)
-		q.Remaining = int(out.UserQuota.Remaining)
-		q.Unit = quotaUnit(out.UserQuota)
-		q.Balance = float64(out.UserQuota.Remaining)
-		q.BalanceUnit = q.Unit
-	} else if out.AddOnQuota.Total > 0 {
-		q.Total = int(out.AddOnQuota.Total)
-		q.Used = int(out.AddOnQuota.Used)
-		q.Remaining = int(out.AddOnQuota.Remaining)
-		q.Unit = quotaUnit(out.AddOnQuota)
-		q.Balance = float64(out.AddOnQuota.Remaining)
+	// 加量包是独立钱包：主额度用尽时它还能继续跑。判定账号可用看的是
+	// Remaining，只算 UserQuota 会把"主额度 2000/2000 用尽、加量包还剩 100"
+	// 的账号误标成 depleted 直接下线。
+	if out.UserQuota.Total > 0 || out.AddOnQuota.Total > 0 {
+		q.Total = int(out.UserQuota.Total + out.AddOnQuota.Total)
+		q.Used = int(out.UserQuota.Used + out.AddOnQuota.Used)
+		q.Remaining = int(out.UserQuota.Remaining + out.AddOnQuota.Remaining)
+		unit := out.UserQuota
+		if unit.Total == 0 {
+			unit = out.AddOnQuota
+		}
+		q.Unit = quotaUnit(unit)
+		q.Balance = float64(q.Remaining)
 		q.BalanceUnit = q.Unit
 	}
 	if len(q.Windows) == 0 {

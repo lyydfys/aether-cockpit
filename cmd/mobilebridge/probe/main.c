@@ -77,7 +77,7 @@ static void set_timeout(int fd) {
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 }
 
-static int http_health(int port, char *response, size_t cap) {
+static int http_get(int port, const char *path, const char *authorization, char *response, size_t cap) {
     if (cap > 0) {
         response[0] = '\0';
     }
@@ -100,15 +100,29 @@ static int http_health(int port, char *response, size_t cap) {
         return 0;
     }
 
-    const char *request =
-        "GET /healthz HTTP/1.1\r\n"
-        "Host: 127.0.0.1\r\n"
-        "Connection: close\r\n"
-        "\r\n";
-    size_t request_length = strlen(request);
+    char request[1024];
+    int request_length;
+    if (authorization != NULL && authorization[0] != '\0') {
+        request_length = snprintf(request, sizeof(request),
+            "GET %s HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Authorization: %s\r\n"
+            "Connection: close\r\n"
+            "\r\n", path, authorization);
+    } else {
+        request_length = snprintf(request, sizeof(request),
+            "GET %s HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Connection: close\r\n"
+            "\r\n", path);
+    }
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request)) {
+        close(fd);
+        return 0;
+    }
     size_t sent = 0;
-    while (sent < request_length) {
-        ssize_t n = send(fd, request + sent, request_length - sent, 0);
+    while (sent < (size_t)request_length) {
+        ssize_t n = send(fd, request + sent, (size_t)request_length - sent, 0);
         if (n <= 0) {
             close(fd);
             return 0;
@@ -216,12 +230,61 @@ int main(int argc, char **argv) {
             return 6;
         }
 
+        char admin_key[128];
+        if (!extract_string(out, "adminSession", admin_key, sizeof(admin_key))) {
+            fprintf(stderr, "cycle=%d missing adminSession: %s\n", cycle, out);
+            return 13;
+        }
+        char bearer[160];
+        snprintf(bearer, sizeof(bearer), "Bearer %s", admin_key);
+        char caller_key[128];
+        if (!extract_string(out, "callerKey", caller_key, sizeof(caller_key))) {
+            fprintf(stderr, "cycle=%d missing callerKey: %s\n", cycle, out);
+            return 18;
+        }
+        char caller_bearer[160];
+        snprintf(caller_bearer, sizeof(caller_bearer), "Bearer %s", caller_key);
+
         char response[4096];
-        if (!http_health(port, response, sizeof(response)) ||
+        if (!http_get(port, "/healthz", NULL, response, sizeof(response)) ||
             strstr(response, " 200 ") == NULL ||
             strstr(response, "\"status\":\"ok\"") == NULL) {
             fprintf(stderr, "cycle=%d health failed: %s\n", cycle, response);
             return 7;
+        }
+        if (!http_get(port, "/v1/models", NULL, response, sizeof(response)) ||
+            strstr(response, " 401 ") == NULL ||
+            strstr(response, "caller_auth_required") == NULL) {
+            fprintf(stderr, "cycle=%d caller lock failed: %s\n", cycle, response);
+            return 11;
+        }
+        if (!http_get(port, "/v1/models", bearer, response, sizeof(response)) ||
+            strstr(response, " 401 ") == NULL) {
+            fprintf(stderr, "cycle=%d admin key unlocked models: %s\n", cycle, response);
+            return 15;
+        }
+        if (!http_get(port, "/v1/models", caller_bearer, response, sizeof(response)) ||
+            strstr(response, " 200 ") == NULL ||
+            strstr(response, "\"object\":\"list\"") == NULL) {
+            fprintf(stderr, "cycle=%d caller auth failed: %s\n", cycle, response);
+            return 16;
+        }
+        if (!http_get(port, "/api/providers", caller_bearer, response, sizeof(response)) ||
+            strstr(response, " 401 ") == NULL ||
+            strstr(response, "admin_auth_required") == NULL) {
+            fprintf(stderr, "cycle=%d caller key unlocked management: %s\n", cycle, response);
+            return 17;
+        }
+        if (!http_get(port, "/api/providers", NULL, response, sizeof(response)) ||
+            strstr(response, " 401 ") == NULL ||
+            strstr(response, "admin_auth_required") == NULL) {
+            fprintf(stderr, "cycle=%d management lock failed: %s\n", cycle, response);
+            return 12;
+        }
+        if (!http_get(port, "/api/providers", bearer, response, sizeof(response)) ||
+            strstr(response, " 200 ") == NULL) {
+            fprintf(stderr, "cycle=%d management auth failed: %s\n", cycle, response);
+            return 14;
         }
 
         n = stop(out, (int)sizeof(out));
@@ -238,7 +301,7 @@ int main(int argc, char **argv) {
 
         usleep(100000);
         bool released = port_is_free(port);
-        printf("cycle=%d addr=%s health=ok stop=ok port-released=%s\n",
+        printf("cycle=%d addr=%s health=ok caller=locked caller-auth=ok admin=locked admin-auth=ok stop=ok port-released=%s\n",
                cycle, addr, released ? "true" : "false");
         if (!released) {
             return 10;

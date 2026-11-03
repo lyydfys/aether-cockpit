@@ -82,6 +82,15 @@ type runtimeSettings struct {
 	// ProviderModels 是渠道级模型选择（上游模型名，不带渠道前缀）。
 	// nil = 尚未配置（暴露全部）；空数组 = 一个都不暴露。
 	ProviderModels map[string][]string `json:"provider_models,omitempty"`
+	// ProviderModelMode 是渠道级模型目录模式：merge（默认）/ fallback / allowlist。
+	// 只有非默认值才会落盘，见 model_mode.go。
+	ProviderModelMode map[string]string `json:"provider_model_mode,omitempty"`
+	// ModelRedirects 是「虚拟模型名 -> 渠道 -> 上游模型名」的重定向表。
+	// 客户端只写虚拟名，路由层按渠道顺序生成候选链。见 model_redirect.go。
+	ModelRedirects map[string]map[string]string `json:"model_redirects,omitempty"`
+	// ProviderExtraModels 是用户手动补进渠道目录的模型（上游 /models 漏报、
+	// 或厂商不实现 /models）。所有目录模式下都会追加。见 provider_extra_models.go。
+	ProviderExtraModels map[string][]string `json:"provider_extra_models,omitempty"`
 	// ProviderModelCredit 是渠道某模型的积分消耗倍率（仅用于展示折算）。
 	ProviderModelCredit map[string]map[string]float64 `json:"provider_model_credit,omitempty"`
 	// ProviderInsecureTLS 渠道级"跳过证书校验"（高级 → Don't check its certificate）。
@@ -144,6 +153,10 @@ type runtimeSettings struct {
 	UpdateToken string `json:"update_token,omitempty"`
 	// DisabledProviders 是渠道页手动停用的渠道（不参与模型解析）。
 	DisabledProviders []string `json:"disabled_providers,omitempty"`
+	// AutoDisabledProviders 是"账号全部失效/耗尽后被自动下线"的渠道。
+	// 与手动停用分开存：手动的不会被自动恢复，自动的会在账号恢复额度后
+	// 由后台巡检清掉（见 provider_health.go）。
+	AutoDisabledProviders map[string]AutoDisableState `json:"auto_disabled_providers,omitempty"`
 	// ProviderOrder 是渠道页的展示/优先级顺序。
 	ProviderOrder []string `json:"provider_order,omitempty"`
 	// ProviderBalances 是渠道自定义余额接口（aether 的 balanceURL / balancePath）。
@@ -547,6 +560,11 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if body.KeepAwake != nil && *body.KeepAwake && !g.platform.KeepAwake {
+		// 手机没有同义的"阻止 PC 睡眠"，不落盘一个永远不生效的开关。
+		writePlatformUnsupported(w, "保持唤醒")
+		return
+	}
 
 	otlpChanged := false
 	g.settingsMu.Lock()
@@ -601,9 +619,11 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	g.rebuildPrivacyEngine()
 	groups := g.models.VirtualGroupDetails()
 	g.settingsMu.Unlock()
-	if keepChanged {
-		if err := setKeepAwake(keepOn); err != nil {
+	if keepChanged && g.platform.KeepAwake {
+		if err := g.applyKeepAwake(keepOn); err != nil {
 			log.Printf("[WARN] 设置保持唤醒失败: %v", err)
+		} else {
+			g.keepAwakeOn.Store(keepOn)
 		}
 	}
 	if wslChanged {

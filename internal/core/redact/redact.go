@@ -16,9 +16,12 @@
 package redact
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -141,8 +144,11 @@ type Hit struct {
 	Rule   string `json:"rule"`
 	Kind   string `json:"kind"`
 	Action Action `json:"action"`
-	// Placeholder 是替换后的占位符（ActionMask 时非空）。
+	// Placeholder 是替换后的占位符（ActionMask 或 ActionBlock 时非空）。
 	Placeholder string `json:"placeholder,omitempty"`
+	// Blocked 标记这条命中把整个请求判死了（ActionBlock）。
+	// 中间件据此拒发；即便调用方漏判，正文里也已经是占位符而不是原文。
+	Blocked bool `json:"blocked,omitempty"`
 	// By 是发现者：rule（正则规则）/ model（本地模型，暂未接入）。
 	By string `json:"by,omitempty"`
 	// Head / Len 是原值的首几个字符与长度：脱敏页只展示形状，
@@ -182,10 +188,20 @@ type Engine struct {
 
 	rules []Rule
 
+	// salt 是进程级随机密钥，参与占位符派生。
+	//
+	// 为什么必须加盐：不加盐时占位符是 sha256(kind|value) 的纯函数，谁拿到
+	// 占位符就能离线穷举原值（手机号、身份证、邮箱的候选空间都很小）。
+	// 加盐后"同值同符"仍然成立（上游缓存与思考签名不受影响），但离开本进程
+	// 就无法反推。只存在内存里，重启即换新盐——与"值只在内存"的既有约束一致。
+	salt []byte
+
 	// forward: 原值 -> 占位符；reverse: 占位符 -> 原值。
 	// 两张表都在内存，进程退出即消失。
 	forward map[string]string
 	reverse map[string]string
+	// valueOrder 记录插入顺序，超限时淘汰最旧的值（近似 FIFO，见 evictValuesLocked）。
+	valueOrder []string
 
 	records    []Record
 	maxRecords int
@@ -217,9 +233,22 @@ type Engine struct {
 	shape bool
 }
 
+// maxValues 是 forward/reverse 两张映射的容量上限。
+//
+// 为什么要有上限：进程长时间运行时，每遇到一个新的敏感值就多一条记录，
+// 之前是完全无界的（只增不减）。这既是内存泄漏，也会让回程的 map 遍历变慢。
+// 20000 条按每条约百字节估算约 2MB，够覆盖一次长会话的全部历史。
+const maxValues = 20000
+
 // New 创建引擎并装载内置规则。
 func New() *Engine {
+	salt := make([]byte, 32)
+	if _, err := rand.Read(salt); err != nil {
+		// 极端情况下拿不到熵：退回时间派生，仍然比不加盐强。
+		binary.BigEndian.PutUint64(salt, uint64(time.Now().UnixNano()))
+	}
 	e := &Engine{
+		salt:       salt,
 		forward:    make(map[string]string, 64),
 		reverse:    make(map[string]string, 64),
 		actions:    make(map[string]Action, 4),
@@ -268,10 +297,10 @@ func (e *Engine) Shape() bool {
 	return e.shape
 }
 
-// shapeKind 是"保留格式"适用的类型：真正的密钥/令牌/私钥。
+// shapeKind 是"保留格式"适用的类型：真正的密钥/令牌/私钥/口令。
 func shapeKind(kind string) bool {
 	switch kind {
-	case "API_KEY", "TOKEN", "PRIVATE_KEY", "SECRET":
+	case "API_KEY", "TOKEN", "PRIVATE_KEY", "SECRET", "PASSWORD":
 		return true
 	}
 	return false
@@ -280,8 +309,18 @@ func shapeKind(kind string) bool {
 // shapeValue 生成与原值同形、同长度的假值（确定性，同值同形）。
 // 字母→字母（保留大小写）、数字→数字、其余字符原样保留；
 // 开头到第一个分隔符（- _ .）的短前缀原样保留："sk-" 仍是 "sk-"。
-func shapeValue(value, kind string) string {
-	sum := sha256.Sum256([]byte("shape\x00" + kind + "\x00" + value))
+//
+// salt 与占位符共用同一份进程级盐：不加盐时"假值"是原值的确定性函数，
+// 拿到假值就能对候选空间离线比对（例如猜一个手机号）。加盐后同一次运行内
+// 仍然"同值同形"（上游缓存与回程还原都依赖这一点），跨进程就无法关联。
+func shapeValue(salt []byte, value, kind string) string {
+	mac := hmac.New(sha256.New, salt)
+	mac.Write([]byte("shape"))
+	mac.Write([]byte{0})
+	mac.Write([]byte(kind))
+	mac.Write([]byte{0})
+	mac.Write([]byte(value))
+	sum := mac.Sum(nil)
 	rs := []rune(value)
 	keep := 0
 	for i, r := range rs {
@@ -320,7 +359,7 @@ func (e *Engine) shapedFor(value, kind string) string {
 	if !e.shape || !shapeKind(kind) || len([]rune(value)) < 8 {
 		return ""
 	}
-	return shapeValue(value, kind)
+	return shapeValue(e.salt, value, kind)
 }
 
 // Personal 返回是否脱敏个人身份类。
@@ -716,8 +755,13 @@ func (e *Engine) mask(text, provider, model, key, agent, role string, keep bool)
 				b.WriteString(out[last:sp.start])
 				switch action {
 				case ActionBlock:
+					// 拦截：仍然把原值换成占位符（绝不把原文写回），
+					// 否则下游一旦没检查 Blocked，就等于"设了拦截却明文发出"。
 					blocked = true
-					b.WriteString(m)
+					ph := e.placeholderFor(m, r.Kind)
+					b.WriteString(ph)
+					h.Placeholder = ph
+					h.Blocked = true
 				case ActionWarn:
 					b.WriteString(m)
 				default:
@@ -804,12 +848,16 @@ func (e *Engine) Preview(text string) (Result, bool) {
 				b.WriteString(out[last:sp.start])
 				switch action {
 				case ActionBlock:
+					// 预览与真跑同一语义：拦截照样换成占位符，页面上不出现原文。
 					blocked = true
-					b.WriteString(m)
+					ph := e.placeholderName(m, r.Kind)
+					b.WriteString(ph)
+					h.Placeholder = ph
+					h.Blocked = true
 				case ActionWarn:
 					b.WriteString(m)
 				default:
-					ph := placeholderName(m, r.Kind)
+					ph := e.placeholderName(m, r.Kind)
 					sent := ph
 					if shaped := e.shapedFor(m, r.Kind); shaped != "" {
 						sent = shaped
@@ -838,9 +886,11 @@ func headOf(v string) string {
 	return string(rs)
 }
 
+// placeholderName 是不带盐的派生，只作为"没有引擎实例"时的兜底与测试辅助。
+// 生产路径一律走 Engine.placeholderName（带进程级盐）。
 func placeholderName(value, kind string) string {
 	sum := sha256.Sum256([]byte(kind + "\x00" + value))
-	return fmt.Sprintf("{{%s_%s}}", strings.ToUpper(kind), hex.EncodeToString(sum[:3]))
+	return fmt.Sprintf("{{%s_%s}}", strings.ToUpper(kind), hex.EncodeToString(sum[:8]))
 }
 
 // addSentLocked 记录一次请求实际发出的文本（调用方持有写锁）。
@@ -863,6 +913,7 @@ func (e *Engine) addSentLocked(key, role, text string) {
 // Unmask 把上游返回文本里的占位符换回原值。
 //
 // 只走 reverse 表：不认识的占位符原样保留，不做猜测。
+// Unmask 把文本里的占位符换回原值。
 func (e *Engine) Unmask(text string) string {
 	if text == "" {
 		return text
@@ -879,6 +930,42 @@ func (e *Engine) Unmask(text string) string {
 		if strings.Contains(out, ph) {
 			out = strings.ReplaceAll(out, ph, raw)
 		}
+	}
+	return out
+}
+
+// UnmaskJSON 与 Unmask 相同，但替换进去的原值会做 JSON 字符串转义。
+//
+// 为什么需要单独一份：工具调用的参数是 JSON 文本，占位符出现在字符串字面量里。
+// 若原值含 `"`、`\`、换行，直接 ReplaceAll 会拼出非法 JSON，客户端解析失败。
+// 只用于 JSON 语境；普通正文必须走 Unmask（否则会把引号错误地转义）。
+func (e *Engine) UnmaskJSON(text string) string {
+	if text == "" {
+		return text
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if len(e.reverse) == 0 {
+		return text
+	}
+
+	out := text
+	for ph, raw := range e.reverse {
+		if !strings.Contains(out, ph) {
+			continue
+		}
+		esc, err := json.Marshal(raw)
+		if err != nil {
+			out = strings.ReplaceAll(out, ph, raw)
+			continue
+		}
+		// json.Marshal 产出带外层引号的字符串，这里只要转义后的内容。
+		body := string(esc)
+		if len(body) >= 2 {
+			body = body[1 : len(body)-1]
+		}
+		out = strings.ReplaceAll(out, ph, body)
 	}
 	return out
 }
@@ -949,16 +1036,54 @@ func (e *Engine) Clear() {
 
 // placeholderFor 返回某个值对应的占位符，必要时新建。
 //
-// 占位符形如 {{API_KEY_3f9a2b}}：类型前缀让人一眼看出是什么，
-// 6 位哈希保证同值同符、不同值不同符。
+// 占位符形如 {{API_KEY_3f9a2b7c1d4e5f60}}：类型前缀让人一眼看出是什么，
+// 64 位加盐哈希保证同值同符、不同值几乎不可能撞符（旧实现的 24 位在
+// 4096 个值上就有约 50% 撞车概率，且可离线反推原值）。
 func (e *Engine) placeholderFor(value, kind string) string {
 	if ph, ok := e.forward[value]; ok {
 		return ph
 	}
-	ph := placeholderName(value, kind)
+	ph := e.placeholderName(value, kind)
 	e.forward[value] = ph
 	e.reverse[ph] = value
+	e.valueOrder = append(e.valueOrder, value)
+	e.evictValuesLocked()
 	return ph
+}
+
+// evictValuesLocked 在映射超限时按插入顺序淘汰最旧的值（调用方持有写锁）。
+//
+// 淘汰只影响"回程还能不能换回原文"，不影响"已经发出去的占位符"。
+// 这让内存有界，代价是极老的值在回复里出现时换不回来（用户会看到占位符）。
+func (e *Engine) evictValuesLocked() {
+	if len(e.valueOrder) <= maxValues {
+		return
+	}
+	drop := len(e.valueOrder) - maxValues
+	for _, v := range e.valueOrder[:drop] {
+		if ph, ok := e.forward[v]; ok {
+			delete(e.reverse, ph)
+			delete(e.forward, v)
+		}
+	}
+	// 从头切走，避免 slice 无界增长。
+	e.valueOrder = append([]string(nil), e.valueOrder[drop:]...)
+}
+
+// placeholderName 用进程级盐派生占位符。
+//
+// 用 HMAC 而不是 sha256(salt|value)：后者有长度扩展攻击面，而 HMAC 零成本。
+func (e *Engine) placeholderName(value, kind string) string {
+	return placeholderNameWithSalt(e.salt, value, kind)
+}
+
+func placeholderNameWithSalt(salt []byte, value, kind string) string {
+	mac := hmac.New(sha256.New, salt)
+	mac.Write([]byte(kind))
+	mac.Write([]byte{0})
+	mac.Write([]byte(value))
+	sum := mac.Sum(nil)
+	return fmt.Sprintf("{{%s_%s}}", strings.ToUpper(kind), hex.EncodeToString(sum[:8]))
 }
 
 func (e *Engine) record(r Record) {
@@ -988,17 +1113,50 @@ func builtinRules() []Rule {
 	return []Rule{
 		// 各家云与服务的 API Key
 		def("openai_key", "OpenAI / 兼容服务 API Key", "API_KEY", `\bsk-[A-Za-z0-9_\-]{20,}\b`, ActionMask),
+		def("openai_proj_key", "OpenAI 项目 Key", "API_KEY", `\bsk-proj-[A-Za-z0-9_\-]{20,}\b`, ActionMask),
 		def("anthropic_key", "Anthropic API Key", "API_KEY", `\bsk-ant-[A-Za-z0-9_\-]{20,}\b`, ActionMask),
 		def("aws_key", "AWS Access Key ID", "API_KEY", `\b(AKIA|ASIA)[0-9A-Z]{16}\b`, ActionMask),
 		def("github_token", "GitHub Token", "API_KEY", `\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b`, ActionMask),
 		def("google_key", "Google API Key", "API_KEY", `\bAIza[0-9A-Za-z_\-]{35}\b`, ActionMask),
 		def("slack_token", "Slack Token", "API_KEY", `\bxox[baprs]-[0-9A-Za-z\-]{10,}\b`, ActionMask),
 		def("jwt", "JWT", "TOKEN", `\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b`, ActionMask),
+		// 以下前缀是实际排查中最常漏的几家：它们的 Key 形状与 sk- 家族不重叠，
+		// 单靠一条 sk- 正则覆盖不到。
+		def("volc_ark_key", "火山方舟 Key", "API_KEY", `\bark-[0-9a-zA-Z]{8,}-[0-9a-zA-Z\-]{8,}\b`, ActionMask),
+		def("openrouter_key", "OpenRouter Key", "API_KEY", `\bsk-or-v1-[A-Za-z0-9]{32,}\b`, ActionMask),
+		def("stripe_key", "Stripe Key", "API_KEY", `\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b`, ActionMask),
+		def("huggingface_key", "Hugging Face Token", "API_KEY", `\bhf_[A-Za-z0-9]{30,}\b`, ActionMask),
+		def("groq_key", "Groq API Key", "API_KEY", `\bgsk_[A-Za-z0-9]{40,}\b`, ActionMask),
+		def("xai_key", "xAI API Key", "API_KEY", `\bxai-[A-Za-z0-9]{40,}\b`, ActionMask),
+		def("replicate_key", "Replicate Token", "API_KEY", `\br8_[A-Za-z0-9]{30,}\b`, ActionMask),
 
 		// 私钥整块
 		def("private_key", "私钥文件内容", "PRIVATE_KEY",
 			`-----BEGIN (RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----[\s\S]{32,}?-----END (RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`,
 			ActionMask),
+
+		// 口令类：URL 里内嵌的密码、鉴权头、环境变量 / 键值对、中文写法。
+		// 单独成类是因为它们的"值"没有固定形状，必须靠上下文定位；
+		// 也正因为靠上下文，误判比密钥类更容易，所以每条都带边界约束。
+		grouped(def("url_password", "URL 内嵌密码", "PASSWORD",
+			`\b[a-zA-Z][a-zA-Z0-9+.\-]{1,15}://[^\s/:@]{1,64}:([^\s/@]{1,128})@`, ActionMask), 1),
+		grouped(def("auth_header", "Authorization 头", "SECRET",
+			`(?i:authorization["']?\s*[:=]\s*["']?(?:bearer|basic|token|digest)\s+)([A-Za-z0-9._\-+/=~]{8,})`, ActionMask), 1),
+		grouped(def("api_key_header", "API Key 请求头", "SECRET",
+			`(?i:(?:x-api-key|x-goog-api-key|api-key|apikey)["']?\s*[:=]\s*["']?)([A-Za-z0-9._\-]{8,})`, ActionMask), 1),
+		grouped(def("cookie_header", "Cookie 头", "SECRET",
+			`(?i:cookie["']?\s*[:=]\s*["']?)([^\n\r"']{12,512})`, ActionMask), 1),
+		// 大写的 *PASSWORD / *SECRET / *TOKEN 赋值。限定"全大写变量名"是为了避开
+		// sort_key / cacheToken 这类代码标识符——它们不该被当成密钥脱敏。
+		grouped(validated(def("env_secret", "环境变量里的口令", "SECRET",
+			`(?m)^\s*(?:export\s+)?([A-Z][A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_KEY))\s*[:=]\s*["']?([^\s"'\\]{6,256})`,
+			ActionMask), hasDigit), 2),
+		grouped(def("json_secret", "JSON 里的口令字段", "SECRET",
+			`(?i)"(?:password|passwd|secret|client_secret|access_token|refresh_token|api_?key)"\s*:\s*"([^"\n]{6,256})"`, ActionMask), 1),
+		// 中文写法：密码：xxx / 口令是 xxx / 密钥为 xxx。
+		// 值限定"不含空白与中文标点"，避免把整句都吃掉。
+		grouped(def("cjk_password", "中文写的口令", "PASSWORD",
+			`(?:密码|口令|密钥|秘钥|令牌)\s*(?:是|为|:|：|=)?\s*([A-Za-z0-9!@#$%^&*_\-+=.]{4,64})`, ActionMask), 1),
 
 		// 个人身份
 		def("email", "邮箱地址", "EMAIL",

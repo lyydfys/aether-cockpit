@@ -35,6 +35,11 @@ type localDraft struct {
 // 只允许内核内部使用：结果含明文凭据，HTTP 层只暴露 discoverLocalAll
 // 生成的摘要（标签/来源/字段名）。
 func (g *Gateway) scanLocalDrafts(parent context.Context, timeout time.Duration) map[string][]*provider.CredentialDraft {
+	// 移动端不做跨 App / PC 客户端扫描；调用方（自动导入与发现接口）
+	// 都应在能力层被拒绝，这里再兜底一次，确保没有任何路径会触发扫描。
+	if !g.platform.WindowsAutoImport {
+		return map[string][]*provider.CredentialDraft{}
+	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	out := make(map[string][]*provider.CredentialDraft, 4)
@@ -102,6 +107,10 @@ func (g *Gateway) localFingerprint(providerID, label string) string {
 //
 // 渠道页顶部的"发现本机配置"提示：只给指纹与来源，不含任何凭证。
 func (g *Gateway) handleImportAppsDiscovery(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.WindowsAutoImport {
+		writePlatformUnsupported(w, "本机客户端扫描")
+		return
+	}
 	found := g.discoverLocalAll(r.Context())
 	out := make([]map[string]any, 0, 8)
 	for id, drafts := range found {
@@ -125,6 +134,10 @@ func (g *Gateway) handleImportAppsDiscovery(w http.ResponseWriter, r *http.Reque
 
 // handleImportApps GET /api/importapps
 func (g *Gateway) handleImportApps(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.WindowsAutoImport {
+		writePlatformUnsupported(w, "本机客户端扫描")
+		return
+	}
 	found := g.discoverLocalAll(r.Context())
 	// Local Provider Switch 的配置是"另一个应用里的账号"，与本机登录态一起列出；
 	// 数据库不存在时静默跳过。

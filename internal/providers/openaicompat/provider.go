@@ -387,6 +387,13 @@ func buildPayload(req *ir.UnifiedChatRequest, upstreamModel, maxTokensField stri
 	if req.TopP != nil {
 		payload["top_p"] = *req.TopP
 	}
+	// 重复惩罚必须原样下发：客户端直连官方时不会复读，走网关丢参数就会。
+	if req.FrequencyPenalty != nil {
+		payload["frequency_penalty"] = *req.FrequencyPenalty
+	}
+	if req.PresencePenalty != nil {
+		payload["presence_penalty"] = *req.PresencePenalty
+	}
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		field := maxTokensField
 		if field == "" {

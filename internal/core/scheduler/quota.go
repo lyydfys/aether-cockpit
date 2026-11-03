@@ -77,6 +77,10 @@ func (s *Scheduler) refreshQuotas() {
 			if q.Total > 0 && q.Remaining <= 0 && q.ExpiresAt > time.Now().Unix() {
 				env.MarkDepleted(time.Unix(q.ExpiresAt, 0), "额度已用尽，等待恢复")
 				eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())
+			} else if q.Remaining > 0 && env.State() == provider.StateDepleted {
+				// 充值 / 加量包 / 新计费窗口：额度回来了就解除耗尽，不等旧 resetAt。
+				env.MarkReady()
+				eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())
 			}
 			refreshed++
 		}

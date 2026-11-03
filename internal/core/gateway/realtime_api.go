@@ -43,17 +43,28 @@ func (g *Gateway) realtimeConfig() (tools.RealtimeConfig, bool) {
 
 // handleRealtimeSession POST /v1/realtime/sessions
 func (g *Gateway) handleRealtimeSession(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.realtimeConfig()
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置实时语音：请在设置页「工具服务 · 实时语音」填写 base_url"})
-		return
-	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取请求体失败"})
 		return
 	}
+	cfg, settingsOK := g.realtimeConfig()
+	target, terr := g.mediaTargetFor(r, body)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
+	}
+	if !settingsOK && target.BaseURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置实时语音：请在设置页「工具服务 · 实时语音」填写 base_url，或把实时模型挂到某个渠道上"})
+		return
+	}
+	// 会话请求体里通常带 model；渠道路由时必须换成上游名，否则上游不认虚拟名。
+	if target.Model != "" {
+		body = rewriteJSONModel(body, target.Model)
+	}
+	cfg = target.applyToRealtime(cfg)
 	code, out, err := tools.ProxyRealtimeSessions(r.Context(), cfg, body)
+	g.noteMediaResult(target, code, err)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
@@ -65,13 +76,24 @@ func (g *Gateway) handleRealtimeSession(w http.ResponseWriter, r *http.Request) 
 
 // handleRealtimeWS GET /v1/realtime（WebSocket 升级）
 func (g *Gateway) handleRealtimeWS(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.realtimeConfig()
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置实时语音：请在设置页「工具服务 · 实时语音」填写 base_url"})
+	cfg, settingsOK := g.realtimeConfig()
+	query := r.URL.Query()
+	hint := strings.TrimSpace(query.Get("model"))
+	target, terr := g.resolveMediaTarget(hint)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
 		return
 	}
-	query := r.URL.Query()
-	if query.Get("model") == "" && cfg.Model != "" {
+	if !settingsOK && target.BaseURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "尚未配置实时语音：请在设置页「工具服务 · 实时语音」填写 base_url，或把实时模型挂到某个渠道上"})
+		return
+	}
+	cfg = target.applyToRealtime(cfg)
+	switch {
+	case target.Model != "":
+		// 渠道路由：上游只认自己的模型名，客户端传的虚拟名要换掉。
+		query.Set("model", target.Model)
+	case hint == "" && cfg.Model != "":
 		query.Set("model", cfg.Model)
 	}
 	upstreamURL, err := realtimeWSURL(cfg.BaseURL, query)
@@ -91,8 +113,18 @@ func (g *Gateway) handleRealtimeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	// WS 走独立拨号器，拿不到账号的 http.Client；只能把账号的显式代理塞进来。
+	// "direct" 或不设时保持原有行为（不额外指定代理）。
+	if target.Env != nil {
+		if p := strings.TrimSpace(target.Env.Proxy()); p != "" && p != "direct" {
+			if proxyURL, perr := url.Parse(p); perr == nil {
+				dialer.Proxy = http.ProxyURL(proxyURL)
+			}
+		}
+	}
 	upstream, resp, err := dialer.DialContext(r.Context(), upstreamURL, headers)
 	if err != nil {
+		g.noteMediaResult(target, 0, err)
 		msg := "连接实时语音上游失败"
 		if resp != nil {
 			msg += "（HTTP " + resp.Status + "）"
@@ -101,6 +133,9 @@ func (g *Gateway) handleRealtimeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer upstream.Close()
+	// 握手成功即视为该账号这一次可用：清掉连续失败计数，别让一次历史抖动
+	// 把已经恢复的账号一直按在冷却里。
+	g.noteMediaResult(target, http.StatusOK, nil)
 
 	downstream, err := realtimeUpgrader.Upgrade(w, r, nil)
 	if err != nil {

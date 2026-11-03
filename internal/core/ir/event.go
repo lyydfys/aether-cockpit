@@ -50,6 +50,22 @@ func (u *Usage) NormalizeTotal() {
 	u.TotalTokens = u.InputTokens + u.CachedTokens + u.CacheCreationTokens + u.OutputTokens
 }
 
+// SplitPromptCache 把"含缓存命中"的 prompt_tokens 拆出未命中部分。
+//
+// OpenAI / DeepSeek / Moonshot / Qwen / Trae / WorkBuddy 这类上游把 cached_tokens
+// 算在 prompt_tokens 之内（是它的子集）。解析侧若把 prompt_tokens 直接当
+// InputTokens 再额外记一份 CachedTokens，命中量会被算两遍：
+// 总量虚增一份缓存量，命中率变成 cached/(prompt+cached)，数学上永远 < 50%。
+//
+// Anthropic / Gemini 口径相反（input 与 cache_read 平级，input 本就不含缓存），
+// 那些渠道不要调用本函数。
+func SplitPromptCache(promptTokens, cachedTokens int) int {
+	if cachedTokens <= 0 || promptTokens <= cachedTokens {
+		return promptTokens
+	}
+	return promptTokens - cachedTokens
+}
+
 // UnifiedStreamEvent 是 Provider 与内核之间唯一的事件契约。
 type UnifiedStreamEvent struct {
 	Type StreamEventType

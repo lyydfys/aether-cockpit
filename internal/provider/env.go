@@ -123,6 +123,11 @@ type AccountEnv struct {
 	officialPaused      bool
 	officialPauseReason string
 	officialPausedAt    time.Time
+	// windowCaps 是"用到窗口多少就按住"的配额闸（见 account_caps.go）。
+	windowCaps WindowCaps
+	// modelRests 是模型级冷却：某个模型被限流时，只让那个模型休息，
+	// 而不是把整个账号按住（见 rest.go）。
+	modelRests map[string]modelRest
 }
 
 // NewAccountEnv 创建一个处于 Ready 状态的账号环境。
@@ -258,16 +263,20 @@ func (e *AccountEnv) MarkSuccess() {
 }
 
 // MarkFailure 记录一次失败，连续失败超过阈值自动熔断。
+//
+// 冷却时长按连续次数指数退避（1min → 2 → 4 → 8 → 上限 10min），不再固定 5 分钟：
+// 固定值会让"偶发一次抖动"和"账号真的坏了"等一样久，前者浪费时间、后者恢复太急。
 func (e *AccountEnv) MarkFailure(threshold int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.consecutiveFailures++
 	e.lastUsed = time.Now()
 	if threshold > 0 && e.consecutiveFailures >= threshold && e.state == StateReady {
+		d := failureBackoff(e.consecutiveFailures)
 		e.state = StateCoolingDown
 		e.stateAt = time.Now()
-		e.resetAt = time.Now().Add(5 * time.Minute)
-		e.stateMsg = "连续失败达到阈值，自动熔断 5 分钟"
+		e.resetAt = time.Now().Add(d)
+		e.stateMsg = "连续失败达到阈值，自动熔断 " + d.Round(time.Second).String()
 	}
 }
 

@@ -113,6 +113,11 @@ func (e *APIError) StatusCode() int {
 		return 401
 	case ErrCodeNoProvider, ErrCodeNoAccount, ErrCodePrivacyUnavailable:
 		return 503
+	case ErrCodePrivacyBlocked:
+		// 用户的脱敏策略拦下的请求：这是策略拒绝，不是服务不可用。
+		return 403
+	case ErrCodePreviousResponseNotFound:
+		return 400
 	case ErrCodeUpstreamRateLimit:
 		return 429
 	case ErrCodeUnsupported:

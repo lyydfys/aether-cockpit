@@ -75,6 +75,71 @@ func quote(s string) string {
 	return string(b)
 }
 
+// RemoveMember 删除顶层成员 key；其余文本（含注释、缩进、键序）保持不变。
+// 不存在时原样返回。删完必须仍是合法 JSONC，否则报错并不返回半成品。
+//
+// 删除比替换麻烦的地方在于逗号：删中间成员要连带吞掉它后面的逗号，
+// 删最后一个成员要吞掉它前面的逗号，否则会留下 `{"a":1,}` 这种非法形态。
+func RemoveMember(raw []byte, key string) ([]byte, error) {
+	bom := []byte{}
+	if bytes.HasPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) {
+		bom, raw = raw[:3], raw[3:]
+	}
+	start, end, _, found, _, err := findMember(raw, key)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return append(bom, raw...), nil
+	}
+
+	// 优先吞掉后面的逗号与空白（中间的成员）。
+	cutEnd := end
+	i := skipSpace(raw, cutEnd)
+	if i < len(raw) && raw[i] == ',' {
+		i++
+		// 连带吃掉逗号后的空格与换行，但不吃注释（注释可能属于下一个成员）。
+		for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\r' || raw[i] == '\n') {
+			i++
+		}
+		out := append(append([]byte{}, raw[:start]...), raw[i:]...)
+		if !json.Valid(mustJSON(out)) {
+			return nil, errors.New("JSONC 删除成员后不是合法 JSON")
+		}
+		return append(bom, out...), nil
+	}
+
+	// 没有后随逗号：说明是最后一个成员，改吞前面的逗号。
+	cutStart := start
+	j := cutStart - 1
+	for j >= 0 && (raw[j] == ' ' || raw[j] == '\t' || raw[j] == '\r' || raw[j] == '\n') {
+		j--
+	}
+	if j >= 0 && raw[j] == ',' {
+		// 同时把上一行尾的换行与缩进一起删掉，避免留下空行。
+		k := j
+		for k > 0 && (raw[k-1] == ' ' || raw[k-1] == '\t' || raw[k-1] == '\r' || raw[k-1] == '\n') {
+			k--
+		}
+		cutStart = k
+	}
+	out := append(append([]byte{}, raw[:cutStart]...), raw[end:]...)
+	if !json.Valid(mustJSON(out)) {
+		return nil, errors.New("JSONC 删除成员后不是合法 JSON")
+	}
+	return append(bom, out...), nil
+}
+
+// mustJSON 把 JSONC 文本转成标准 JSON，供 json.Valid 校验。
+// 转换失败返回一段非法内容，让上层校验自然失败。
+func mustJSON(raw []byte) []byte {
+	out := jsonc.ToJSON(raw)
+	if out == nil {
+		return []byte("{")
+	}
+	return out
+}
+
 // findMember 返回顶层 key 的成员区间 [start,end)、最后一个成员的结束位置
 // （insertAt，用于无该键时插入）与顶层对象的右花括号位置。
 func findMember(raw []byte, key string) (start, end, insertAt int, found bool, closeBrace int, err error) {

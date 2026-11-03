@@ -136,3 +136,38 @@ func TestAPIErrorStatus(t *testing.T) {
 		}
 	}
 }
+
+// prompt_tokens 含 cached 的上游（OpenAI/Trae/WorkBuddy/Qoder）必须拆开，
+// 否则命中量算两遍：总量虚增一份缓存量，命中率恒 < 50%。
+func TestSplitPromptCache(t *testing.T) {
+	cases := []struct {
+		name           string
+		prompt, cached int
+		want           int
+	}{
+		{"无缓存", 1000, 0, 1000},
+		{"部分命中", 1000, 900, 100},
+		{"全部命中", 1000, 1000, 1000}, // prompt == cached 视为不含缓存，保持原值
+		{"cached 更大（平级独立字段）", 100, 300, 100},
+		{"两者皆零", 0, 0, 0},
+	}
+	for _, c := range cases {
+		if got := SplitPromptCache(c.prompt, c.cached); got != c.want {
+			t.Errorf("%s: SplitPromptCache(%d, %d) = %d, want %d", c.name, c.prompt, c.cached, got, c.want)
+		}
+	}
+}
+
+// 拆开后总量应等于上游的 prompt + completion，不能再多出一份 cached。
+func TestUsageSplitKeepsTotal(t *testing.T) {
+	prompt, cached, out := 132745486, 131970578, 339448
+	u := Usage{OutputTokens: out, CachedTokens: cached}
+	u.InputTokens = SplitPromptCache(prompt, cached)
+	u.NormalizeTotal()
+	if u.CachedTokens+u.InputTokens != prompt {
+		t.Errorf("输入类合计 = %d, want %d", u.CachedTokens+u.InputTokens, prompt)
+	}
+	if want := prompt + out; u.TotalTokens != want {
+		t.Errorf("TotalTokens = %d, want %d（旧口径会多算一份 cached）", u.TotalTokens, want)
+	}
+}

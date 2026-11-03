@@ -361,8 +361,11 @@ export default {
       const d = drawer(s.title || s.name || s.id, (b) => { b.append(body); });
       const meta = [agentLabel(s.agent), s.cwd, s.last ? fmtDate(Math.round(s.last / 1000), true) : '', s.size ? fmtSize(s.size) : '', s.wsl ? 'WSL ' + s.wsl : ''].filter(Boolean);
       body.append(h('div', { class: 'inline', style: 'flex-wrap:wrap;gap:6px' }, ...meta.map((x) => chip(x, 'plain'))));
+      const mdURL = '/api/sessions/markdown?agent=' + encodeURIComponent(s.agent) + '&id=' + encodeURIComponent(s.id);
       const actions = h('div', { class: 'inline', style: 'gap:6px;flex-wrap:wrap' },
-        btn('下载 Markdown', { onClick: () => window.open('/api/sessions/markdown?agent=' + encodeURIComponent(s.agent) + '&id=' + encodeURIComponent(s.id), '_blank') }));
+        // 用 anchor 直接下载（服务端已带 Content-Disposition）：window.open 在桌面端
+        // 会先开一个空白 WebView 窗口再触发下载，等于多弹一次窗。
+        btn('下载 Markdown', { onClick: () => h('a', { href: mdURL }).click() }));
       if (s.resume) actions.append(btn('复制恢复命令', { onClick: () => navigator.clipboard.writeText(s.resume).then(() => toast('已复制'), () => toast('复制失败')) }));
       body.append(actions);
       const usageBox = h('div');

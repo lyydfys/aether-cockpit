@@ -54,7 +54,9 @@ var cnProfile = profile{
 	models: []string{
 		"auto", "Qwen3.8-Max", "Qwen3.5-Plus", "GLM-5.2", "GLM-5.1",
 		"DeepSeek-V4.1-Pro", "DeepSeek-V4.1-Flash",
-		"DeepSeek-V4-Pro", "DeepSeek-V4-Flash", "Kimi-K2", "MiniMax-M3",
+		// V4 Flash 与 V4.1 Flash 是两个模型；Qoder 的 dfmodel 槽位当前对应
+		// DeepSeek Flash（V4.1），不能把 V4 Flash 也登记成同一槽位。
+		"DeepSeek-V4-Pro", "Kimi-K2", "MiniMax-M3",
 		"Ultimate", "Performance", "Efficient",
 	},
 }
@@ -76,7 +78,8 @@ var intlProfile = profile{
 	models: []string{
 		"auto", "Qwen3.8-Max", "Qwen3.5-Plus", "GLM-5.2", "GLM-5.1",
 		"DeepSeek-V4.1-Pro", "DeepSeek-V4.1-Flash",
-		"DeepSeek-V4-Pro", "DeepSeek-V4-Flash", "Kimi-K2", "MiniMax-M3",
+		// 同 CN：Qoder 只有一个 DeepSeek Flash 槽位（当前 V4.1）。
+		"DeepSeek-V4-Pro", "Kimi-K2", "MiniMax-M3",
 		"Ultimate", "Performance", "Efficient",
 	},
 }

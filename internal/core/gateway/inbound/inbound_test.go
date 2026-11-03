@@ -295,3 +295,33 @@ func TestParseStructuredControls(t *testing.T) {
 		t.Fatalf("disable_parallel_tool_use 未映射: %+v", anth.ParallelToolCalls)
 	}
 }
+
+// 重复惩罚必须解析进 IR：丢了以后长输出会复读（客户端直连官方 API 时不复读，
+// 因为参数原样送达；走网关被丢掉就成了"同一个问题两个结果"）。
+func TestParseChatKeepsRepetitionPenalties(t *testing.T) {
+	body := []byte(`{
+		"model": "deepseek-v4.1-flash",
+		"messages": [{"role": "user", "content": "hi"}],
+		"frequency_penalty": 0.4,
+		"presence_penalty": 0.1
+	}`)
+	req, err := ParseChatCompletions(body, "req-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.FrequencyPenalty == nil || *req.FrequencyPenalty != 0.4 {
+		t.Fatalf("FrequencyPenalty = %v, want 0.4", req.FrequencyPenalty)
+	}
+	if req.PresencePenalty == nil || *req.PresencePenalty != 0.1 {
+		t.Fatalf("PresencePenalty = %v, want 0.1", req.PresencePenalty)
+	}
+
+	// 没传时保持 nil，不能凭空给上游塞一个 0（Sentinel 语义要保留）。
+	plain, err := ParseChatCompletions([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`), "req-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.FrequencyPenalty != nil || plain.PresencePenalty != nil {
+		t.Fatal("未传时不应写入惩罚参数")
+	}
+}

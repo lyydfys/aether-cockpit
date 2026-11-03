@@ -40,7 +40,8 @@ func TestQueryQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q.Plan != "Pro" || q.Total != 2000 || q.Used != 567 || q.Remaining != 1433 {
+	// Total/Used 是主额度 + 加量包合计，Remaining 才决定账号是否下线。
+	if q.Plan != "Pro" || q.Total != 2181 || q.Used != 748 || q.Remaining != 1433 {
 		t.Fatalf("quota = %+v", q)
 	}
 	if q.Balance != 1433 || q.BalanceUnit != "credits" || q.Until != 1796140800 {
@@ -73,5 +74,38 @@ func TestQueryQuotaAuthError(t *testing.T) {
 	_, err := p.QueryQuota(context.Background(), env)
 	if err == nil || !strings.Contains(err.Error(), "鉴权失败") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// 主额度用尽但加量包还有余额时，账号必须仍然可用：
+// 只看 UserQuota 会把这种账号误判 depleted，整号下线。
+func TestQueryQuotaAddOnKeepsAccountAlive(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"expires_at": 1796140800000,
+			"plan_tier": "pro",
+			"plan_tier_name": "Pro",
+			"user_quota": {"unit": "credits", "total": 2000, "used": 2000, "remaining": 0},
+			"add_on_quota": {"unit": "credits", "total": 1600, "used": 1500, "remaining": 100}
+		}`))
+	}))
+	defer srv.Close()
+
+	p := newProvider(cnProfile)
+	p.profile.openAPI = srv.URL
+	env := provider.NewAccountEnv("qoder-addon-test", "qoder-cn")
+	env.Credentials = map[string]string{"token": "t", "user_id": "u", "machine_id": "m"}
+	env.HTTPClient = srv.Client()
+
+	q, err := p.QueryQuota(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Remaining != 100 {
+		t.Fatalf("Remaining = %d, want 100（加量包剩余必须计入，否则会被判 depleted）", q.Remaining)
+	}
+	if q.Total != 3600 || q.Used != 3500 {
+		t.Fatalf("总/已用 = %d/%d, want 3600/3500", q.Total, q.Used)
 	}
 }

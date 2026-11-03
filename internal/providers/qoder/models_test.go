@@ -70,7 +70,8 @@ func TestListModelInfosFromCatalog(t *testing.T) {
 
 func TestLegacyQoderModelKey(t *testing.T) {
 	cases := map[string]string{
-		"DeepSeek-V4-Flash": "dfmodel", "deepseek-v4.1-pro": "dmodel",
+		// V4 Flash 与 V4.1 Flash 是两个模型：旧名字不再被改写成 dfmodel。
+		"DeepSeek-V4-Flash": "DeepSeek-V4-Flash", "deepseek-v4.1-pro": "dmodel",
 		"GLM-5.2": "gmodel", "Kimi-K2": "kmodel", "MiniMax-M3": "mmodel",
 		"Qwen3.8-Max": "qmodel_38max", "Efficient": "auto",
 		"unknow-model": "unknow-model",

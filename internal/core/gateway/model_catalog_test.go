@@ -37,7 +37,7 @@ func TestCatalogModelsMergeLiveAndStatic(t *testing.T) {
 	g.catalog.mu.Unlock()
 
 	models := g.catalogModels("qoder-cn")
-	if len(models) != 3 {
+	if len(models) < 3 {
 		t.Fatalf("models = %+v", models)
 	}
 	if models[0].ID != "qoder-cn/DeepSeek-V4.1-Flash" || models[0].DisplayName == "" {
@@ -52,6 +52,9 @@ func TestCatalogModelsMergeLiveAndStatic(t *testing.T) {
 	}
 	if !unknown.Capabilities.Streaming || !unknown.Capabilities.ToolCall {
 		t.Fatalf("未知模型默认能力 = %+v", unknown)
+	}
+	if !hasModelID(models, "qoder-cn/Kimi-K2") {
+		t.Fatalf("merge 应保留静态补缺的模型: %+v", models)
 	}
 	if source, _ := g.catalog.source("qoder-cn"); source != "live" {
 		t.Fatalf("source = %q", source)
@@ -202,6 +205,10 @@ func TestCatalogMetadataEnrichment(t *testing.T) {
 		Models: []string{"deepseek-flash", "mystery-model"},
 	}
 	g.catalog.mu.Unlock()
+	// 这一段只关心实时目录的元数据补全，切到 fallback 避免静态补缺参与断言。
+	if err := g.setProviderModelMode("qoder-cn", ModelModeFallback); err != nil {
+		t.Fatalf("set mode: %v", err)
+	}
 	live := g.catalogModels("qoder-cn")
 	if len(live) != 2 {
 		t.Fatalf("live = %+v", live)

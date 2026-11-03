@@ -68,12 +68,17 @@ type ledgerRecord struct {
 	PreviousID    bool    `json:"previous_id,omitempty"`
 	AutoContinued bool    `json:"auto_continued,omitempty"`
 	TrimmedItems  int     `json:"trimmed_items,omitempty"`
-	Source        string  `json:"source,omitempty"`
-	RouteID       int64   `json:"route_id,omitempty"`
-	Purpose       string  `json:"purpose,omitempty"`
-	FastPath      bool    `json:"fast_path,omitempty"`
-	CallerKey     string  `json:"callerKey,omitempty"`
-	CallerKeyName string  `json:"callerKeyName,omitempty"`
+	// EstTokens 是请求发出前对输入 token 的粗估；UpstreamTruncated 表示
+	// 上游实际处理的量远小于它（上游静默截断上下文）。两者配合能把"模型突然
+	// 失忆、开始复读"直接归因到上游截断，而不是让人对着输出猜。
+	EstTokens         int64  `json:"est_tokens,omitempty"`
+	UpstreamTruncated bool   `json:"upstream_truncated,omitempty"`
+	Source            string `json:"source,omitempty"`
+	RouteID           int64  `json:"route_id,omitempty"`
+	Purpose           string `json:"purpose,omitempty"`
+	FastPath          bool   `json:"fast_path,omitempty"`
+	CallerKey         string `json:"callerKey,omitempty"`
+	CallerKeyName     string `json:"callerKeyName,omitempty"`
 }
 
 type ledgerStore struct {
@@ -698,6 +703,16 @@ func shortSession(s string) string {
 }
 
 // noteTry 由 withUsageRecorder 在流结束时回填 token 与耗时。
+// noteEstimate 记录请求发出前的输入 token 粗估，供事后判断上游是否截断。
+func (p *ledgerPending) noteEstimate(tokens int64) {
+	if p == nil || tokens <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rec.EstTokens = tokens
+}
+
 func (p *ledgerPending) noteUsage(u *ir.Usage, ttftMS, ms int64) {
 	if p == nil {
 		return
@@ -710,6 +725,11 @@ func (p *ledgerPending) noteUsage(u *ir.Usage, ttftMS, ms int64) {
 		p.rec.Reasoning = int64(u.ReasoningTokens)
 		p.rec.CacheRead = int64(u.CachedTokens)
 		p.rec.CacheWrite = int64(u.CacheCreationTokens)
+		// 上游静默截断：估算 36 万 token，上游只认 1381，模型其实只看到
+		// 最后几条碎片。差一倍以上就标记，供请求明细一眼看出来。
+		if actual := p.rec.In + p.rec.CacheRead; p.rec.EstTokens > 5000 && actual*2 < p.rec.EstTokens {
+			p.rec.UpstreamTruncated = true
+		}
 	}
 	p.rec.TTFT = ttftMS
 	p.rec.Ms = ms

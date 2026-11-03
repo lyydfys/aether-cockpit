@@ -55,9 +55,19 @@ func TestAttachResetHint(t *testing.T) {
 	env.MarkCoolingDown(90*time.Minute, "429")
 	g.pool.Add(env)
 	ae := ir.NewAPIError(ir.ErrCodeNoAccount, "没有可用账号").WithStatus(http.StatusServiceUnavailable)
-	got := g.attachResetHint(ae, []modelBinding{{ProviderID: "p"}})
-	if got.RetryAfter < 89*time.Minute || got.RetryAfter > 91*time.Minute {
-		t.Fatalf("RetryAfter = %v", got.RetryAfter)
+	// 小时级的恢复时间必须压到上限：带自动重试的 agent 会把它当硬等待，
+	// 实测出现过 85538 秒（≈23.8h）把客户端"正在重试(1/10)"挂死。
+	if got := g.attachResetHint(ae, []modelBinding{{ProviderID: "p"}}); got.RetryAfter != maxResetHint {
+		t.Fatalf("RetryAfter = %v, want %v（超长退避应被截断）", got.RetryAfter, maxResetHint)
+	}
+	// 上限以内的冷却原样保留。
+	short := &Gateway{pool: pool.New()}
+	env2 := provider.NewAccountEnv("b", "q")
+	env2.MarkCoolingDown(30*time.Second, "429")
+	short.pool.Add(env2)
+	ae2 := ir.NewAPIError(ir.ErrCodeNoAccount, "没有可用账号").WithStatus(http.StatusServiceUnavailable)
+	if got := short.attachResetHint(ae2, []modelBinding{{ProviderID: "q"}}); got.RetryAfter > 31*time.Second || got.RetryAfter < 29*time.Second {
+		t.Fatalf("短冷却应原样传递，实际 %v", got.RetryAfter)
 	}
 	// 已有上游给的窗口时不覆盖。
 	with := ir.NewAPIError(ir.ErrCodeUpstreamRateLimit, "429").WithRetryAfter(5 * time.Second)

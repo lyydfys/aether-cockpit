@@ -4,12 +4,7 @@
 import { h, clear } from '../dom.js';
 import * as api from '../api.js';
 import { chip, btn, iconBtn, card, empty, errorBox, skeleton, drawer, toast, copyText, confirmDialog, input, select, field, textarea, fmtDate } from '../components.js';
-
-// 授权页统一交给系统默认浏览器打开，避免 Wails/WebView 因 target=_blank 单开窗口。
-const openAuthPage = (url) => {
-  if (!url) return;
-  api.openExternal(url).catch((e) => toast('打开浏览器失败：' + (e.message || e)));
-};
+import { openInBrowser } from '../links.js';
 
 const TABS = [['prompts', '指令'], ['skills', '技能'], ['servers', 'MCP 服务器'], ['subagents', '子代理'], ['hooks', 'Hooks']];
 
@@ -813,8 +808,8 @@ export default {
           flowId = out.id || '';
           status.textContent = '等待浏览器里完成授权…';
           if (out.url) {
-            linkBox.append(btn('打开授权页面', { primary: true, icon: 'external', onClick: () => openAuthPage(out.url) }));
-            openAuthPage(out.url);
+            linkBox.append(btn('打开授权页面', { primary: true, icon: 'external', onClick: () => openInBrowser(out.url) }));
+            openInBrowser(out.url);
           }
           const tick = async () => {
             if (!d.el.isConnected) { stop(); return; }

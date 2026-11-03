@@ -64,7 +64,7 @@ func (g *Gateway) initWake() {
 	g.wakeRunning = map[string]bool{}
 	g.wakeSem = make(chan struct{}, wakeConcurrency)
 	g.loadWake()
-	go g.wakeLoop()
+	g.goBackground(g.wakeLoop)
 }
 
 func (g *Gateway) loadWake() {
@@ -124,7 +124,13 @@ func (t *wakeTask) nextRunAt() time.Time {
 func (g *Gateway) wakeLoop() {
 	t := time.NewTicker(wakeTick)
 	defer t.Stop()
-	for now := range t.C {
+	for {
+		var now time.Time
+		select {
+		case <-g.ctx.Done():
+			return
+		case now = <-t.C:
+		}
 		for _, task := range g.dueWakeTasks(now) {
 			go g.runWakeTask(task.ID, "schedule")
 		}

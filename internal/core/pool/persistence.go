@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"aether-cockpit/internal/core/credential"
 	"aether-cockpit/internal/core/simplecrypt"
 	"aether-cockpit/internal/core/transport"
 	"aether-cockpit/internal/provider"
@@ -39,6 +40,12 @@ type persistedAccount struct {
 	OfficialPauseReason string `json:"official_pause_reason,omitempty"`
 	OfficialPausedAt    int64  `json:"official_paused_at,omitempty"`
 	CreatedAt           int64  `json:"created_at"`
+	// WindowCaps 是"用到窗口多少就按住"的配额闸（见 provider/account_caps.go）。
+	WindowCaps provider.WindowCaps `json:"window_caps,omitempty"`
+	// ModelRests 是未过期的模型级冷却（见 provider/rest.go）。
+	// 只存到期时间与原因，不存失败计数——重启后从 1 档重新退避，
+	// 避免"重启一次就永久高退避"。
+	ModelRests []provider.ModelRest `json:"model_rests,omitempty"`
 }
 
 type accountsFile struct {
@@ -49,8 +56,23 @@ type accountsFile struct {
 
 // persistence 承担账号的落盘与恢复。
 type persistence struct {
-	mu   sync.Mutex
-	path string
+	mu       sync.Mutex
+	path     string
+	key      []byte
+	migrated bool
+	// blocked 在账号文件加载失败后置位，禁止空池回写覆盖原文件。
+	blocked bool
+}
+
+// SetCredentialKey enables envelope v2 for account credentials. Without a key
+// (the desktop default) the existing simplecrypt format is preserved.
+func (m *Manager) SetCredentialKey(key []byte) {
+	if len(key) == 0 {
+		return
+	}
+	m.persist.mu.Lock()
+	m.persist.key = append([]byte(nil), key...)
+	m.persist.mu.Unlock()
 }
 
 // SetStorePath 设置账号持久化路径，并立即尝试加载。
@@ -63,10 +85,23 @@ func (m *Manager) SetStorePath(path string, tr *transport.Factory) error {
 		return nil
 	}
 	if err := m.loadAccounts(tr); err != nil {
+		m.persist.mu.Lock()
+		m.persist.blocked = true
+		m.persist.mu.Unlock()
 		return err
 	}
+	m.persist.mu.Lock()
+	m.persist.blocked = false
+	m.persist.mu.Unlock()
 	// 加载过程会走 Add()，把 dirty 置位；这里复位，避免启动即触发一次无意义的回写。
 	atomic.StoreInt32(&m.dirty, 0)
+	m.persist.mu.Lock()
+	migrated := m.persist.migrated
+	m.persist.migrated = false
+	m.persist.mu.Unlock()
+	if migrated {
+		return m.SaveAccounts()
+	}
 	return nil
 }
 
@@ -109,13 +144,15 @@ func (m *Manager) Flush() error {
 	return nil
 }
 
-// StartAutoSave 启动周期性落盘，返回停止函数（停止时会做最后一次 Flush）。
+// StartAutoSave 启动周期性落盘，返回停止函数（停止时会做最后一次 Flush 并等它写完）。
 func (m *Manager) StartAutoSave(interval time.Duration) func() {
 	if interval <= 0 {
 		interval = 10 * time.Second
 	}
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -129,20 +166,30 @@ func (m *Manager) StartAutoSave(interval time.Duration) func() {
 		}
 	}()
 	var once sync.Once
-	return func() { once.Do(func() { close(stop) }) }
+	return func() {
+		once.Do(func() { close(stop) })
+		<-done
+	}
 }
 
 // SaveAccounts 把所有账号写入磁盘。
 func (m *Manager) SaveAccounts() error {
 	m.persist.mu.Lock()
 	path := m.persist.path
+	blocked := m.persist.blocked
 	m.persist.mu.Unlock()
 	if path == "" {
 		return nil
 	}
+	if blocked {
+		return fmt.Errorf("账号文件加载失败后保持只读，拒绝覆盖: %s", path)
+	}
 
 	envs := m.All()
 	out := accountsFile{Version: 1, SavedAt: time.Now().Unix(), Accounts: make([]persistedAccount, 0, len(envs))}
+	m.persist.mu.Lock()
+	key := append([]byte(nil), m.persist.key...)
+	m.persist.mu.Unlock()
 
 	for _, env := range envs {
 		paused, pauseReason, pauseAt := env.OfficialPaused()
@@ -151,7 +198,12 @@ func (m *Manager) SaveAccounts() error {
 		if err != nil {
 			continue
 		}
-		enc, err := simplecrypt.Encrypt(creds)
+		var enc []byte
+		if len(key) > 0 {
+			enc, err = credential.Seal(key, creds, credential.AAD(env.ProviderID, env.AccountID))
+		} else {
+			enc, err = simplecrypt.Encrypt(creds)
+		}
 		if err != nil {
 			continue
 		}
@@ -175,6 +227,8 @@ func (m *Manager) SaveAccounts() error {
 			OfficialPauseReason: pauseReason,
 			OfficialPausedAt:    pauseAtUnix(pauseAt),
 			CreatedAt:           accountCreatedAt(env),
+			WindowCaps:          env.WindowCaps(),
+			ModelRests:          env.ModelRests(),
 		})
 	}
 
@@ -210,6 +264,10 @@ func (m *Manager) loadAccounts(tr *transport.Factory) error {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return fmt.Errorf("账号文件解析失败: %w", err)
 	}
+	m.persist.mu.Lock()
+	key := append([]byte(nil), m.persist.key...)
+	m.persist.mu.Unlock()
+	migrated := false
 
 	for _, pa := range f.Accounts {
 		if pa.ProviderID == "" || pa.AccountID == "" {
@@ -237,6 +295,8 @@ func (m *Manager) loadAccounts(tr *transport.Factory) error {
 		env.SetConcurrencyOverride(pa.Concurrency)
 		env.SetAllowedModels(pa.AllowedModels)
 		env.SetModelMapping(pa.ModelMapping)
+		env.SetWindowCaps(pa.WindowCaps)
+		env.RestoreModelRests(pa.ModelRests)
 		if pa.OfficialPaused {
 			env.SetOfficialPause(pa.OfficialPauseReason)
 			if pa.OfficialPausedAt > 0 {
@@ -250,7 +310,19 @@ func (m *Manager) loadAccounts(tr *transport.Factory) error {
 		if pa.CredentialsEnc != "" {
 			raw, err := base64.StdEncoding.DecodeString(pa.CredentialsEnc)
 			if err == nil {
-				if plain, err := simplecrypt.Decrypt(raw); err == nil {
+				if credential.IsV2(raw) {
+					if len(key) == 0 {
+						return fmt.Errorf("账号 %s 使用 envelope v2，但未提供凭据密钥", pa.AccountID)
+					}
+					plain, err := credential.Open(key, raw, credential.AAD(pa.ProviderID, pa.AccountID))
+					if err != nil {
+						return fmt.Errorf("账号 %s 凭据解密失败: %w", pa.AccountID, err)
+					}
+					_ = json.Unmarshal(plain, &env.Credentials)
+				} else if plain, err := simplecrypt.Decrypt(raw); err == nil {
+					if len(key) > 0 {
+						migrated = true
+					}
 					_ = json.Unmarshal(plain, &env.Credentials)
 				}
 			}
@@ -268,6 +340,11 @@ func (m *Manager) loadAccounts(tr *transport.Factory) error {
 			}
 		}
 		m.Add(env)
+	}
+	if migrated {
+		m.persist.mu.Lock()
+		m.persist.migrated = true
+		m.persist.mu.Unlock()
 	}
 	return nil
 }

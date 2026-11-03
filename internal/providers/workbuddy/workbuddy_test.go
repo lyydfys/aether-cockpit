@@ -281,8 +281,8 @@ func TestConversationIDsStable(t *testing.T) {
 		},
 	}
 
-	conv1, reqID1, msgID1 := conversationIDs(req)
-	conv2, reqID2, msgID2 := conversationIDs(req)
+	conv1, reqID1, msgID1 := conversationIDs(req, false)
+	conv2, reqID2, msgID2 := conversationIDs(req, false)
 	if conv1 != conv2 || reqID1 != reqID2 || msgID1 != msgID2 {
 		t.Fatalf("同一逻辑发送的标识不稳定: %s/%s/%s vs %s/%s/%s",
 			conv1, reqID1, msgID1, conv2, reqID2, msgID2)
@@ -290,7 +290,7 @@ func TestConversationIDsStable(t *testing.T) {
 
 	next := req.Clone()
 	next.Items[len(next.Items)-1].Text = "第三句"
-	_, reqID3, msgID3 := conversationIDs(next)
+	_, reqID3, msgID3 := conversationIDs(next, false)
 	if reqID1 == reqID3 {
 		t.Fatal("不同用户文本应有不同的 Conversation-Request-ID")
 	}
@@ -475,5 +475,73 @@ func TestDiscoverLocalAccountsMissing(t *testing.T) {
 	}
 	if !strings.Contains(ae.Message, "手动") {
 		t.Fatalf("message=%q", ae.Message)
+	}
+}
+
+// 11128 是"通道校验拦截"，上游按 id 记住被拦的那一次。fresh=true 必须给出
+// 全新的一组 id，否则重放还是同一条，必然再被拦。
+func TestConversationIDsFresh(t *testing.T) {
+	req := &ir.UnifiedChatRequest{Items: []ir.UnifiedItem{
+		{Type: ir.ItemTypeMessage, Role: "user", Text: "同一个问题"},
+	}}
+	a1, r1, m1 := conversationIDs(req, true)
+	a2, r2, m2 := conversationIDs(req, true)
+	if a1 == a2 || r1 == r2 || m1 == m2 {
+		t.Fatalf("fresh 应每次不同: %s/%s/%s vs %s/%s/%s", a1, r1, m1, a2, r2, m2)
+	}
+	stable, _, _ := conversationIDs(req, false)
+	if stable == a1 {
+		t.Fatal("fresh 不应退回会话哈希值")
+	}
+}
+
+func TestChannelBlocked(t *testing.T) {
+	yes := `{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`
+	yes2 := `{"code": 11128, "msg":"..."}`
+	no := `{"code":11127,"msg":"other"}`
+	if !channelBlocked(yes) || !channelBlocked(yes2) {
+		t.Fatal("应识别 11128")
+	}
+	if channelBlocked(no) {
+		t.Fatal("不该把 11127 当成通道拦截")
+	}
+}
+
+// 11128 拦下后必须换一组会话 id 重放，且第二次成功就不要再报错。
+func TestChatStreamRetriesChannelBlockWithFreshIDs(t *testing.T) {
+	var convIDs []string
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		convIDs = append(convIDs, r.Header.Get("X-Conversation-ID"))
+		if calls == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := newProvider(cnProfile)
+	env := provider.NewAccountEnv("acc", "workbuddy-cn")
+	env.Credentials = map[string]string{"token": "tk", "user_id": "uid", "base_url": srv.URL}
+	env.HTTPClient = srv.Client()
+
+	ch, err := p.ChatStream(context.Background(), env, &ir.UnifiedChatRequest{
+		Model: "workbuddy-cn/hy3", UpstreamModel: "hy3", Stream: true,
+		Items: []ir.UnifiedItem{{Type: ir.ItemTypeMessage, Role: "user", Text: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("应重放成功，实际报错: %v", err)
+	}
+	for range ch {
+	}
+	if calls != 2 {
+		t.Fatalf("应请求两次，实际 %d 次", calls)
+	}
+	if len(convIDs) == 2 && convIDs[0] == convIDs[1] {
+		t.Fatalf("重放必须换会话 id，两次都是 %s", convIDs[0])
 	}
 }

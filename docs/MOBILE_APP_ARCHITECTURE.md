@@ -289,6 +289,17 @@ Android API 26+ 是首发支持基线。用户显式启动网关时，`AetherGat
 
 **验收：**本地 clean Gradle build、CI clean runner 解析同一 AAR、Android emulator/device load native library、Go runtime 循环启动停止 3 次、端口每次正确释放。若 Go 编译阻塞，先只修 Go 构建错误并加 regression test，禁止开始完整 UI。
 
+> **验收覆盖边界（2026-11-03 实测记录，勿误解为全部由 CI 自动保证）**
+>
+> | 验收项 | 由谁保证 | 状态 |
+> |---|---|---|
+> | 本地 clean Gradle build | `scripts/check-mobile-stage0.sh`（`--rerun-tasks clean`） | 已覆盖 |
+> | CI clean runner 解析同一 AAR | `scripts/check-mobile-stage0.sh` 里的 `verifyPinnedDesignSystem`：让 Gradle resolver 交出实际 AAR 文件并比对 `vendor/mca-designsystem.lock` 的 `aarSha256` | 已覆盖（含负向验证） |
+> | Go runtime 循环启动停止 3 次 + 端口每次释放 | 独立 C 探针（`cmd/mobilebridge/probe`，stop 后真的重新 `bind()` 同端口） | 已覆盖（设备/模拟器上跑） |
+> | **Android emulator/device load native library** | `check-mobile-stage0.sh --device <serial>` 装 APK 并跑 `NativeBridgeInstrumentedTest`（走 `System.loadLibrary` → JNI → `dlopen`） | **托管 CI 不覆盖**：`stage0` job 只跑 `--ci`。真机覆盖靠手动触发的 `device` job（需 `vars.AETHER_ARM64_DEVICE=true` + 自托管 arm64 runner）或本地执行 |
+>
+> **已知阻塞**：x86_64 模拟器路线当前不可用——Go runtime 在 `untrusted_app` 域触发 `SYS_LSTAT=6`，被 Android seccomp 杀死；arm64 无该 syscall 故不受影响。证据与可选解法见 `docs/internal/STAGE0_X86_64_BLOCKER.md`。在 Go 侧解决前，**不要**把 `--ci-emulator` 接进 CI。
+
 ### Stage 1：Go 可移动编译与纯服务生命周期
 
 **写集：**`internal/core/gateway` 的平台能力/生命周期文件；`internal/core/launcher` 与 `internal/providers/workbuddy` 的 Android/非 Windows build-tag 文件；`internal/mobile/runtime.go`；`cmd/mobilebridge/*`；对应 Go unit tests。

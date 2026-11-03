@@ -732,13 +732,23 @@ func (p *streamParser) handleRoot(root any, whole bool) bool {
 
 	if p.cfg.Response.UsagePath != "" {
 		if u := lookupMap(root, p.cfg.Response.UsagePath); u != nil {
-			p.emit(ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: &ir.Usage{
-				InputTokens:     lookupInt(u, p.cfg.Response.UsageInputPath),
+			cached := lookupInt(u, p.cfg.Response.UsageCachedPath)
+			// spec 指向的上游基本是 OpenAI 兼容形态：input 路径（prompt_tokens）
+			// 含 cached。不拆开的话，一旦 spec 配了 usage_cached_path，
+			// 命中量就会被算两遍（总量翻倍、命中率恒 < 50%）。
+			usage := &ir.Usage{
+				InputTokens:     ir.SplitPromptCache(lookupInt(u, p.cfg.Response.UsageInputPath), cached),
 				OutputTokens:    lookupInt(u, p.cfg.Response.UsageOutputPath),
-				TotalTokens:     lookupInt(u, p.cfg.Response.UsageTotalPath),
-				CachedTokens:    lookupInt(u, p.cfg.Response.UsageCachedPath),
+				CachedTokens:    cached,
 				ReasoningTokens: lookupInt(u, p.cfg.Response.UsageReasoningPath),
-			}})
+			}
+			usage.NormalizeTotal()
+			// 上游给了更大的 total（含我们没建模的类别）时以它为准，
+			// addTokens 会把差额补回输入，避免总量丢失。
+			if upTotal := lookupInt(u, p.cfg.Response.UsageTotalPath); upTotal > usage.TotalTokens {
+				usage.TotalTokens = upTotal
+			}
+			p.emit(ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: usage})
 		}
 	}
 

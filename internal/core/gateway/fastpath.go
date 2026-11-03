@@ -10,6 +10,7 @@ import (
 	"aether-cockpit/internal/core/gateway/transducer"
 	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/core/pool"
+	"aether-cockpit/internal/core/spec"
 	"aether-cockpit/internal/core/state"
 	"aether-cockpit/internal/provider"
 )
@@ -28,6 +29,24 @@ var hopByHopHeaders = map[string]bool{
 	"content-length": true,
 }
 
+// specNeedsRewrite 判断这条渠道的 spec 是否声明了只有 IR 路径才能落地的补偿参数。
+//
+// spec_overrides 中间件（system_prompt_inject / request_overrides）是在解析后的
+// 请求体上做修改的，直通路径不解析请求体，等于把它们静默丢弃。
+// 判定条件必须与 pipeline 里的 hasSpecOverrides 保持一致，否则两边会分叉：
+// 直通认为"不需要改"，IR 认为"需要改"，谁生效取决于请求是不是流式。
+func specNeedsRewrite(providerID string) bool {
+	sp := spec.Load(providerID)
+	if sp == nil {
+		return false
+	}
+	if strings.TrimSpace(sp.SystemPromptInject) != "" {
+		return true
+	}
+	ro := sp.RequestOverrides
+	return ro != nil && (ro.Temperature != nil || ro.MaxOutputTokens != nil)
+}
+
 // tryFastPath 尝试走"零损直通"通道。
 //
 // 触发条件（全部满足才走）：
@@ -36,7 +55,8 @@ var hopByHopHeaders = map[string]bool{
 //     直通给上游会因为"上游不认识这个 resp_id"直接 400；
 //  3. 目标渠道声明了 NativeResponses 且实现了直通能力；
 //  4. 非流式请求还要求渠道显式声明 ResponsesPassthroughNonStream
-//     （默认保留"非流式走 IR"的既有行为）。
+//     （默认保留"非流式走 IR"的既有行为）；
+//  5. 隐私遮蔽、脱敏、请求改写这三类"要解析/改写请求体"的中间件全部关闭。
 //
 // 走通时返回 true，调用方不要再走 IR 路径。
 func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.Protocol, body []byte, entry *RequestLog, tm *requestTimer) bool {
@@ -52,6 +72,13 @@ func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.P
 	// 脱敏规则是独立引擎：只开 masking 而没开 privacy_mask 时，同样不能直通，
 	// 否则 redact 中间件没有机会解析并替换请求体里的敏感串。
 	if g.redactEngine().Enabled() {
+		return false
+	}
+	// 改写规则（param_override / model_map / word_guard / system_prompt）跑在 IR 路径的
+	// rewrite 中间件里，而直通是把原始字节直接甩给上游、连请求体都不解析。
+	// 少了这道判断，用户开了规则看到的却是"规则没坏、只是永远不生效"——
+	// 比直接报错更难排查，所以这里无脑退回 IR。
+	if g.rewriteEngine().Enabled() {
 		return false
 	}
 
@@ -91,6 +118,12 @@ func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.P
 		m := p.Manifest()
 		if !ok || !m.NativeResponses {
 			log.Printf("[FASTPATH] 跳过 %s: native=%v manifest=%v", b.ProviderID, ok, m.NativeResponses)
+			continue
+		}
+		// 按渠道判断而不是开局一票否决：别的渠道配了 spec 补偿参数，
+		// 不该连带把这个渠道的直通也关掉。
+		if specNeedsRewrite(b.ProviderID) {
+			log.Printf("[FASTPATH] 跳过 %s: spec 声明了请求体改写，必须走 IR 路径", b.ProviderID)
 			continue
 		}
 		if !probe.Stream && !m.Capabilities.ResponsesPassthroughNonStream {

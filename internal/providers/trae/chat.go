@@ -523,15 +523,16 @@ func emitUsagePayload(ctx context.Context, out chan<- ir.UnifiedStreamEvent, dat
 	if in == 0 && outTokens == 0 && total == 0 {
 		return true
 	}
-	if total == 0 {
-		total = in + outTokens
-	}
-	return emitEvent(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: &ir.Usage{
-		InputTokens:  in,
+	cached := firstIntIn(usage, "cached_tokens", "cachedTokens")
+	// Trae 的 prompt_tokens 含 cached_tokens（OpenAI 口径），拆开再落库，
+	// 否则命中量算两遍：总量翻倍、命中率永远不到 50%。
+	u := &ir.Usage{
+		InputTokens:  ir.SplitPromptCache(in, cached),
 		OutputTokens: outTokens,
-		TotalTokens:  total,
-		CachedTokens: firstIntIn(usage, "cached_tokens", "cachedTokens"),
-	}})
+		CachedTokens: cached,
+	}
+	u.NormalizeTotal()
+	return emitEvent(ctx, out, ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: u})
 }
 
 func firstIntIn(m map[string]any, keys ...string) int {

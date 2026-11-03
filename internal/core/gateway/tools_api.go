@@ -281,22 +281,33 @@ func (g *Gateway) handleImageTest(w http.ResponseWriter, r *http.Request) {
 
 // handleImageGenerate POST /v1/images/generations
 //
-// OpenAI 兼容形状：请求体原样透传给配置的上游（可补模型），
+// OpenAI 兼容形状：请求体原样透传给上游（可补模型），
 // 响应体也原样透传（url / b64_json 两种形态都支持）。
+//
+// 上游地址先按请求里的模型名解析渠道（media_route.go），解析不到才用设置页配置：
+// 这样把生图模型挂到渠道上的用户能吃到账号轮换与冷却，存量用户行为不变。
 func (g *Gateway) handleImageGenerate(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.imageConfig()
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "尚未配置图像生成：请在设置页填写 base_url（OpenAI 兼容 /images/generations）",
-		})
-		return
-	}
+	cfg, settingsOK := g.imageConfig()
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取请求体失败"})
 		return
 	}
+	target, terr := g.mediaTargetFor(r, raw)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
+	}
+	if !settingsOK && target.BaseURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "尚未配置图像生成：请在设置页填写 base_url（OpenAI 兼容 /images/generations），或把生图模型挂到某个渠道上",
+		})
+		return
+	}
+	raw = applyModelToBody(raw, target, cfg.Model)
+	cfg = target.applyToImage(cfg)
 	status, out, err := tools.GenerateImage(r.Context(), cfg, raw)
+	g.noteMediaResult(target, status, err)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return

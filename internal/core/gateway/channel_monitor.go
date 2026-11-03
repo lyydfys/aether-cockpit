@@ -65,7 +65,12 @@ func (g *Gateway) monitorInterval() time.Duration {
 func (g *Gateway) monitorLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		interval := g.monitorInterval()
 		if interval == 0 {
 			continue

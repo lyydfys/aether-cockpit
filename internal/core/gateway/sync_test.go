@@ -32,10 +32,10 @@ func TestSealBackupRoundTrip(t *testing.T) {
 	if _, err := openBackup(sealed, ""); err == nil {
 		t.Fatal("缺口令应失败")
 	}
-	// 旧版明文备份原样通过
-	legacy, err := openBackup(plain, "")
-	if err != nil || !bytes.Equal(legacy, plain) {
-		t.Fatalf("明文应原样返回: %v", err)
+	// 旧版明文备份**不再**原样通过：读侧必须 fail-closed（详见
+	// sync_crypto_format_test.go 的 TestOpenBackupRejectsPlaintext）。
+	if legacy, err := openBackup(plain, ""); err == nil {
+		t.Fatalf("明文备份必须被拒绝，不能原样返回: %q", legacy)
 	}
 }
 

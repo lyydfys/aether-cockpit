@@ -341,3 +341,33 @@ func TestChatStreamGivesUpAfterRetries(t *testing.T) {
 		t.Fatalf("应共请求 3 次（1+2 重试），实际 %d", hits)
 	}
 }
+
+// Qoder 的 prompt_tokens 含 prompt_tokens_details.cached_tokens（OpenAI 口径），
+// 必须拆开：否则总量多算一份缓存量，命中率恒 < 50%。
+func TestUsageSplitsCachedFromPrompt(t *testing.T) {
+	var got *ir.Usage
+	finish, sawTool, seq := "", false, 0
+	handleChunk(
+		`{"usage":{"prompt_tokens":1000,"completion_tokens":50,"total_tokens":1050,`+
+			`"prompt_tokens_details":{"cached_tokens":900}}}`,
+		func(ev ir.UnifiedStreamEvent) bool {
+			if ev.Type == ir.EventUsage {
+				got = ev.Usage
+			}
+			return true
+		},
+		&finish, &sawTool, &seq, map[int]string{},
+	)
+	if got == nil {
+		t.Fatal("没有产出 usage 事件")
+	}
+	if got.InputTokens != 100 {
+		t.Errorf("InputTokens = %d, want 100（prompt 1000 - cached 900）", got.InputTokens)
+	}
+	if got.CachedTokens != 900 {
+		t.Errorf("CachedTokens = %d, want 900", got.CachedTokens)
+	}
+	if got.TotalTokens != 1050 {
+		t.Errorf("TotalTokens = %d, want 1050（旧口径会算成 1950）", got.TotalTokens)
+	}
+}

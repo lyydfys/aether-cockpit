@@ -127,11 +127,18 @@ func TestApplyMimocodeKeepsOtherProviders(t *testing.T) {
 		t.Fatalf("托管状态未识别: %+v", st.Managed)
 	}
 
-	// 带注释的 JSONC 仍拒绝（无法安全合并）。
+	// 带注释的 JSONC 现在能保注释改写（以前是一律拒写）。
 	if err := os.WriteFile(path, []byte("// comment\n"+orig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Apply("mimocode", ApplyParams{BaseURL: "http://x", APIKey: "k"}); err == nil {
-		t.Fatal("含注释的 JSONC 应被拒绝改写")
+	if _, err := m.Apply("mimocode", ApplyParams{BaseURL: "http://x", APIKey: "k"}); err != nil {
+		t.Fatalf("含注释的 JSONC 应能改写：%v", err)
+	}
+	after, _ := os.ReadFile(path)
+	if !strings.Contains(string(after), "// comment") {
+		t.Errorf("注释被丢了：\n%s", after)
+	}
+	if !strings.Contains(string(after), "http://x/v1") {
+		t.Errorf("没有写入网关地址：\n%s", after)
 	}
 }

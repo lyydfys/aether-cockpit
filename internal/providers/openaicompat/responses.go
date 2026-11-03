@@ -143,6 +143,13 @@ func buildResponsesPayload(req *ir.UnifiedChatRequest, model string) map[string]
 	if req.TopP != nil {
 		payload["top_p"] = *req.TopP
 	}
+	// Responses 协议同样支持重复惩罚，一并透传。
+	if req.FrequencyPenalty != nil {
+		payload["frequency_penalty"] = *req.FrequencyPenalty
+	}
+	if req.PresencePenalty != nil {
+		payload["presence_penalty"] = *req.PresencePenalty
+	}
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		payload["max_output_tokens"] = *req.MaxOutputTokens
 	}

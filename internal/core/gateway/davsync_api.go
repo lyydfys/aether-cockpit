@@ -105,6 +105,27 @@ func parseGitHubURL(raw string) (repo, path string, ok bool) {
 	return repo, path, true
 }
 
+// backupPassphraseReuse 拒绝「备份口令 == 远端存储凭证」的配置。
+//
+// 为什么必须拒绝：备份文件就存在 WebDAV / S3 / GitHub 上，谁能读到那个存储
+// （服务商、共享账号、泄漏的仓库），谁就拿到了密文；如果口令又恰好等于该存储的
+// 登录凭证，那么一次凭证泄漏会同时给出密文和钥匙，口令密封等于没做。两者必须是
+// 相互独立的秘密。返回空串表示通过。
+func backupPassphraseReuse(passphrase, kind, credential string) string {
+	if passphrase == "" || credential == "" || passphrase != credential {
+		return ""
+	}
+	switch kind {
+	case "webdav":
+		return "备份口令不能与 WebDAV 密码相同：两者必须是独立的秘密，否则一次凭证泄漏就等于备份连同钥匙一起泄漏"
+	case "s3":
+		return "备份口令不能与 S3 Secret 相同：两者必须是独立的秘密，否则拿到 Secret 就能解开远端备份"
+	case "github":
+		return "备份口令不能与 GitHub Token 相同：两者必须是独立的秘密，否则 token 泄漏即备份可解"
+	}
+	return "备份口令不能与远端存储凭证相同：两者必须是独立的秘密"
+}
+
 func (g *Gateway) handleDavSyncSave(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Kind       string `json:"kind"`
@@ -187,6 +208,28 @@ func (g *Gateway) handleDavSyncSave(w http.ResponseWriter, r *http.Request) {
 		sc.GitHub = cfg
 	default:
 		fail(http.StatusBadRequest, "未知的同步类型: "+kind)
+		return
+	}
+	// 口令复用检查放在加密落盘之前：一旦存进 settings，GET 只会看到
+	// passphraseSet=true，用户无法再自查「两个秘密是不是同一个」。
+	// 注意这里比的是已经回填过旧凭据的最终配置（用户没重填密码时也能拦住）。
+	credential := ""
+	switch kind {
+	case "webdav":
+		if sc.WebDAV != nil {
+			credential = sc.WebDAV.Password
+		}
+	case "s3":
+		if sc.S3 != nil {
+			credential = sc.S3.SecretKey
+		}
+	case "github":
+		if sc.GitHub != nil {
+			credential = sc.GitHub.Token
+		}
+	}
+	if msg := backupPassphraseReuse(body.Passphrase, kind, credential); msg != "" {
+		fail(http.StatusBadRequest, msg)
 		return
 	}
 	if strings.TrimSpace(body.Passphrase) != "" {

@@ -33,6 +33,8 @@ type providerDraft struct {
 	// Models 是编辑器里勾选/输入的模型（aether 的 chosen）。
 	// nil = 未提交该字段（不改）；空数组 = 明确清空。
 	Models []string `json:"models"`
+	// ModelMode 是渠道模型目录模式：merge / fallback / allowlist；nil = 不改。
+	ModelMode *string `json:"modelMode"`
 	// ModelRates 是模型级积分消耗倍率（用户填写；0 或缺省表示不展示）。
 	ModelRates map[string]float64 `json:"model_rates"`
 	Test       []string           `json:"test"`
@@ -208,6 +210,18 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存余额配置失败: " + err.Error()})
 			return
+		}
+	}
+	if _, known := provider.Get(d.ID); known && d.ModelMode != nil {
+		// 目录模式先落盘并重建路由表：切换 allowlist/fallback 后模型解析
+		// 必须立即按新模式生效，不能等下一次刷新。
+		if err := g.setProviderModelMode(d.ID, *d.ModelMode); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		g.models.Rebuild()
+		if g.catalog != nil && g.catalog.supports(d.ID) {
+			go g.catalog.maybeRefresh(d.ID)
 		}
 	}
 	if _, known := provider.Get(d.ID); known && d.Models != nil {

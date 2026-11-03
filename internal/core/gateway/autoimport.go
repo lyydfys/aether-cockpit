@@ -61,18 +61,27 @@ func (g *Gateway) initAutoImport() {
 		return g.scanLocalDrafts(ctx, autoImportScanLimit)
 	}
 	g.loadAutoImport()
-	go g.autoImportLoop()
+	g.goBackground(g.autoImportLoop)
 }
 
 func (g *Gateway) autoImportLoop() {
+	timer := time.NewTimer(autoImportFirstDelay)
+	defer timer.Stop()
 	select {
-	case <-time.After(autoImportFirstDelay):
+	case <-g.ctx.Done():
+		return
+	case <-timer.C:
 	}
 	t := time.NewTicker(autoImportInterval)
 	defer t.Stop()
-	for range t.C {
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-t.C:
+		}
 		if g.autoImportEnabled() {
-			g.scanAutoImport(context.Background())
+			g.scanAutoImport(g.ctx)
 		}
 	}
 }
@@ -360,10 +369,18 @@ func (g *Gateway) uniqueLocalLabel(providerID, base, fallback string) string {
 // --- HTTP API ---
 
 func (g *Gateway) handleAutoImportStatus(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.WindowsAutoImport {
+		writePlatformUnsupported(w, "本机客户端自动导入")
+		return
+	}
 	writeJSON(w, http.StatusOK, g.autoImportStatus())
 }
 
 func (g *Gateway) handleAutoImportToggle(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.WindowsAutoImport {
+		writePlatformUnsupported(w, "本机客户端自动导入")
+		return
+	}
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
@@ -377,17 +394,25 @@ func (g *Gateway) handleAutoImportToggle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if body.Enabled {
-		go g.scanAutoImport(context.Background())
+		g.goBackground(func() { g.scanAutoImport(g.ctx) })
 	}
 	writeJSON(w, http.StatusOK, g.autoImportStatus())
 }
 
 func (g *Gateway) handleAutoImportScan(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.WindowsAutoImport {
+		writePlatformUnsupported(w, "本机客户端自动导入")
+		return
+	}
 	status := g.scanAutoImport(r.Context())
 	writeJSON(w, http.StatusOK, status)
 }
 
 func (g *Gateway) handleAutoImportReset(w http.ResponseWriter, r *http.Request) {
+	if !g.platform.WindowsAutoImport {
+		writePlatformUnsupported(w, "本机客户端自动导入")
+		return
+	}
 	g.autoImp.mu.Lock()
 	g.autoImp.seen = map[string]int64{}
 	g.autoImp.lastAdded = nil

@@ -335,3 +335,74 @@ func TestResponsesWebSocketToolContinuation(t *testing.T) {
 		t.Fatal("function_call_output continuation 没有完成")
 	}
 }
+
+// Codex 在 WebSocket 上每帧都带 "store": false（aether 的注释同样这么写）。
+// "store" 的语义是"上游不要保留这条 response"，不是"网关不能记上下文"——
+// 网关必须照常落库，否则第二轮的 previous_response_id 必然查不到，
+// 表现为"模型突然失忆"且没有任何错误信号。
+//
+// 这条测试就是补上之前被跳过的缺口：现有两个续接用例都没带 store。
+func TestResponsesWebSocketStoreFalseStillContinues(t *testing.T) {
+	srv := newTestGateway(t)
+	c := dialRawWS(t, srv.Listener.Addr().String())
+
+	first := []byte(`{"type":"response.create","response":{"model":"mock-native/echo-pro","input":"read main.go","store":false,"tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}]}}`)
+	if err := c.sendText(first); err != nil {
+		t.Fatalf("send first: %v", err)
+	}
+	var respID string
+	firstDone := false
+	for i := 0; i < 60; i++ {
+		payload, err := c.readText(15 * time.Second)
+		if err != nil {
+			t.Fatalf("read first %d: %v", i, err)
+		}
+		if respID == "" {
+			if m := responseIDRe.FindSubmatch(payload); len(m) > 1 {
+				respID = string(m[1])
+			}
+		}
+		if strings.Contains(string(payload), `"response.completed"`) {
+			firstDone = true
+			break
+		}
+	}
+	if !firstDone || respID == "" {
+		t.Fatalf("first turn incomplete: done=%v id=%q", firstDone, respID)
+	}
+
+	second := []byte(`{"type":"response.create","response":{"model":"mock-native/echo-pro","store":false,"previous_response_id":"` + respID + `","input":[{"type":"function_call_output","call_id":"call_real_1","output":"{\"path\":\"main.go\"}"}]}}`)
+	if err := c.sendText(second); err != nil {
+		t.Fatalf("send second: %v", err)
+	}
+
+	var secondEvents []string
+	secondDone := false
+	for i := 0; i < 60; i++ {
+		payload, err := c.readText(15 * time.Second)
+		if err != nil {
+			t.Fatalf("read second %d: %v (events=%v)", i, err, secondEvents)
+		}
+		secondEvents = append(secondEvents, string(payload))
+		if strings.Contains(string(payload), "previous_response_not_found") {
+			t.Fatalf("store:false 的续轮被当成找不到上一轮，历史被静默丢了：%v", secondEvents)
+		}
+		if strings.Contains(string(payload), `"response.completed"`) {
+			secondDone = true
+			break
+		}
+	}
+	if !secondDone {
+		t.Fatalf("store:false 的第二轮没有完成：%v", secondEvents)
+	}
+
+	// 但客户端说过 store:false，就不该能把这条 response 读回来。
+	resp, err := http.Get(srv.URL + "/v1/responses/" + respID)
+	if err != nil {
+		t.Fatalf("GET response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("store:false 的记录不该对外可读，实际状态码 %d", resp.StatusCode)
+	}
+}

@@ -115,7 +115,40 @@ func (g *Gateway) applyPort(raw string) (string, error) {
 			g.settingsMu.Unlock()
 		}
 	}
+	// 端口变了，已接入的 Agent 配置里写的还是旧地址——不重写的话，
+	// 用户下次打开 Claude Code / Codex 会连一个已经没人监听的端口，
+	// 表现为"昨天还好好的，今天全连不上"。这里把已接入的全部重写一遍。
+	g.rewireAgents("http://" + actual)
 	return "http://" + actual, nil
+}
+
+// rewireAgents 把已接入 Agent 的配置改写到新地址。
+//
+// 只动"当前确实处于接入状态"的客户端：用户主动断开过的不该被顺手改回来。
+// 失败只记日志并汇总一条 notice——端口已经切完了，不能因为某个客户端
+// 配置文件写不进去就把整个切换判成失败。
+func (g *Gateway) rewireAgents(origin string) {
+	mgr := g.clientsManager()
+	if mgr == nil {
+		return
+	}
+	key := strings.TrimSpace(g.cfg.APIKey)
+	if key == "" {
+		key = "aether-local"
+	}
+	var failed []string
+	for _, a := range g.buildAetherState().Agents {
+		if !a.Wired {
+			continue
+		}
+		if _, err := mgr.Apply(a.ID, g.driftParamsFor(a, origin, key)); err != nil {
+			failed = append(failed, a.ID)
+			log.Printf("[WARN] 端口切换后重写 %s 配置失败: %v", a.ID, err)
+		}
+	}
+	if len(failed) > 0 {
+		log.Printf("[WARN] 有 %d 个 Agent 配置未能改写到 %s：%s", len(failed), origin, strings.Join(failed, ", "))
+	}
 }
 
 // handlePortSetting POST /api/settings/port {port|addr|value}

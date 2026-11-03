@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"aether-cockpit/internal/provider"
 )
@@ -12,7 +13,10 @@ import (
 // 渠道页的开关与排序：停用渠道（不参与路由）、渠道顺序、账号顺序、
 // 余额探测，以及窗口壳的少量无操作端点。
 
-// providerIsEnabled 报告渠道是否启用（由 settings.DisabledProviders 驱动）。
+// providerIsEnabled 报告渠道是否参与路由。
+//
+// 两层：手动停用（永久，直到用户开回来）+ 自动下线（账号全灭时由巡检置上，
+// 到 Until 自动放行，等巡检真的清掉记录）。
 func (g *Gateway) providerIsEnabled(pid string) bool {
 	g.settingsMu.Lock()
 	defer g.settingsMu.Unlock()
@@ -21,7 +25,27 @@ func (g *Gateway) providerIsEnabled(pid string) bool {
 			return false
 		}
 	}
+	if st, ok := g.settings.AutoDisabledProviders[pid]; ok {
+		if st.Until == 0 || time.Now().Unix() < st.Until {
+			return false
+		}
+		// 到点了：账号的 resetAt 过期后 Available() 会自己转 ready，
+		// 这里放行不会白撞上游；巡检跑一轮后会正式清掉记录。
+	}
 	return true
+}
+
+// providerManuallyOff 只判手动停用。
+// 前端要区分"我关的"和"系统因为没额度关的"，两者文案与恢复动作不同。
+func (g *Gateway) providerManuallyOff(pid string) bool {
+	g.settingsMu.Lock()
+	defer g.settingsMu.Unlock()
+	for _, d := range g.settings.DisabledProviders {
+		if d == pid {
+			return true
+		}
+	}
+	return false
 }
 
 // providerOrder 返回用户排定的渠道顺序（未列出的保持注册顺序）。
@@ -65,6 +89,11 @@ func (g *Gateway) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存失败: " + err.Error()})
 		return
+	}
+	// 手动启用时把自动下线状态一起清掉，否则巡检下一轮又会把它关回去，
+	// 用户会以为开关坏了。（清完如果账号确实全灭，巡检会重新置上。）
+	if !off {
+		g.clearAutoDisable(body.ID)
 	}
 	g.respondProviders(w, r)
 }

@@ -181,6 +181,13 @@ func buildPayload(req *ir.UnifiedChatRequest, model string) map[string]any {
 	if req.TopP != nil {
 		payload["top_p"] = *req.TopP
 	}
+	// 重复惩罚照实转发，避免长输出复读。
+	if req.FrequencyPenalty != nil {
+		payload["frequency_penalty"] = *req.FrequencyPenalty
+	}
+	if req.PresencePenalty != nil {
+		payload["presence_penalty"] = *req.PresencePenalty
+	}
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		payload["max_tokens"] = *req.MaxOutputTokens
 	}
@@ -464,13 +471,16 @@ func handleChunk(data string, emit func(ir.UnifiedStreamEvent) bool, finish *str
 	}
 
 	if usage, ok := chunk["usage"].(map[string]any); ok {
-		emit(ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: &ir.Usage{
-			InputTokens:     lookupInt(usage, "prompt_tokens"),
+		cached := lookupNestedInt(usage, "prompt_tokens_details", "cached_tokens")
+		// Qoder 的 prompt_tokens 含 cached_tokens（OpenAI 口径），拆开再落库。
+		u := &ir.Usage{
+			InputTokens:     ir.SplitPromptCache(lookupInt(usage, "prompt_tokens"), cached),
 			OutputTokens:    lookupInt(usage, "completion_tokens"),
-			TotalTokens:     lookupInt(usage, "total_tokens"),
-			CachedTokens:    lookupNestedInt(usage, "prompt_tokens_details", "cached_tokens"),
+			CachedTokens:    cached,
 			ReasoningTokens: lookupNestedInt(usage, "completion_tokens_details", "reasoning_tokens"),
-		}})
+		}
+		u.NormalizeTotal()
+		emit(ir.UnifiedStreamEvent{Type: ir.EventUsage, Usage: u})
 	}
 	return false
 }

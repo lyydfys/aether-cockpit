@@ -146,6 +146,9 @@ func main() {
 	}
 	stopToken := gw.StartTokenRefresh(rootCtx, tokenInterval, tokenLead)
 	defer stopToken()
+	// 渠道健康巡检：账号全灭自动下线，额度恢复后再自动上线。
+	stopHealth := gw.StartProviderHealthWatch(rootCtx, time.Minute)
+	defer stopHealth()
 
 	// WebDAV 备份自动推送：未配置或 auto_push_minutes<=0 时是空操作，可无条件启动。
 	stopWebDAVPush := gw.StartWebDAVAutoPush(rootCtx, gw.WebDAVAutoPushInterval())

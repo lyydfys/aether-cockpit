@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/core/tools"
 )
 
@@ -45,89 +46,142 @@ func (g *Gateway) writeVideoError(w http.ResponseWriter) {
 
 // handleVideoGenerate POST /v1/videos/generations
 func (g *Gateway) handleVideoGenerate(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.videoConfig()
-	if !ok {
-		g.writeVideoError(w)
-		return
-	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取请求体失败"})
 		return
 	}
-	if cfg.Model != "" {
-		body, _ = injectJSONModel(body, cfg.Model)
+	cfg, settingsOK := g.videoConfig()
+	target, terr := g.mediaTargetFor(r, body)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
 	}
+	if !settingsOK && target.BaseURL == "" {
+		g.writeVideoError(w)
+		return
+	}
+	body = applyModelToBody(body, target, cfg.Model)
+	cfg = target.applyToVideo(cfg)
 	code, ct, out, err := tools.ProxyVideo(r.Context(), cfg, http.MethodPost, "/videos/generations", "application/json", body)
+	g.noteMediaResult(target, code, err)
+	if err == nil && code >= 200 && code < 300 {
+		// 记下任务 id → 渠道路由，后面的轮询/下载端点是按 id 查的（见 media_route.go）。
+		rememberVideoTaskFromResponse(out, target)
+	}
 	g.writeVideoResult(w, code, ct, out, err)
 }
 
 // handleVideoCreate POST /v1/videos（OpenAI Sora 兼容，multipart 或 JSON）
 func (g *Gateway) handleVideoCreate(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.videoConfig()
-	if !ok {
-		g.writeVideoError(w)
-		return
-	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 128<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取请求体失败"})
 		return
 	}
-	ct := r.Header.Get("Content-Type")
-	if strings.HasPrefix(strings.ToLower(ct), "application/json") && cfg.Model != "" {
-		body, _ = injectJSONModel(body, cfg.Model)
+	cfg, settingsOK := g.videoConfig()
+	target, terr := g.mediaTargetFor(r, body)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
 	}
+	if !settingsOK && target.BaseURL == "" {
+		g.writeVideoError(w)
+		return
+	}
+	ct := r.Header.Get("Content-Type")
+	// multipart 夹着素材文件，无法安全重写表单字段；此时 model 由客户端直接给。
+	if strings.HasPrefix(strings.ToLower(ct), "application/json") {
+		body = applyModelToBody(body, target, cfg.Model)
+	}
+	cfg = target.applyToVideo(cfg)
 	code, outCT, out, err := tools.ProxyVideo(r.Context(), cfg, http.MethodPost, "/videos", ct, body)
+	g.noteMediaResult(target, code, err)
+	if err == nil && code >= 200 && code < 300 {
+		rememberVideoTaskFromResponse(out, target)
+	}
 	g.writeVideoResult(w, code, outCT, out, err)
 }
 
 // handleVideoGet GET /v1/videos/{id}（状态轮询）
+//
+// 轮询请求本身不带模型名：先用创建时记下的渠道路由（同进程内），
+// 再用 ?model= 兜底，最后回退设置页配置——与改动前的行为完全一致。
 func (g *Gateway) handleVideoGet(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.videoConfig()
-	if !ok {
+	id := r.PathValue("id")
+	cfg, settingsOK := g.videoConfig()
+	target, terr := g.videoRouteTarget(r, id)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
+	}
+	if !settingsOK && target.BaseURL == "" {
 		g.writeVideoError(w)
 		return
 	}
-	id := url.PathEscape(r.PathValue("id"))
-	code, ct, out, err := tools.ProxyVideo(r.Context(), cfg, http.MethodGet, "/videos/"+id, "", nil)
+	cfg = target.applyToVideo(cfg)
+	code, ct, out, err := tools.ProxyVideo(r.Context(), cfg, http.MethodGet, "/videos/"+url.PathEscape(id), "", nil)
+	g.noteMediaResult(target, code, err)
 	g.writeVideoResult(w, code, ct, out, err)
 }
 
 // handleVideoContent GET /v1/videos/{id}/content（Sora 结果下载）
 func (g *Gateway) handleVideoContent(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.videoConfig()
-	if !ok {
+	id := r.PathValue("id")
+	cfg, settingsOK := g.videoConfig()
+	target, terr := g.videoRouteTarget(r, id)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
+	}
+	if !settingsOK && target.BaseURL == "" {
 		g.writeVideoError(w)
 		return
 	}
-	id := url.PathEscape(r.PathValue("id"))
-	code, ct, out, err := tools.ProxyVideo(r.Context(), cfg, http.MethodGet, "/videos/"+id+"/content", "", nil)
+	cfg = target.applyToVideo(cfg)
+	code, ct, out, err := tools.ProxyVideo(r.Context(), cfg, http.MethodGet, "/videos/"+url.PathEscape(id)+"/content", "", nil)
+	g.noteMediaResult(target, code, err)
 	g.writeVideoResult(w, code, ct, out, err)
+}
+
+// videoRouteTarget 给"按任务 id 访问"的端点找目标。
+func (g *Gateway) videoRouteTarget(r *http.Request, id string) (mediaTarget, *ir.APIError) {
+	if t, ok := videoRouteFor(id); ok {
+		return t, nil
+	}
+	return g.mediaTargetFor(r, nil)
 }
 
 // handleVideoGenerateAsync POST /v1/videos/generations/async
 //
 // 本地异步包装：立刻返回任务 id，后台跑上游生成（可能耗时数分钟）。
 func (g *Gateway) handleVideoGenerateAsync(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := g.videoConfig()
-	if !ok {
-		g.writeVideoError(w)
-		return
-	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取请求体失败"})
 		return
 	}
-	if cfg.Model != "" {
-		body, _ = injectJSONModel(body, cfg.Model)
+	cfg, settingsOK := g.videoConfig()
+	target, terr := g.mediaTargetFor(r, body)
+	if terr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": mediaTargetError(terr)})
+		return
 	}
+	if !settingsOK && target.BaseURL == "" {
+		g.writeVideoError(w)
+		return
+	}
+	body = applyModelToBody(body, target, cfg.Model)
+	cfg = target.applyToVideo(cfg)
 	t := g.imageTaskStart()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 		code, _, out, err := tools.ProxyVideo(ctx, cfg, http.MethodPost, "/videos/generations", "application/json", body)
+		g.noteMediaResult(target, code, err)
+		if err == nil && code >= 200 && code < 300 {
+			rememberVideoTaskFromResponse(out, target)
+		}
 		g.imageTaskFinish(t, code, out, err)
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": t.ID, "request_id": t.ID, "status": "pending"})

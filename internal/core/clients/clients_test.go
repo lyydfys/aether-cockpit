@@ -303,7 +303,7 @@ func TestApplyOpenCodeEmptyModelKeepsUserModel(t *testing.T) {
 	}
 }
 
-func TestApplyOpenCodeRejectsJSONC(t *testing.T) {
+func TestApplyOpenCodePreservesJSONC(t *testing.T) {
 	home := t.TempDir()
 	m := NewWithHome(home)
 
@@ -311,19 +311,27 @@ func TestApplyOpenCodeRejectsJSONC(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// opencode.json 官方允许 JSONC（带注释）。含注释时无法安全合并，应拒绝改写。
-	jsonc := "// my config\n{\n  \"theme\": \"opencode\"\n}\n"
+	// opencode.json 官方允许 JSONC（带注释）。以前一律拒写，等于"用户正常的
+	// 配置反而接不进网关"；现在走保注释路径，只替换顶层 provider / model。
+	jsonc := "// my config\n{\n  // 我的主题\n  \"theme\": \"opencode\",\n  \"provider\": {\"other\": {\"npm\": \"x\"}}\n}\n"
 	path := filepath.Join(dir, "opencode.json")
 	if err := os.WriteFile(path, []byte(jsonc), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := m.Apply("opencode", ApplyParams{BaseURL: "http://127.0.0.1:7860", APIKey: "k"}); err == nil {
-		t.Fatal("JSONC 应被拒绝改写")
+	if _, err := m.Apply("opencode", ApplyParams{BaseURL: "http://127.0.0.1:7860", APIKey: "k"}); err != nil {
+		t.Fatalf("带注释的 opencode.json 应能改写：%v", err)
 	}
 	after, _ := os.ReadFile(path)
-	if string(after) != jsonc {
-		t.Errorf("拒绝改写后文件应保持原样:\n%s", after)
+	out := string(after)
+	if !strings.Contains(out, "// my config") || !strings.Contains(out, "// 我的主题") {
+		t.Errorf("注释被丢了：\n%s", out)
+	}
+	if !strings.Contains(out, `"theme"`) || !strings.Contains(out, "other") {
+		t.Errorf("用户其它配置被丢了：\n%s", out)
+	}
+	if !strings.Contains(out, "http://127.0.0.1:7860/v1") {
+		t.Errorf("没有写入 aether provider：\n%s", out)
 	}
 }
 

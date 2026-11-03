@@ -78,15 +78,21 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 		Agents             []any                        `json:"agents"`
 		Ready              bool                         `json:"ready"`
 		Off                bool                         `json:"off"`
-		Draws              int                          `json:"draws"`
-		Routing            string                       `json:"routing,omitempty"`
-		Sink               bool                         `json:"sink,omitempty"`
-		Affinity           string                       `json:"affinity,omitempty"`
-		NoModels           bool                         `json:"noModels"`
-		ModelsSource       string                       `json:"models_source,omitempty"`
-		ModelsFetched      int64                        `json:"models_fetched,omitempty"`
-		ModelListSupported bool                         `json:"models_live_supported,omitempty"`
-		ModelsView         []aetherModelView            `json:"-"`
+		// AutoOff 是"账号全部失效/耗尽被自动下线"（与手动 Off 分开）。
+		// 前端据此显示"自动关闭 · 原因 · 恢复时间"，并允许一键手动开回来。
+		AutoOff            bool              `json:"auto_off,omitempty"`
+		AutoOffReason      string            `json:"auto_off_reason,omitempty"`
+		AutoOffUntil       int64             `json:"auto_off_until,omitempty"`
+		Draws              int               `json:"draws"`
+		Routing            string            `json:"routing,omitempty"`
+		Sink               bool              `json:"sink,omitempty"`
+		Affinity           string            `json:"affinity,omitempty"`
+		NoModels           bool              `json:"noModels"`
+		ModelsSource       string            `json:"models_source,omitempty"`
+		ModelsFetched      int64             `json:"models_fetched,omitempty"`
+		ModelsMode         string            `json:"models_mode,omitempty"`
+		ModelListSupported bool              `json:"models_live_supported,omitempty"`
+		ModelsView         []aetherModelView `json:"-"`
 	}
 	order := g.providerOrder()
 	views := make([]providerView, 0, len(manifests))
@@ -167,6 +173,10 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 		models := make([]aetherModelView, 0, len(m.Models))
 		selection, configured := g.providerModelSelection(m.ID)
 		creditRates := g.providerModelCreditMap(m.ID)
+		extraModels := map[string]bool{}
+		for _, x := range g.providerExtraModels(m.ID) {
+			extraModels[normalizeModelKey(x)] = true
+		}
 		for _, mm := range m.Models {
 			// 前端会拼 `${provider.id}/${model.id}`：这里必须给去掉渠道前缀的
 			// 模型名，否则网关页会显示 antigravity/antigravity/xxx。
@@ -193,8 +203,10 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 				CostCacheRead: info.CostCacheRead,
 				Efforts:       info.Efforts,
 				Free:          info.Free,
+				Manual:        extraModels[normalizeModelKey(mid)],
 			})
 		}
+		autoOff, autoOffOn := g.autoDisableOf(m.ID)
 		views = append(views, providerView{
 			ProviderManifest:   m,
 			AccountCount:       len(envs),
@@ -210,6 +222,9 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 			Agents:             []any{},
 			Ready:              ready > 0,
 			Off:                !g.providerIsEnabled(m.ID),
+			AutoOff:            autoOffOn && !g.providerManuallyOff(m.ID),
+			AutoOffReason:      autoOff.Reason,
+			AutoOffUntil:       autoOff.Until,
 			Draws:              0,
 			Routing:            route.Routing,
 			Sink:               route.Sink,
@@ -217,6 +232,7 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 			NoModels:           len(m.Models) == 0,
 			ModelsSource:       modelsSource,
 			ModelsFetched:      modelsFetched,
+			ModelsMode:         g.providerModelMode(m.ID),
 			ModelListSupported: listerSupported,
 			ModelsView:         models,
 		})
@@ -275,7 +291,7 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 			"models": views[i].ModelsView,
 			// 模型来源：上游实时 / 静态兜底，以及能否手动刷新。
 			"models_source": v.ModelsSource, "models_fetched": v.ModelsFetched,
-			"models_live_supported": v.ModelListSupported,
+			"models_mode": v.ModelsMode, "models_live_supported": v.ModelListSupported,
 			// aether 的余额字段：URL / 表达式 / 方法，以及"令牌已保存"标记。
 			// 没有渠道用量接口的（如 Qoder）也开放，用户可以自行接余额接口。
 			"balanceURL": balURL, "balancePath": balPath, "balanceMethod": balMethod,

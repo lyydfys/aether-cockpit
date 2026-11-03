@@ -181,13 +181,30 @@ func (g *Gateway) aetherSettings() map[string]any {
 func (g *Gateway) modelOptions() []aetherOption {
 	out := make([]aetherOption, 0, 128)
 
-	// 路由组排在前面：它们是"逻辑模型"，用户最常选
+	// 逻辑模型：重定向优先于同名路由组（与 Resolve 的顺序一致）。
+	redirectNames := g.redirectNames()
+	redirectSet := make(map[string]bool, len(redirectNames))
+	for _, name := range redirectNames {
+		redirectSet[name] = true
+	}
 	for _, name := range g.modelGroupNames() {
+		if redirectSet[name] {
+			continue
+		}
 		out = append(out, aetherOption{
 			Value: name,
 			Label: name,
 			Note:  "路由组",
 			Group: "路由组",
+			Ref:   name,
+		})
+	}
+	for _, name := range redirectNames {
+		out = append(out, aetherOption{
+			Value: name,
+			Label: name,
+			Note:  "模型重定向",
+			Group: "模型重定向",
 			Ref:   name,
 		})
 	}
@@ -197,10 +214,12 @@ func (g *Gateway) modelOptions() []aetherOption {
 		if !g.providerIsEnabled(m.ID) {
 			continue
 		}
-		for _, model := range m.Models {
-			up := model.UpstreamModel
+		// 走渠道的有效目录（含 merge/fallback/allowlist），否则 Agent 页
+		// 会看到与 /v1/models、渠道页不一致的模型清单。
+		for _, model := range g.catalogModels(m.ID) {
+			up := strings.TrimSpace(model.UpstreamModel)
 			if up == "" {
-				up = model.ID
+				up = strings.TrimPrefix(model.ID, m.ID+"/")
 			}
 			val := m.ID + "/" + up
 			if seen[val] {
@@ -299,6 +318,8 @@ type aetherModelView struct {
 	Efforts []string `json:"efforts,omitempty"`
 	// Free 表示上游目录明确标了免费（Qoder 的 is_free）。
 	Free bool `json:"free,omitempty"`
+	// Manual 表示这是用户手动补进目录的模型（上游 /models 漏报）。
+	Manual bool `json:"manual,omitempty"`
 }
 
 // aetherKeyView 是 API Key 的展示形态：只给是否设置与掩码后的样子。

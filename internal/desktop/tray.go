@@ -30,7 +30,7 @@ func (a *App) onTrayReady() {
 		// macOS 菜单栏不放长标题，图标 + tooltip 即可，避免挤占状态栏。
 		systray.SetTitle("Aether Cockpit")
 	}
-	systray.SetTooltip("Aether Cockpit · 本地算力网关 " + a.addr)
+	systray.SetTooltip("Aether Cockpit · 本地算力网关 " + a.currentAddr())
 
 	// energye/systray 用回调式 API：每个菜单项注册自己的 Click 处理。
 	mOpen := systray.AddMenuItem("打开主界面", "显示窗口")
@@ -38,9 +38,9 @@ func (a *App) onTrayReady() {
 		wailsruntime.WindowShow(a.ctx)
 	})
 
-	mCopy := systray.AddMenuItem("复制网关地址", "http://"+a.addr)
+	mCopy := systray.AddMenuItem("复制网关地址", "http://"+a.currentAddr())
 	mCopy.Click(func() {
-		addr := "http://" + a.addr
+		addr := "http://" + a.currentAddr()
 		wailsruntime.ClipboardSetText(a.ctx, addr)
 		wailsruntime.MessageDialog(a.ctx, wailsruntime.MessageDialogOptions{
 			Type:    wailsruntime.InfoDialog,
@@ -94,7 +94,7 @@ func buildAppMenu(a *App) *menu.Menu {
 
 	file := m.AddSubmenu("文件")
 	file.Append(menu.Text("复制网关地址", keys.CmdOrCtrl("c"), func(_ *menu.CallbackData) {
-		wailsruntime.ClipboardSetText(a.ctx, "http://"+a.addr)
+		wailsruntime.ClipboardSetText(a.ctx, "http://"+a.currentAddr())
 	}))
 	file.Append(menu.Separator())
 	file.Append(menu.Text("退出", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
@@ -105,8 +105,13 @@ func buildAppMenu(a *App) *menu.Menu {
 	actions.Append(menu.Text("一键全部签到", nil, func(_ *menu.CallbackData) {
 		a.sched.RunAll("menu")
 	}))
+	actions.Append(menu.Text("打开管理界面", nil, func(_ *menu.CallbackData) {
+		wailsruntime.BrowserOpenURL(a.ctx, "http://"+a.currentAddr())
+	}))
 	actions.Append(menu.Text("打开日志目录", nil, func(_ *menu.CallbackData) {
-		wailsruntime.BrowserOpenURL(a.ctx, "http://"+a.addr)
+		if err := openLogDir(); err != nil {
+			wailsruntime.LogError(a.ctx, "打开日志目录失败: "+err.Error())
+		}
 	}))
 
 	return m

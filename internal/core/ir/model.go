@@ -33,4 +33,12 @@ const (
 	// ErrCodePrivacyUnavailable 表示隐私遮蔽已开启但引擎不可用。
 	// 这类请求必须拒绝发送（fail-closed），不能退化成明文上游调用。
 	ErrCodePrivacyUnavailable = "privacy_unavailable"
+	// ErrCodePrivacyBlocked 表示请求命中了"处置方式=拦截"的脱敏规则。
+	// 与 privacy_unavailable（引擎坏了）区分开：这是用户的显式策略，不是故障。
+	ErrCodePrivacyBlocked = "privacy_blocked"
+	// ErrCodePreviousResponseNotFound 对齐 OpenAI Responses 的
+	// previous_response_not_found：客户端引用的上一轮在网关里找不到。
+	// 必须显式报错而不是静默丢历史——Codex 收到它会重开连接并把整段会话重发，
+	// 静默跳过则表现为"模型突然失忆"且无从排查。
+	ErrCodePreviousResponseNotFound = "previous_response_not_found"
 )

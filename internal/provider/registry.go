@@ -40,6 +40,110 @@ func Register(p BaseProvider) {
 	registerOrder = append(registerOrder, m.ID)
 }
 
+// RegisterOrReplace 注册渠道，同 ID 已存在时就地替换。
+//
+// 只给"运行期才出现的渠道"用（目前是 spec 声明的 reverse 渠道）：
+// spec 是热更新的，同一份配置会被反复应用，用 Register 会 panic。
+// 编译期自注册的渠道仍应走 Register——那里的重复是真装配错误，必须炸。
+func RegisterOrReplace(p BaseProvider) {
+	if p == nil {
+		return
+	}
+	m := p.Manifest()
+	if m.ID == "" {
+		return
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := providers[m.ID]; exists {
+		providers[m.ID] = p
+		return
+	}
+	providers[m.ID] = p
+	registerOrder = append(registerOrder, m.ID)
+}
+
+// Unregister 下线一个运行期注册的渠道；返回是否真的删掉了。
+//
+// 用于 spec 被删除/改 ID 的场景。编译期自注册的渠道被删掉后不会再回来，
+// 所以调用方必须只对自己注册过的 ID 调它。
+func Unregister(id string) bool {
+	if id == "" {
+		return false
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, ok := providers[id]; !ok {
+		return false
+	}
+	delete(providers, id)
+	for i, v := range registerOrder {
+		if v == id {
+			registerOrder = append(registerOrder[:i], registerOrder[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+// specChannelReconciler 由"能读 spec 的渠道包"在 init() 里注入。
+//
+// 为什么要这一层间接：按项目约定，核心包（gateway）不 import 任何具体渠道包
+// （见本文件顶部注释）。但 spec 热更新后需要有人把"声明式渠道"同步进注册表，
+// 这件事只有渠道包自己知道怎么做。于是核心只调用这个钩子，具体实现由
+// reverse 包注入——既保持依赖方向，又不需要在 gateway 里写渠道名。
+var (
+	reconcilerMu            sync.RWMutex
+	specChannelReconciler   func()
+	builtinsSnapshotApplied bool
+)
+
+// SetSpecChannelReconciler 由渠道包在 init() 中注入 spec 渠道同步逻辑。
+func SetSpecChannelReconciler(fn func()) {
+	reconcilerMu.Lock()
+	specChannelReconciler = fn
+	reconcilerMu.Unlock()
+}
+
+// ReconcileSpecChannels 让"spec 声明的渠道"与当前 spec 集合一致。
+// 没有注入实现时是空操作（例如只跑了部分渠道包的测试）。
+func ReconcileSpecChannels() {
+	reconcilerMu.RLock()
+	fn := specChannelReconciler
+	reconcilerMu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// SnapshotRegistry 让渠道包在加载 spec 之前记录"当前这些都是内置渠道"。
+// 同样走钩子注入，理由同上。
+func SnapshotRegistry() {
+	reconcilerMu.RLock()
+	fn := registrySnapshotFn
+	reconcilerMu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+	reconcilerMu.Lock()
+	builtinsSnapshotApplied = true
+	reconcilerMu.Unlock()
+}
+
+var registrySnapshotFn func()
+
+// SetRegistrySnapshot 由渠道包注入"给内置渠道拍快照"的实现。
+func SetRegistrySnapshot(fn func()) {
+	reconcilerMu.Lock()
+	if builtinsSnapshotApplied {
+		// 已经拍过快照的进程不再接受新的拍快照实现，避免把 spec 渠道误当内置。
+		reconcilerMu.Unlock()
+		return
+	}
+	registrySnapshotFn = fn
+	reconcilerMu.Unlock()
+}
+
 // Get 按 ID 获取渠道插件。
 func Get(id string) (BaseProvider, bool) {
 	registryMu.RLock()

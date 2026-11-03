@@ -107,8 +107,8 @@ export default {
       version.el.append(
         h('div', { class: 'row' }, h('span', { class: 'name' }, '版本'), h('span', { class: 'grow' }), h('span', { class: 'mono meta' }, d.ver.version || 'dev')),
         h('div', { class: 'row' }, h('span', { class: 'name' }, '构建时间'), h('span', { class: 'grow' }), h('span', { class: 'mono meta' }, d.ver.build_time || '—')),
-        h('div', { class: 'row' }, h('span', { class: 'name' }, '存活 / 就绪'), h('span', { class: 'grow' }), btn('打开 /healthz', { onClick: () => window.open('/healthz', '_blank') }), btn('打开 /readyz', { onClick: () => window.open('/readyz', '_blank') })),
-        h('div', { class: 'row' }, h('span', { class: 'name' }, '指标'), h('span', { class: 'grow' }), btn('打开 /metrics', { onClick: () => window.open('/metrics', '_blank') })));
+        h('div', { class: 'row' }, h('span', { class: 'name' }, '存活 / 就绪'), h('span', { class: 'grow' }), btn('查看 /healthz', { onClick: () => openEndpoint('/healthz') }), btn('查看 /readyz', { onClick: () => openEndpoint('/readyz') })),
+        h('div', { class: 'row' }, h('span', { class: 'name' }, '指标'), h('span', { class: 'grow' }), btn('查看 /metrics', { onClick: () => openEndpoint('/metrics') })));
 
       host.append(service.el, ingress.el, callerKeysCard(), identityCard(), h('div', { class: 'grid-2' }, probes.el, version.el), agentVersionCard());
       const infoWrap = h('div', { class: 'card' });
@@ -291,6 +291,53 @@ export default {
       } catch (e) { toast('探测失败：' + (e.message || e)); }
       state.probing = false;
       render();
+    }
+
+    // 探针端点改在抽屉里看：桌面端 window.open 会单开一个没有标题栏、也没有
+    // Wails 运行时的裸窗口，看完还得先关掉才能回主界面。
+    function openEndpoint(path) {
+      const status = h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' });
+      const out = h('pre', { class: 'code-block', style: 'max-height:52vh;overflow:auto' }, '读取中…');
+      const reload = btn('重新读取', { onClick: () => read() });
+      drawer('探针 · ' + path, (body, foot) => {
+        body.append(status, out);
+        foot.append(btn('复制', { onClick: () => copyText(out.textContent || '') }), reload);
+      });
+      read();
+
+      async function read() {
+        reload.disabled = true;
+        status.replaceChildren(chip('读取中…', 'plain'));
+        try {
+          // 直接 fetch 而不是 api.get：/readyz 未就绪时也要如实展示状态码与
+          // 响应体，不能当成异常吞掉。
+          const res = await fetch(path, { cache: 'no-store' });
+          const text = await res.text();
+          const ct = res.headers.get('content-type') || '';
+          const json = parseJSON(text, ct);
+          out.textContent = json ? JSON.stringify(json, null, 2) : ((text || '').trim() || '（空响应）');
+          // /readyz 用 200 + {"ready":false,"reasons":[...]} 表达"未就绪"，
+          // 只看状态码会误报绿灯，这里并上主体里的结论。
+          const degraded = !!(json && json.ready === false);
+          const reason = degraded && Array.isArray(json.reasons) && json.reasons.length ? String(json.reasons[0]) : '';
+          status.replaceChildren(
+            chip(res.status + (res.statusText ? ' ' + res.statusText : ''), !res.ok ? 'red' : (degraded ? 'amber' : 'green')),
+            reason ? chip(reason, 'plain') : null,
+            h('span', { class: 'meta mono' }, path));
+        } catch (e) {
+          status.replaceChildren(chip('请求失败', 'red'), h('span', { class: 'meta mono' }, path));
+          out.textContent = '无法读取 ' + path + '：' + ((e && e.message) || e);
+        } finally {
+          reload.disabled = false;
+        }
+      }
+    }
+
+    // JSON 端点（/healthz、/readyz）解析成对象供缩进展示；Prometheus 文本原样。
+    function parseJSON(text, contentType) {
+      const raw = (text || '').trim();
+      if (!contentType.includes('json') && !raw.startsWith('{') && !raw.startsWith('[')) return null;
+      try { return JSON.parse(raw); } catch { return null; }
     }
   },
 };

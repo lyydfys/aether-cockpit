@@ -481,6 +481,11 @@ func (g *Gateway) readQuotaFor(env *provider.AccountEnv, timeout time.Duration) 
 	if q.Total > 0 && q.Remaining <= 0 && q.ExpiresAt > time.Now().Unix() {
 		env.MarkDepleted(time.Unix(q.ExpiresAt, 0), "额度已用尽，等待恢复")
 		eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())
+	} else if q.Remaining > 0 && env.State() == provider.StateDepleted {
+		// 充值 / 加量包 / 新的计费窗口：额度回来了就当场解除耗尽。
+		// 否则账号会一直停在 Depleted，直到旧的 resetAt 到期为止。
+		env.MarkReady()
+		eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())
 	}
 	return nil
 }

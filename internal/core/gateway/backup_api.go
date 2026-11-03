@@ -281,6 +281,9 @@ func (g *Gateway) applyBundle(bundle *backupBundle) map[string]bool {
 		g.settings.Profiles = bundle.Settings.Profiles
 		g.settings.ActiveProfile = bundle.Settings.ActiveProfile
 		g.settings.LaunchCommands = bundle.Settings.LaunchCommands
+		g.settings.ModelRedirects = bundle.Settings.ModelRedirects
+		g.settings.ProviderModelMode = bundle.Settings.ProviderModelMode
+		g.settings.ProviderExtraModels = bundle.Settings.ProviderExtraModels
 		if bundle.Settings.Tools != nil {
 			g.settings.Tools = bundle.Settings.Tools
 		}
@@ -298,6 +301,8 @@ func (g *Gateway) applyBundle(bundle *backupBundle) map[string]bool {
 		groups := g.settings.ModelGroupsOverride
 		g.settingsMu.Unlock()
 		g.syncRedactPrefs()
+		g.models.SetModelRedirects(g.modelRedirects())
+		g.models.Rebuild()
 
 		if saveErr == nil && len(groups) > 0 {
 			g.reapplyModelGroups(groups)
@@ -454,6 +459,10 @@ func (g *Gateway) handleBackupPull(w http.ResponseWriter, r *http.Request) {
 }
 
 // reapplyModelGroups 按覆盖配置重建虚拟组（导入备份后调用）。
+//
+// 保留两类成员：已注册的渠道，以及指向"本次备份里同样存在的组"的嵌套引用
+// （group/<id>）。后者以前会被当成非法成员丢掉——导入含嵌套组的备份后，
+// 内层组直接消失，用户只会看到一条"组变少了"的怪现象。
 func (g *Gateway) reapplyModelGroups(groups map[string]json.RawMessage) {
 	for name, raw := range groups {
 		chain, strategy, err := parseModelGroup(raw)
@@ -464,6 +473,12 @@ func (g *Gateway) reapplyModelGroups(groups map[string]json.RawMessage) {
 		for _, pid := range chain {
 			if _, ok := provider.Get(pid); ok {
 				valid = append(valid, pid)
+				continue
+			}
+			if id, ok := nestedGroupRef(pid); ok {
+				if _, exists := groups[id]; exists && id != name {
+					valid = append(valid, pid)
+				}
 			}
 		}
 		if len(valid) > 0 {
