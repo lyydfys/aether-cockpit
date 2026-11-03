@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"aether-cockpit/internal/core/apppaths"
 )
 
 // 同步的本地状态：底稿（上一次成功同步的内容）、part 摘要、跨进程锁。
@@ -36,7 +38,9 @@ func (g *Gateway) syncStatePath() string {
 	if g.cfg.SettingsPath != "" {
 		return filepath.Join(filepath.Dir(g.cfg.SettingsPath), "sync-state.json")
 	}
-	return "sync-state.json"
+	// 没有设置路径时退回标准数据目录，而不是当前工作目录：
+	// 后者会把状态文件写到用户"碰巧在的地方"（测试里就是仓库根目录）。
+	return apppaths.Data("sync-state.json")
 }
 
 // loadSyncState 读本机同步状态；不存在或损坏都按空处理（退化成首次同步）。

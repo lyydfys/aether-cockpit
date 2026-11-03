@@ -75,3 +75,8 @@ docs/AETHER_DEEP_ANALYSIS.md
 docs/**/vs-aether/
 docs/**/AETHER_*.md
 docs/**/*aether*-analysis*.md
+
+# 云同步的运行时状态与锁（正常落在 data/ 下，这里兜底防止落到仓库任意位置）
+sync-state.json
+sync-state.json.lock
+conflicts-*.json
