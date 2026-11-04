@@ -14,6 +14,12 @@ import com.muyuchat.aether.runtime.LibraryMcpAuthApiClient
 import com.muyuchat.aether.runtime.LibrarySnapshot
 import com.muyuchat.aether.runtime.LibraryWriteApiClient
 import com.muyuchat.aether.runtime.ManagementApiException
+import com.muyuchat.aether.runtime.SkillCheckReport
+import com.muyuchat.aether.runtime.SkillInstallResult
+import com.muyuchat.aether.runtime.SkillProbe
+import com.muyuchat.aether.runtime.SkillUpdateResult
+import com.muyuchat.aether.runtime.skillInstallSummary
+import com.muyuchat.aether.runtime.skillUpdateSummary
 import com.muyuchat.aether.runtime.validateLibraryDraft
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -398,6 +404,156 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun dismissMcpTools() {
         _mcpTools.value = McpToolsUiState.Idle
     }
+
+    /* ---------------- 技能：从仓库安装 / 检查更新 / 更新全部 ---------------- */
+
+    private val _skillInstall = MutableStateFlow<SkillInstallUiState>(SkillInstallUiState.Idle)
+    val skillInstall: StateFlow<SkillInstallUiState> = _skillInstall.asStateFlow()
+
+    private val _skillCheck = MutableStateFlow<SkillCheckUiState>(SkillCheckUiState.Idle)
+    val skillCheck: StateFlow<SkillCheckUiState> = _skillCheck.asStateFlow()
+
+    private val _skillUpdate = MutableStateFlow<SkillUpdateUiState>(SkillUpdateUiState.Idle)
+    val skillUpdate: StateFlow<SkillUpdateUiState> = _skillUpdate.asStateFlow()
+
+    /** 探测仓库里的技能（不发写操作）。 */
+    fun probeSkills(source: String) {
+        val trimmed = source.trim()
+        if (trimmed.isEmpty()) {
+            _skillInstall.value = SkillInstallUiState.Failed("先填仓库地址（例如 owner/repo）")
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _skillInstall.value = SkillInstallUiState.Failed("网关未启动")
+            return
+        }
+        _skillInstall.value = SkillInstallUiState.Probing
+        viewModelScope.launch {
+            _skillInstall.value = try {
+                SkillInstallUiState.Probed(withContext(Dispatchers.IO) { client.probeSkills(status, trimmed) })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                SkillInstallUiState.Failed(e.message)
+            } catch (_: Exception) {
+                SkillInstallUiState.Failed("探测失败，请检查仓库地址或网络")
+            }
+        }
+    }
+
+    /** 安装选中的技能：只写网关库（`agents` 恒空），成功后刷新列表。 */
+    fun installSkills(source: String, paths: List<String>) {
+        if (paths.isEmpty()) {
+            _skillInstall.value = SkillInstallUiState.Failed("先探测并勾选要安装的技能")
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _skillInstall.value = SkillInstallUiState.Failed("网关未启动")
+            return
+        }
+        _skillInstall.value = SkillInstallUiState.Installing
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { client.installSkills(status, source, paths) }
+                _skillInstall.value = SkillInstallUiState.Done(result)
+                _notice.value = skillInstallSummary(result)
+                refresh()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _skillInstall.value = SkillInstallUiState.Failed(e.message)
+            } catch (_: Exception) {
+                _skillInstall.value = SkillInstallUiState.Failed("安装失败，请重试")
+            }
+        }
+    }
+
+    /** 检查更新：服务端逐个比对仓库内容，结果落在 `skills[].check`。 */
+    fun checkSkills() {
+        val status = repository.status.value
+        if (!status.running) {
+            _skillCheck.value = SkillCheckUiState.Failed("网关未启动")
+            return
+        }
+        _skillCheck.value = SkillCheckUiState.Checking
+        viewModelScope.launch {
+            _skillCheck.value = try {
+                SkillCheckUiState.Ready(withContext(Dispatchers.IO) { client.checkSkills(status) })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                SkillCheckUiState.Failed(e.message)
+            } catch (_: Exception) {
+                SkillCheckUiState.Failed("检查更新失败，请重试")
+            }
+        }
+    }
+
+    /** 更新全部：服务端只处理"从仓库安装"的技能，成功后刷新列表。 */
+    fun updateAllSkills() {
+        val status = repository.status.value
+        if (!status.running) {
+            _skillUpdate.value = SkillUpdateUiState.Failed("网关未启动")
+            return
+        }
+        _skillUpdate.value = SkillUpdateUiState.Running
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { client.updateAllSkills(status) }
+                _skillUpdate.value = SkillUpdateUiState.Done(result)
+                _notice.value = skillUpdateSummary(result)
+                refresh()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _skillUpdate.value = SkillUpdateUiState.Failed(e.message)
+            } catch (_: Exception) {
+                _skillUpdate.value = SkillUpdateUiState.Failed("更新失败，请重试")
+            }
+        }
+    }
+
+    fun dismissSkillActions() {
+        if (_skillInstall.value !is SkillInstallUiState.Probing &&
+            _skillInstall.value !is SkillInstallUiState.Installing
+        ) {
+            _skillInstall.value = SkillInstallUiState.Idle
+        }
+        if (_skillCheck.value !is SkillCheckUiState.Checking) {
+            _skillCheck.value = SkillCheckUiState.Idle
+        }
+        if (_skillUpdate.value !is SkillUpdateUiState.Running) {
+            _skillUpdate.value = SkillUpdateUiState.Idle
+        }
+    }
+}
+
+/** 从仓库安装技能的三段式状态：探测 → 勾选 → 安装。 */
+sealed interface SkillInstallUiState {
+    data object Idle : SkillInstallUiState
+    data object Probing : SkillInstallUiState
+    data class Probed(val probe: SkillProbe) : SkillInstallUiState
+    data object Installing : SkillInstallUiState
+    data class Done(val result: SkillInstallResult) : SkillInstallUiState
+    data class Failed(val message: String) : SkillInstallUiState
+}
+
+/** 检查更新：服务端逐个比对后的 `skills[].check`。 */
+sealed interface SkillCheckUiState {
+    data object Idle : SkillCheckUiState
+    data object Checking : SkillCheckUiState
+    data class Ready(val report: SkillCheckReport) : SkillCheckUiState
+    data class Failed(val message: String) : SkillCheckUiState
+}
+
+/** 更新全部。 */
+sealed interface SkillUpdateUiState {
+    data object Idle : SkillUpdateUiState
+    data object Running : SkillUpdateUiState
+    data class Done(val result: SkillUpdateResult) : SkillUpdateUiState
+    data class Failed(val message: String) : SkillUpdateUiState
 }
 
 /** MCP 工具开关的页面状态（桌面 `library.js:490-511`）。 */

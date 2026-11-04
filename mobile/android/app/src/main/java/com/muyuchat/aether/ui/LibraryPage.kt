@@ -1,6 +1,8 @@
 package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -17,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,11 +42,19 @@ import com.muyuchat.aether.runtime.LibraryDraft
 import com.muyuchat.aether.runtime.LibraryDraftProblems
 import com.muyuchat.aether.runtime.LibraryEntry
 import com.muyuchat.aether.runtime.LibraryKind
+import com.muyuchat.aether.runtime.skillCheckSummary
+import com.muyuchat.aether.runtime.skillInstallSummary
+import com.muyuchat.aether.runtime.skillProblemLines
+import com.muyuchat.aether.runtime.skillUpdateSummary
+import com.muyuchat.aether.runtime.updatableSkillNames
 import com.muyuchat.core.designsystem.McaButton
+import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
+import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
+import com.muyuchat.core.designsystem.McaShape
 import com.muyuchat.core.designsystem.McaSwitch
 
 /**
@@ -84,12 +95,25 @@ internal fun LibraryPage(
     onToggleMcpTool: (String) -> Unit = {},
     onSaveMcpTools: () -> Unit = {},
     onDismissMcpTools: () -> Unit = {},
+    /** 技能仓库动作（桌面 `library.js:266-274` 的三个按钮 + `:632-694` 安装抽屉）。 */
+    skillInstall: SkillInstallUiState = SkillInstallUiState.Idle,
+    skillCheck: SkillCheckUiState = SkillCheckUiState.Idle,
+    skillUpdate: SkillUpdateUiState = SkillUpdateUiState.Idle,
+    onProbeSkills: ((String) -> Unit)? = null,
+    onInstallSkills: ((String, List<String>) -> Unit)? = null,
+    onCheckSkills: (() -> Unit)? = null,
+    onUpdateAllSkills: (() -> Unit)? = null,
+    onDismissSkillActions: () -> Unit = {},
     onBack: () -> Unit,
     onOpenOverview: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var pendingDelete by remember { mutableStateOf<LibraryEntry?>(null) }
     var showCreate by remember { mutableStateOf(false) }
+    var showSkillInstall by remember { mutableStateOf(false) }
+    var skillSource by remember { mutableStateOf("") }
+    var skillPicked by remember { mutableStateOf(setOf<String>()) }
+    var updateAllConfirm by remember { mutableStateOf(false) }
     var mcpTarget by remember { mutableStateOf<String?>(null) }
     var toolsTarget by remember { mutableStateOf<String?>(null) }
     // 桌面默认停在「指令」页签（library.js:42 `state.tab = 'prompts'`）。
@@ -212,6 +236,61 @@ internal fun LibraryPage(
                         },
                     )
                 }
+                // 技能区的仓库动作（桌面 `library.js:266-274`）：从仓库安装 / 检查更新 / 更新全部。
+                // 这三个都只写网关自有库（见 runtime/LibraryApiClient.kt 的契约注释）。
+                // 回调未接线时整条工具条不出现——宁可没有按钮，也不留一排按不动的灰按钮。
+                if (currentKind == LibraryKind.SKILL && onProbeSkills != null) {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                McaButton(
+                                    onClick = {
+                                        showSkillInstall = true
+                                        skillPicked = emptySet()
+                                        onDismissSkillActions()
+                                    },
+                                    style = McaButtonStyle.Outlined,
+                                    size = McaButtonSize.CardAction,
+                                    enabled = status.running &&
+                                        onProbeSkills != null &&
+                                        skillInstall !is SkillInstallUiState.Installing,
+                                ) { Text("从仓库安装", maxLines = 1) }
+                                McaButton(
+                                    onClick = { onCheckSkills?.invoke() },
+                                    style = McaButtonStyle.Outlined,
+                                    size = McaButtonSize.CardAction,
+                                    enabled = status.running &&
+                                        onCheckSkills != null &&
+                                        skillCheck !is SkillCheckUiState.Checking,
+                                ) {
+                                    Text(
+                                        text = if (skillCheck is SkillCheckUiState.Checking) "检查中…" else "检查更新",
+                                        maxLines = 1,
+                                    )
+                                }
+                                McaButton(
+                                    onClick = { updateAllConfirm = true },
+                                    style = McaButtonStyle.Outlined,
+                                    size = McaButtonSize.CardAction,
+                                    enabled = status.running &&
+                                        onUpdateAllSkills != null &&
+                                        skillUpdate !is SkillUpdateUiState.Running,
+                                ) {
+                                    Text(
+                                        text = if (skillUpdate is SkillUpdateUiState.Running) "更新中…" else "更新全部",
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                            SkillActionPanel(skillInstall, skillCheck, skillUpdate)
+                        }
+                    }
+                }
                 if (visible.isEmpty()) {
                     val copy = libraryEmptyCopy(
                         hasAnyEntry = state.entries.isNotEmpty(),
@@ -307,6 +386,59 @@ internal fun LibraryPage(
                         showCreate = false
                         onClearSaveProblems()
                     }
+                }
+            },
+        )
+    }
+
+    // 从仓库安装（桌面 `library.js:632-694` 的抽屉）：探测 → 勾选 → 安装。
+    // 安装只写网关自有库，不提"装完写进 agent"的选项（`agents` 恒空）。
+    if (showSkillInstall) {
+        SkillInstallDialog(
+            source = skillSource,
+            onSourceChange = { skillSource = it },
+            install = skillInstall,
+            picked = skillPicked,
+            onToggle = { path ->
+                skillPicked = if (skillPicked.contains(path)) skillPicked - path else skillPicked + path
+            },
+            onProbe = { onProbeSkills?.invoke(skillSource) },
+            onInstall = {
+                val probe = (skillInstall as? SkillInstallUiState.Probed)?.probe
+                onInstallSkills?.invoke(probe?.source?.ifBlank { skillSource } ?: skillSource, skillPicked.toList())
+            },
+            onDismiss = {
+                showSkillInstall = false
+                skillPicked = emptySet()
+                onDismissSkillActions()
+            },
+        )
+    }
+
+    if (updateAllConfirm) {
+        McaDialog(
+            onDismissRequest = { updateAllConfirm = false },
+            title = { Text("更新全部技能？", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = "会把所有「从仓库安装」的技能重新拉一遍远端内容并覆盖本地库条目；" +
+                        "本地改过的技能会被服务端拒绝（除非显式替换）。更新前服务端会自动备份上一版。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        updateAllConfirm = false
+                        onUpdateAllSkills?.invoke()
+                    },
+                    style = McaButtonStyle.Primary,
+                ) { Text("更新") }
+            },
+            dismissButton = {
+                McaButton(onClick = { updateAllConfirm = false }, style = McaButtonStyle.Outlined) {
+                    Text("取消")
                 }
             },
         )
@@ -642,4 +774,266 @@ internal fun mcpAuthStateLabel(auth: McpAuthUiState): String = when (auth) {
     is McpAuthUiState.Waiting -> "等待浏览器授权"
     is McpAuthUiState.Done -> if (auth.alreadySignedIn) "已登录" else "登录成功"
     is McpAuthUiState.Failed -> "登录失败：${auth.message}"
+}
+
+/**
+ * 技能仓库动作的结果面板：三段状态里**只显示当前那一段**（后一个动作会覆盖前一个）。
+ *
+ * 失败一律贴服务端原文（`SkillProblem.error` 就是服务端返回的字符串），不重写成"操作失败"。
+ */
+@Composable
+private fun SkillActionPanel(
+    install: SkillInstallUiState,
+    check: SkillCheckUiState,
+    update: SkillUpdateUiState,
+) {
+    val variant = MaterialTheme.colorScheme.onSurfaceVariant
+    when {
+        install is SkillInstallUiState.Probing -> Text(
+            text = "正在探测仓库…",
+            style = MaterialTheme.typography.bodySmall,
+            color = variant,
+        )
+        install is SkillInstallUiState.Installing -> Text(
+            text = "正在安装…（只写网关自有库）",
+            style = MaterialTheme.typography.bodySmall,
+            color = variant,
+        )
+        install is SkillInstallUiState.Failed -> Text(
+            text = install.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        install is SkillInstallUiState.Done -> Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = skillInstallSummary(install.result),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            skillProblemLines(install.result.skipped).take(6).forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+        check is SkillCheckUiState.Checking -> Text(
+            text = "正在检查更新…（服务端逐个比对远端内容）",
+            style = MaterialTheme.typography.bodySmall,
+            color = variant,
+        )
+        check is SkillCheckUiState.Failed -> Text(
+            text = check.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        check is SkillCheckUiState.Ready -> Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = skillCheckSummary(check.report),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            updatableSkillNames(check.report).take(8).forEach { name ->
+                Text(
+                    text = "· $name",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = variant,
+                )
+            }
+            check.report.rows
+                .filter { it.status.equals("unknown", ignoreCase = true) && it.error.isNotBlank() }
+                .take(4)
+                .forEach { row ->
+                    Text(
+                        text = "${row.name}：${row.error}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+        }
+        update is SkillUpdateUiState.Running -> Text(
+            text = "正在更新全部技能…",
+            style = MaterialTheme.typography.bodySmall,
+            color = variant,
+        )
+        update is SkillUpdateUiState.Failed -> Text(
+            text = update.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        update is SkillUpdateUiState.Done -> Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = skillUpdateSummary(update.result),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            skillProblemLines(update.result.unupdated).take(6).forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (update.result.gone.isNotEmpty()) {
+                Text(
+                    text = "来源已删除：${update.result.gone.joinToString("、")}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = variant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 「从仓库安装」对话框（桌面 `library.js:632-694`）：填来源 → 探测 → 勾选 → 安装。
+ *
+ * 与桌面的差异：**没有「安装后写入 agent」那一栏**。服务端只有 `agents` 非空时才写
+ * agent 目录（library_skills_install.go:178-192），手机端不做这件事，所以客户端恒传空数组。
+ */
+@Composable
+private fun SkillInstallDialog(
+    source: String,
+    onSourceChange: (String) -> Unit,
+    install: SkillInstallUiState,
+    picked: Set<String>,
+    onToggle: (String) -> Unit,
+    onProbe: () -> Unit,
+    onInstall: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val probing = install is SkillInstallUiState.Probing
+    val installing = install is SkillInstallUiState.Installing
+    val variant = MaterialTheme.colorScheme.onSurfaceVariant
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("从仓库安装技能", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "来源（GitHub owner/repo、GitLab 地址）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = variant,
+                )
+                Surface(
+                    shape = McaShape.CardAction,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = McaHairline.stroke(),
+                ) {
+                    BasicTextField(
+                        value = source,
+                        onValueChange = onSourceChange,
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    McaButton(
+                        onClick = onProbe,
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                        enabled = source.isNotBlank() && !probing && !installing,
+                    ) { Text(if (probing) "探测中…" else "探测") }
+                    McaButton(
+                        onClick = onInstall,
+                        style = McaButtonStyle.Primary,
+                        size = McaButtonSize.CardAction,
+                        enabled = picked.isNotEmpty() && !installing && install is SkillInstallUiState.Probed,
+                    ) { Text(if (installing) "安装中…" else "安装 ${picked.size} 个") }
+                }
+                when (install) {
+                    SkillInstallUiState.Idle -> Text(
+                        text = "先探测，再勾选要装的技能。安装只写网关自有库，不改桌面 agent 配置。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = variant,
+                    )
+                    SkillInstallUiState.Probing -> Text(
+                        text = "正在探测仓库…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = variant,
+                    )
+                    is SkillInstallUiState.Probed -> {
+                        val probe = install.probe
+                        Text(
+                            text = "${probe.source.ifBlank { source }} · ${probe.candidates.size} 个技能",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = variant,
+                        )
+                        if (probe.candidates.isEmpty()) {
+                            Text(
+                                text = "仓库里没有找到 SKILL.md。下一步：确认仓库里确实有技能目录，或换一个来源。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = variant,
+                            )
+                        }
+                        probe.candidates.forEach { candidate ->
+                            val selected = picked.contains(candidate.path)
+                            McaButton(
+                                onClick = { onToggle(candidate.path) },
+                                style = if (selected) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                                size = McaButtonSize.CardAction,
+                                enabled = !candidate.have,
+                            ) {
+                                Text(
+                                    text = when {
+                                        candidate.have -> "${candidate.name}（已安装）"
+                                        selected -> "✓ ${candidate.name}"
+                                        else -> candidate.name
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                    SkillInstallUiState.Installing -> Text(
+                        text = "正在安装…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = variant,
+                    )
+                    is SkillInstallUiState.Failed -> Text(
+                        text = install.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    is SkillInstallUiState.Done -> Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = skillInstallSummary(install.result),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        skillProblemLines(install.result.skipped).take(6).forEach { line ->
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
+        },
+    )
 }

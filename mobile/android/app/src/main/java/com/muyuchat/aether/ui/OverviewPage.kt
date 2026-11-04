@@ -17,7 +17,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.clickable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +46,7 @@ import com.muyuchat.aether.runtime.OverviewHealthRow
 import com.muyuchat.aether.runtime.OverviewLinksState
 import com.muyuchat.aether.runtime.OverviewProviderLink
 import com.muyuchat.aether.runtime.OverviewQuotaRow
+import com.muyuchat.aether.runtime.providerDetail
 import com.muyuchat.aether.runtime.OverviewStats
 import com.muyuchat.aether.runtime.formatUsageCost
 import com.muyuchat.aether.runtime.formatUsageCount
@@ -52,6 +59,7 @@ import com.muyuchat.aether.runtime.stateLabel
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
+import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
@@ -140,6 +148,7 @@ internal fun OverviewPage(
                 status = state.status,
                 links = links,
                 updatedAtMs = stats?.updatedAtMs ?: 0L,
+                quotas = extras?.quotas.orEmpty(),
             )
         }
         // ④ 额度余量 + 渠道健康（桌面 overview.js:172 的 ov-grid；手机纵向堆叠）
@@ -494,7 +503,14 @@ private fun OnboardingCard(
  * 渠道行只展示 `/api/providers` 与 `/api/usage` 已核实字段；读不到时明说，不补 0 冒充。
  */
 @Composable
-private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?, updatedAtMs: Long) {
+private fun AggregationCard(
+    status: GatewayStatus,
+    links: OverviewLinksState?,
+    updatedAtMs: Long,
+    quotas: List<OverviewQuotaRow> = emptyList(),
+) {
+    // 点节点看详情（桌面 overview.js:416-452 的 select + renderDetail）；弹窗在本卡内即可。
+    var selectedLink by remember { mutableStateOf<OverviewProviderLink?>(null) }
     val baseUrl = if (status.running && status.addr.isNotBlank()) {
         "http://${status.addr}"
     } else {
@@ -595,7 +611,11 @@ private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?, u
             )
             else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 links.providers.forEach { provider ->
-                    ProviderLinkRow(provider = provider, usageLoaded = links.usageLoaded)
+                    ProviderLinkRow(
+                        provider = provider,
+                        usageLoaded = links.usageLoaded,
+                        onClick = { selectedLink = provider },
+                    )
                 }
             }
         }
@@ -606,10 +626,66 @@ private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?, u
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+
+    // 节点详情（桌面 `overview.js:376-413`）：端点 / 渠道（含账号数）/ 最低剩余额度。
+    selectedLink?.let { link ->
+        val detail = providerDetail(link, quotas)
+        McaDialog(
+            onDismissRequest = { selectedLink = null },
+            title = {
+                Text(
+                    text = "渠道详情",
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    detailLine("端点", detail.endpoint, null)
+                    detailLine("渠道", detail.channel, null)
+                    // 无窗口时给「—」并注明原因，绝不画 0%
+                    detailLine("最低剩余", detail.lowest, detail.lowestNote)
+                }
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = { selectedLink = null },
+                    style = McaButtonStyle.Outlined,
+                ) { Text("关闭") }
+            },
+        )
+    }
+}
+
+/** 详情弹窗的一行：标签 + 值（长值不截断，换行展示）+ 可选的补充说明。 */
+@Composable
+private fun detailLine(label: String, value: String, note: String?) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        if (!note.isNullOrBlank()) {
+            Text(
+                text = note,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable
-private fun ProviderLinkRow(provider: OverviewProviderLink, usageLoaded: Boolean) {
+private fun ProviderLinkRow(
+    provider: OverviewProviderLink,
+    usageLoaded: Boolean,
+    onClick: () -> Unit = {},
+) {
     val state = when {
         provider.off -> "已停用"
         provider.readyCount > 0 -> "可用"
@@ -627,7 +703,10 @@ private fun ProviderLinkRow(provider: OverviewProviderLink, usageLoaded: Boolean
         "用量读不到"
     }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "查看 ${provider.name} 详情" },
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(TightGap),
     ) {

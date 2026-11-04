@@ -292,6 +292,24 @@ class SettingsApiClient(
     fun replaceRedactRules(status: GatewayStatus, rules: List<RedactCustomRule>): List<RedactCustomRule> =
         parseSettings(requestJson(status, "/api/settings/redact-rules", "POST", buildRedactRulesJson(rules))).customRules
 
+    /**
+     * 工具服务保存（`POST /api/settings {tools}`）。`savedKeys` 表示哪些子服务的 Key 已存在
+     * （来自 GET 的掩码判定），用于决定"留空"时是否回传哨兵 `******`。
+     */
+    fun saveTools(
+        status: GatewayStatus,
+        draft: ToolsDraft,
+        savedKeys: Map<String, Boolean>,
+    ): SettingsSummary =
+        parseSettings(requestJson(status, "/api/settings", "POST", buildToolsJson(draft, savedKeys)))
+
+    /** 预设保存（新建 id 传空，服务端按名称生成；编辑传原 id）。 */
+    fun savePreset(status: GatewayStatus, draft: PresetDraft): PresetsSnapshot {
+        val payload = buildPresetSaveJson(draft)
+            ?: throw ManagementApiException("invalid_preset", "预设内容不合法，未提交")
+        return parsePresetsSnapshot(requestJson(status, "/api/presets/save", "POST", payload))
+    }
+
     fun editRedactRule(
         status: GatewayStatus,
         at: Int,
@@ -700,7 +718,10 @@ internal fun parseToolsConfig(obj: org.json.JSONObject?): ToolsConfig {
     fun keySaved(name: String): Boolean {
         val sub = obj.optJSONObject(name) ?: return false
         val key = sub.optString("api_key").trim()
-        return key.isNotEmpty() && key != "******"
+        // 服务端只在**存过** Key 时才回掩码 `******`（`tools_api.go:45-47`），
+        // 所以"看到掩码"= 已保存。早前把掩码判成"未保存"，会让页面显示"未配置"
+        // 并让 effectiveToolKey 失去哨兵依据（读写不对称，必测项）。
+        return key.isNotEmpty()
     }
     val web = obj.optJSONObject("web_search")
     val image = obj.optJSONObject("image")
@@ -784,6 +805,230 @@ internal fun presetToggleBody(rawBody: String, id: String, enabled: Boolean): St
 /** 删除预设的请求体（桌面 `settings.js:877`）。 */
 internal fun buildPresetDeleteJson(id: String): String = "{\"id\":${quoteJson(id)}}"
 
+/* ============================================================================
+ * 工具服务编辑（桌面 `settings.js:275-398`）
+ *
+ * 密钥哨兵语义已核（`tools_api.go:75-170`）：
+ *  - 子对象只在**请求里出现**时才应用（`if in.X != nil`）；
+ *  - `api_key == "******"` → 保留旧值；`api_key == ""` 且存在旧值 → **也保留**；
+ *  - 多 Key：带 `api_keys` 且含 `******` → 保留旧列表；不带 → 保留旧列表。
+ * 所以"用户没改 Key"就原样回传哨兵，绝不会清掉已存 Key。
+ * ========================================================================== */
+
+/** 密钥哨兵：GET 回显的打码值，回传它表示"保留已存值"。 */
+internal const val TOOLS_KEY_SENTINEL: String = "******"
+
+data class ToolsEndpointDraft(
+    val baseUrl: String = "",
+    val apiKey: String = "",
+    val model: String = "",
+)
+
+data class ToolsDraft(
+    val webSearchProvider: String = "tavily",
+    val webSearchEndpoint: String = "",
+    val webSearchApiKey: String = "",
+    /** 多 Key（每行一个）；非空即替换现有列表。 */
+    val webSearchApiKeys: List<String> = emptyList(),
+    val webSearchMaxResults: Int = 5,
+    val webSearchKeyOrder: String = "rotate",
+    val image: ToolsEndpointDraft = ToolsEndpointDraft(),
+    val audio: ToolsEndpointDraft = ToolsEndpointDraft(),
+    val video: ToolsEndpointDraft = ToolsEndpointDraft(),
+    val realtime: ToolsEndpointDraft = ToolsEndpointDraft(),
+)
+
+/**
+ * Key 字段实际提交值：
+ *  - 用户输入新值 → 用新值；
+ *  - 留空且服务端已存过 → 回传哨兵 `******`（保留）；
+ *  - 留空且从未存过 → 空串（服务端无旧值可留，结果仍是空）。
+ */
+internal fun effectiveToolKey(typed: String, saved: Boolean): String {
+    val value = typed.trim()
+    return when {
+        value.isNotEmpty() && value != TOOLS_KEY_SENTINEL -> value
+        saved -> TOOLS_KEY_SENTINEL
+        else -> ""
+    }
+}
+
+/** 组装 `POST /api/settings {tools}`；密钥字段一律走 [effectiveToolKey]。 */
+internal fun buildToolsJson(
+    draft: ToolsDraft,
+    savedKeys: Map<String, Boolean> = emptyMap(),
+): String {
+    fun part(name: String, value: ToolsEndpointDraft): String {
+        val key = effectiveToolKey(value.apiKey, savedKeys[name] == true)
+        return buildString {
+            append(quoteJson(name)).append(":{")
+            append("\"base_url\":").append(quoteJson(value.baseUrl.trim()))
+            append(",\"api_key\":").append(quoteJson(key))
+            append(",\"model\":").append(quoteJson(value.model.trim()))
+            append("}")
+        }
+    }
+    val webKeys = draft.webSearchApiKeys.filter { it.isNotBlank() }
+    return buildString {
+        append("{\"tools\":{\"web_search\":{")
+        append("\"provider\":").append(quoteJson(draft.webSearchProvider.trim()))
+        append(",\"endpoint\":").append(quoteJson(draft.webSearchEndpoint.trim()))
+        append(",\"api_key\":")
+            .append(quoteJson(effectiveToolKey(draft.webSearchApiKey, savedKeys["web_search"] == true)))
+        append(",\"max_results\":").append(draft.webSearchMaxResults.coerceIn(1, 20))
+        append(",\"key_order\":").append(quoteJson(draft.webSearchKeyOrder.trim().ifBlank { "rotate" }))
+        if (webKeys.isNotEmpty()) {
+            append(",\"api_keys\":[").append(webKeys.joinToString(",") { quoteJson(it) }).append("]")
+        }
+        append("},")
+        append(part("image", draft.image)).append(",")
+        append(part("audio", draft.audio)).append(",")
+        append(part("video", draft.video)).append(",")
+        append(part("realtime", draft.realtime))
+        append("}}")
+    }
+}
+
+/* ============================================================================
+ * 预设新建/编辑（桌面 `settings.js:847-931`；服务端 `presetSaveInput` request_presets.go:345-354）
+ *
+ * 结构已核：`body` 是 **JSON 对象**（`map[string]any`）、`headers` 是**字符串到字符串的对象**
+ * （`map[string]string`），都不是字符串；`id` 留空由服务端按名称生成（非法 id 会 400）。
+ * ========================================================================== */
+
+data class PresetDraft(
+    val id: String = "",
+    val name: String = "",
+    val description: String = "",
+    val enabled: Boolean = true,
+    val systemPrompt: String = "",
+    val concatSystem: Boolean = false,
+    val bodyJson: String = "{}",
+    val headersJson: String = "{}",
+)
+
+/** 草稿校验：null = 通过；否则为人类可读原因（JSON 错误带行号）。 */
+internal fun validatePresetDraft(draft: PresetDraft): String? {
+    if (draft.name.trim().isEmpty()) {
+        return "名称不能为空"
+    }
+    parseJsonObjectOrError(draft.bodyJson)?.let { return "Body $it" }
+    val headersText = draft.headersJson.trim().ifEmpty { "{}" }
+    parseJsonObjectOrError(headersText)?.let { return "Headers $it" }
+    val headers = runCatching { org.json.JSONObject(headersText) }.getOrNull() ?: return null
+    val keys = headers.keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        if (headers.opt(key) !is String) {
+            return "Headers 的值必须是字符串（键「$key」不是）"
+        }
+    }
+    // 服务端会拒非法 id（`slugify(id) != id` → 400），本地先拦一次，省一次往返。
+    val id = draft.id.trim()
+    if (id.isNotEmpty() && !Regex("^[a-z0-9][a-z0-9-]*$").matches(id)) {
+        return "ID 只能包含小写字母、数字和连字符"
+    }
+    return null
+}
+
+/**
+ * 解析 JSON 对象；失败返回「第 N 行附近：原因」。
+ * `org.json` 的报错通常带 `at character K`，换算成行号比只给一句话有用。
+ */
+internal fun parseJsonObjectOrError(text: String): String? {
+    val trimmed = text.trim().ifEmpty { "{}" }
+    if (trimmed.startsWith("[") || trimmed.startsWith("\"")) {
+        return "需要 JSON 对象，不是数组或字符串"
+    }
+    try {
+        org.json.JSONObject(trimmed)
+    } catch (e: org.json.JSONException) {
+        return jsonErrorMessage(trimmed, e.message.orEmpty())
+    }
+    return null
+}
+
+/**
+ * 把 JSON 解析错误翻成中文提示；**两种 `org.json` 报错格式都要认**：
+ *
+ *  - Android / 新版 org.json：`Missing value at 19 [character 7 line 3]`（方括号里直接给行列，最准）
+ *  - 其它实现：`Unterminated object at character 5`（只给字符偏移，需要自己换算行号）
+ *
+ * 两者都收敛成「JSON 不合法（第 N 行附近）：<原因>」；识别不到位置时退化为不带行号的版本，
+ * 但**绝不丢掉原因**（原因里可能就有用户写错的那个字符）。
+ */
+internal fun jsonErrorMessage(text: String, rawMessage: String): String {
+    val bracket = Regex("""\[character (\d+) line (\d+)]""").find(rawMessage)
+    val atCharacter = Regex("""at character (\d+)""").find(rawMessage)
+    val atNumber = Regex("""\bat (\d+)\b""").find(rawMessage)
+
+    fun lineOf(position: Int): Int {
+        val safe = position.coerceIn(0, text.length)
+        return text.take(safe).count { it == '\n' } + 1
+    }
+
+    val line = when {
+        // 方括号形式自带行号，直接用（不用再猜偏移语义是 0 还是 1 基）。
+        bracket != null -> bracket.groupValues[2].toIntOrNull()
+        atCharacter != null -> atCharacter.groupValues[1].toIntOrNull()?.let(::lineOf)
+        atNumber != null -> atNumber.groupValues[1].toIntOrNull()?.let(::lineOf)
+        else -> null
+    }
+
+    var reason = rawMessage.replace(Regex("""\s*\[character \d+ line \d+]"""), "")
+    Regex("""\sat\s+(character\s+)?\d+""").find(reason)?.let { match ->
+        reason = reason.substring(0, match.range.first)
+    }
+    val clean = reason.trim().ifBlank { "无法解析" }
+    return if (line == null) {
+        "JSON 不合法：$clean"
+    } else {
+        "JSON 不合法（第 $line 行附近）：$clean"
+    }
+}
+
+/** 组装 `POST /api/presets/save`；草稿不合法返回 null（页面据此禁用保存）。 */
+internal fun buildPresetSaveJson(draft: PresetDraft): String? {
+    if (validatePresetDraft(draft) != null) {
+        return null
+    }
+    val body = draft.bodyJson.trim().ifEmpty { "{}" }
+    val headers = draft.headersJson.trim().ifEmpty { "{}" }
+    return buildString {
+        append("{\"id\":").append(quoteJson(draft.id.trim()))
+        append(",\"name\":").append(quoteJson(draft.name.trim()))
+        append(",\"description\":").append(quoteJson(draft.description.trim()))
+        append(",\"enabled\":").append(draft.enabled)
+        append(",\"body\":").append(body)
+        append(",\"headers\":").append(headers)
+        append(",\"system_prompt\":").append(quoteJson(draft.systemPrompt))
+        append(",\"concat_system\":").append(draft.concatSystem)
+        append("}")
+    }
+}
+
+/** 从 `GET /api/presets` 原始响应取一条预设用于编辑回填；找不到返回 null。 */
+internal fun presetDraftFrom(rawBody: String, id: String): PresetDraft? {
+    val root = runCatching { org.json.JSONObject(rawBody.trim()) }.getOrNull() ?: return null
+    val array = root.optJSONArray("presets") ?: return null
+    for (index in 0 until array.length()) {
+        val item = array.optJSONObject(index) ?: continue
+        if (item.optString("id").trim() != id) {
+            continue
+        }
+        return PresetDraft(
+            id = id,
+            name = item.optString("name").trim(),
+            description = item.optString("description").trim(),
+            enabled = item.optBoolean("enabled", true),
+            systemPrompt = item.optString("system_prompt"),
+            concatSystem = item.optBoolean("concat_system", false),
+            bodyJson = item.optJSONObject("body")?.toString(2) ?: "{}",
+            headersJson = item.optJSONObject("headers")?.toString(2) ?: "{}",
+        )
+    }
+    return null
+}
 
 /* ---------------- 新增字段的解析与 JSON 构造（纯函数，单测覆盖） ---------------- */
 

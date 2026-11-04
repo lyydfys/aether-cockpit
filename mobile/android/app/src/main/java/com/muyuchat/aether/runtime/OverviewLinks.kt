@@ -93,6 +93,39 @@ internal fun lowestQuotaWindow(
     return best
 }
 
+/**
+ * 链路节点详情（桌面 `overview.js:376-413` 的 `renderDetail`）：端点 / 渠道 / 最低剩余。
+ *
+ * 缺失值一律给 `—` + 原因，**不显示 0%**（桌面无窗口时写「该渠道没有可读的额度窗口。」）。
+ */
+data class ProviderDetail(
+    val endpoint: String,
+    val channel: String,
+    /** 最低剩余百分比文案；无窗口时为 `—`。 */
+    val lowest: String,
+    /** 最低剩余那一行的补充说明：有窗口时是窗口名，无窗口时是原因。 */
+    val lowestNote: String,
+)
+
+internal fun providerDetail(link: OverviewProviderLink, quotas: List<OverviewQuotaRow>): ProviderDetail {
+    val window = lowestQuotaWindow(quotas, link.id)
+    return ProviderDetail(
+        endpoint = providerEndpointLabel(link.modelIds).ifBlank { "—" },
+        channel = "${link.name} · ${link.accountCount} 个账号",
+        lowest = window?.let { "${formatQuotaPct(it.remainingPct)}%" } ?: "—",
+        lowestNote = window?.windowName ?: "该渠道没有额度窗口",
+    )
+}
+
+/** 百分比文案：整数不补小数点（100 → "100"，44.5 → "44.5"），与额度卡口径一致。 */
+internal fun formatQuotaPct(value: Double): String {
+    if (!value.isFinite()) {
+        return "—"
+    }
+    val rounded = kotlin.math.round(value * 10.0) / 10.0
+    return if (rounded % 1.0 == 0.0) rounded.toLong().toString() else rounded.toString()
+}
+
 /** `/api/providers` + `/api/usage` 合并后的聚合链路状态；两边分别可失败。 */
 data class OverviewLinksState(
     val providersLoaded: Boolean = false,

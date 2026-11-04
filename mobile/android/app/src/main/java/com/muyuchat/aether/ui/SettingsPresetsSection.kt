@@ -6,9 +6,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -19,27 +24,39 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ManagementApiException
+import com.muyuchat.aether.runtime.PresetDraft
 import com.muyuchat.aether.runtime.PresetSummary
 import com.muyuchat.aether.runtime.PresetsSnapshot
 import com.muyuchat.aether.runtime.SettingsApiClient
+import com.muyuchat.aether.runtime.presetDraftFrom
+import com.muyuchat.aether.runtime.validatePresetDraft
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaChip
 import com.muyuchat.core.designsystem.McaDialog
+import com.muyuchat.core.designsystem.McaHairline
+import com.muyuchat.core.designsystem.McaShape
 import kotlinx.coroutines.launch
 
 /**
- * 设置 → 预设（桌面 `settings.js:847-884` 的「请求预设」卡）。
+ * 设置 → 预设（桌面 `settings.js:847-884` 列表 + `:887-931` 编辑抽屉）。
  *
- * 列表 + 启停 + 删除（删除带二次确认，桌面 `:875`）。
- * **新建/编辑不在手机做**：要编辑 Body / Headers 两段 JSON 与系统提示词（桌面 `presetDialog :887-931`），
- * 编辑错一处就改坏所有挂载它的请求；桌面端有完整表单与校验。
+ * 结构已核（`request_presets.go:23-33`、`:345-354`）：
+ *  - `body` 是 **JSON 对象**、`headers` 是**字符串→字符串对象**（都不是字符串）；
+ *  - 保存输入用指针字段：**出现即替换、缺省即保留**。所以编辑时必须把服务端返回的
+ *    完整 body/headers 回填后整体提交——只提交改动过的键会静默清掉未展示字段
+ *    （上轮 `guard_accounts` 就是这个坑的同类）；
+ *  - `id` 留空由服务端按名称生成；非 slug 会 400，本地先用 `validatePresetDraft` 拦。
+ *
+ * 表单里 Body/Headers 直接展示服务端返回的**完整对象**，用户看到什么就写回什么。
  */
 @Composable
 internal fun SettingsPresetsSection(
@@ -52,7 +69,9 @@ internal fun SettingsPresetsSection(
     var error by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var busyId by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<PresetSummary?>(null) }
+    var editing by remember { mutableStateOf<PresetDraft?>(null) }
 
     fun reload() {
         if (!status.running) {
@@ -113,39 +132,87 @@ internal fun SettingsPresetsSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            return@DeepCard
-        }
-        list.forEach { preset ->
-            PresetRow(
-                preset = preset,
-                busy = busyId == preset.id,
-                onToggle = {
-                    if (busyId != null) {
-                        return@PresetRow
-                    }
-                    val current = snapshot ?: return@PresetRow
-                    busyId = preset.id
-                    scope.launch {
-                        try {
-                            snapshot = client.togglePreset(status, current, preset.id, !preset.enabled)
-                            error = null
-                            notice = if (preset.enabled) "已停用「${preset.name}」" else "已启用「${preset.name}」"
-                        } catch (e: ManagementApiException) {
-                            error = "切换失败：${e.message}（错误码：${e.code}）"
-                        } catch (_: Exception) {
-                            error = "切换失败，请重试"
-                        } finally {
-                            busyId = null
+        } else {
+            list.forEach { preset ->
+                PresetRow(
+                    preset = preset,
+                    busy = busyId == preset.id,
+                    onToggle = {
+                        if (busyId != null) {
+                            return@PresetRow
                         }
-                    }
-                },
-                onDelete = { pendingDelete = preset },
-            )
+                        val current = snapshot ?: return@PresetRow
+                        busyId = preset.id
+                        scope.launch {
+                            try {
+                                snapshot = client.togglePreset(status, current, preset.id, !preset.enabled)
+                                error = null
+                                notice = if (preset.enabled) "已停用「${preset.name}」" else "已启用「${preset.name}」"
+                            } catch (e: ManagementApiException) {
+                                error = "切换失败：${e.message}（错误码：${e.code}）"
+                            } catch (_: Exception) {
+                                error = "切换失败，请重试"
+                            } finally {
+                                busyId = null
+                            }
+                        }
+                    },
+                    onEdit = {
+                        // 关键：整对象回填（body/headers 是服务端返回的**完整**对象），不做字段白名单。
+                        val raw = snapshot?.rawBody.orEmpty()
+                        editing = presetDraftFrom(raw, preset.id) ?: PresetDraft(
+                            id = preset.id,
+                            name = preset.name,
+                            description = preset.description,
+                            enabled = preset.enabled,
+                        )
+                    },
+                    onDelete = { pendingDelete = preset },
+                )
+            }
         }
+        Spacer(Modifier.height(12.dp))
+        McaButton(
+            onClick = { editing = PresetDraft() },
+            style = McaButtonStyle.Primary,
+            size = McaButtonSize.CardAction,
+            enabled = !saving,
+        ) { Text("新建预设") }
         Text(
-            text = "预设只做静态 Body / Headers 合并；停用或没有挂载时不会生效。新建与编辑在桌面端。",
+            text = "预设只做静态 Body / Headers 合并；停用或没有挂载时不会生效。" +
+                "Body 不能覆盖 model / stream / messages / tools 等网关自管字段。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    editing?.let { initial ->
+        PresetEditorDialog(
+            initial = initial,
+            saving = saving,
+            onDismiss = { editing = null },
+            onSave = { draft ->
+                if (saving) {
+                    return@PresetEditorDialog
+                }
+                saving = true
+                scope.launch {
+                    try {
+                        client.savePreset(status, draft)
+                        // 重拉确认：列表以后端为准，不用本地回显
+                        snapshot = client.fetchPresets(status)
+                        error = null
+                        notice = if (draft.id.isBlank()) "已新建「${draft.name}」" else "已保存「${draft.name}」"
+                        editing = null
+                    } catch (e: ManagementApiException) {
+                        error = "保存失败：${e.message}（错误码：${e.code}）"
+                    } catch (_: Exception) {
+                        error = "保存失败，请重试"
+                    } finally {
+                        saving = false
+                    }
+                }
+            },
         )
     }
 
@@ -193,11 +260,182 @@ internal fun SettingsPresetsSection(
     }
 }
 
+/**
+ * 新建 / 编辑弹窗。
+ *
+ * Body / Headers 用等宽多行输入，内容就是**服务端返回的完整 JSON 对象**；
+ * 校验失败时显示带行号的原因并**禁用保存**（`validatePresetDraft` + `jsonErrorMessage`）。
+ */
+@Composable
+private fun PresetEditorDialog(
+    initial: PresetDraft,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (PresetDraft) -> Unit,
+) {
+    var draft by remember(initial) { mutableStateOf(initial) }
+    val validation = validatePresetDraft(draft)
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (initial.id.isBlank()) "新建预设" else "编辑预设 · ${initial.name}",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PresetFieldLabel("名称")
+                SettingsLineField(
+                    value = draft.name,
+                    onValueChange = { draft = draft.copy(name = it) },
+                    enabled = !saving,
+                    placeholder = "例如：Codex 缓存",
+                )
+                PresetFieldLabel("说明（可选）")
+                SettingsLineField(
+                    value = draft.description,
+                    onValueChange = { draft = draft.copy(description = it) },
+                    enabled = !saving,
+                    placeholder = "可选",
+                )
+                PresetFieldLabel("ID（留空 = 按名称自动生成；只能用小写字母、数字、连字符）")
+                SettingsLineField(
+                    value = draft.id,
+                    onValueChange = { draft = draft.copy(id = it.filter { ch -> ch.isLetterOrDigit() || ch == '-' }.lowercase()) },
+                    enabled = !saving && initial.id.isBlank(),
+                    placeholder = "留空即可",
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    McaChip(
+                        selected = draft.enabled,
+                        enabled = !saving,
+                        onClick = { draft = draft.copy(enabled = !draft.enabled) },
+                        label = { Text(if (draft.enabled) "已启用" else "已停用") },
+                    )
+                    McaChip(
+                        selected = draft.concatSystem,
+                        enabled = !saving,
+                        onClick = { draft = draft.copy(concatSystem = !draft.concatSystem) },
+                        label = { Text(if (draft.concatSystem) "提示词拼接" else "替换提示词") },
+                    )
+                }
+                PresetFieldLabel("系统提示词（可空）")
+                PresetMultilineField(
+                    value = draft.systemPrompt,
+                    onValueChange = { draft = draft.copy(systemPrompt = it) },
+                    enabled = !saving,
+                    placeholder = "输入系统提示词（用户提示词优先）",
+                    monospace = false,
+                )
+                PresetFieldLabel("Body（JSON 对象）")
+                SettingsJsonField(
+                    value = draft.bodyJson,
+                    onValueChange = { draft = draft.copy(bodyJson = it) },
+                    enabled = !saving,
+                    minHeight = 120.dp,
+                )
+                PresetFieldLabel("Headers（JSON 对象，值必须是字符串）")
+                SettingsJsonField(
+                    value = draft.headersJson,
+                    onValueChange = { draft = draft.copy(headersJson = it) },
+                    enabled = !saving,
+                    minHeight = 96.dp,
+                )
+                if (validation != null) {
+                    Text(
+                        text = validation,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else {
+                    Text(
+                        text = "Body / Headers 展示的就是会整体写回的完整对象；未展示的字段不存在被覆盖的风险。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            McaButton(
+                onClick = { onSave(draft) },
+                style = McaButtonStyle.Primary,
+                enabled = !saving && validation == null,
+            ) { Text(if (saving) "保存中…" else "保存") }
+        },
+        dismissButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("取消") }
+        },
+    )
+}
+
+@Composable
+private fun PresetFieldLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+/** 自由文本多行输入（系统提示词用；JSON 用 [SettingsJsonField]）。 */
+@Composable
+private fun PresetMultilineField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean,
+    placeholder: String,
+    monospace: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = McaShape.CardAction,
+        color = MaterialTheme.colorScheme.surface,
+        border = McaHairline.stroke(),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            enabled = enabled,
+            textStyle = TextStyle(
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                fontFamily = if (monospace) {
+                    androidx.compose.ui.text.font.FontFamily.Monospace
+                } else {
+                    androidx.compose.ui.text.font.FontFamily.Default
+                },
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(12.dp),
+            decorationBox = { inner ->
+                androidx.compose.foundation.layout.Box {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = placeholder,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    inner()
+                }
+            },
+        )
+    }
+}
+
 @Composable
 private fun PresetRow(
     preset: PresetSummary,
     busy: Boolean,
     onToggle: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Column(
@@ -229,6 +467,12 @@ private fun PresetRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            McaButton(
+                onClick = onEdit,
+                style = McaButtonStyle.Text,
+                size = McaButtonSize.CardAction,
+                enabled = !busy,
+            ) { Text("编辑") }
             McaButton(
                 onClick = onDelete,
                 style = McaButtonStyle.Text,
@@ -263,4 +507,4 @@ internal fun presetCountLabel(count: Int): String = if (count <= 0) "未配置" 
 
 internal fun presetEmptyCopy(): String =
     "为什么空：本机还没有任何请求预设。" +
-        "下一步：到桌面端「设置 → 预设」新建一个 Body / Headers 预设，再回来这里启停或删除。"
+        "下一步：点下面「新建预设」直接建一个（Body / Headers 各写一个 JSON 对象即可）。"

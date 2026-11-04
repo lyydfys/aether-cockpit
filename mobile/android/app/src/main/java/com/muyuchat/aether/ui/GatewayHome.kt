@@ -393,6 +393,11 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val libraryActionError by libraryViewModel.actionError.collectAsStateWithLifecycle()
                 val libraryMcpAuth by libraryViewModel.mcpAuth.collectAsStateWithLifecycle()
                 val libraryMcpTools by libraryViewModel.mcpTools.collectAsStateWithLifecycle()
+                // 技能仓库安装/检查更新/更新全部（桌面 library.js:261-285/:632-694）。
+                // 手机端恒传 agents 为空数组，只写网关自有库，不碰桌面 agent 目录。
+                val librarySkillInstall by libraryViewModel.skillInstall.collectAsStateWithLifecycle()
+                val librarySkillCheck by libraryViewModel.skillCheck.collectAsStateWithLifecycle()
+                val librarySkillUpdate by libraryViewModel.skillUpdate.collectAsStateWithLifecycle()
                 LibraryPage(
                     status = state.status,
                     state = libraryState,
@@ -419,6 +424,14 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onToggleMcpTool = libraryViewModel::toggleMcpTool,
                     onSaveMcpTools = libraryViewModel::saveMcpTools,
                     onDismissMcpTools = libraryViewModel::dismissMcpTools,
+                    skillInstall = librarySkillInstall,
+                    skillCheck = librarySkillCheck,
+                    skillUpdate = librarySkillUpdate,
+                    onProbeSkills = libraryViewModel::probeSkills,
+                    onInstallSkills = libraryViewModel::installSkills,
+                    onCheckSkills = libraryViewModel::checkSkills,
+                    onUpdateAllSkills = libraryViewModel::updateAllSkills,
+                    onDismissSkillActions = libraryViewModel::dismissSkillActions,
                     onBack = { showLibrary = false },
                     onOpenOverview = {
                         showLibrary = false

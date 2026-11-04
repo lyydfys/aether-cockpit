@@ -8,6 +8,7 @@ import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 
 /** 资源库条目所属的仓库。四个仓库的删除端点各不相同，不能混用。 */
 enum class LibraryKind(val label: String) {
@@ -76,6 +77,13 @@ class LibraryApiClient(
     private val connectTimeoutMs: Int = 5_000,
     private val readTimeoutMs: Int = 10_000,
 ) {
+    /**
+     * 仓库类动作（probe/install/check/update-all）的超时：服务端自己的预算是 20/30/60 秒
+     * （`library_skills_install.go:351/394`、`library_skills_update.go:123/169`），
+     * 客户端必须比它长，否则会先超时把"服务端还在干活"误报成网络错误。
+     */
+    private val SkillsNetworkTimeoutMs: Int = 90_000
+
     fun fetchLibrary(status: GatewayStatus): LibrarySnapshot =
         parseLibrary(request(status, "GET", "/api/library", null))
 
@@ -101,13 +109,76 @@ class LibraryApiClient(
         request(status, "POST", "/api/library/servers/tools", buildMcpToolsJson(name, disabled))
     }
 
-    private fun request(status: GatewayStatus, method: String, path: String, body: String?): String {
+    /**
+     * 探测仓库里的技能：`POST /api/library/skills/probe {source}`（`gateway.go:1041`）。
+     *
+     * `source` 可以是 GitHub `owner/repo`、GitLab 地址或本机文件夹。**手机端只对网络仓库有意义**：
+     * 服务端会用 `classifySkillSource` 判断类型，本机文件夹那条路在手机上读不到桌面路径。
+     */
+    fun probeSkills(status: GatewayStatus, source: String): SkillProbe =
+        parseSkillProbe(
+            request(
+                status = status,
+                method = "POST",
+                path = "/api/library/skills/probe",
+                body = buildSkillSourceJson(source),
+                timeoutMs = SkillsNetworkTimeoutMs,
+            ),
+        )
+
+    /**
+     * 安装选中的技能：`POST /api/library/skills/install {source, paths, agents}`（`gateway.go:1042`）。
+     *
+     * `agents` 恒为空（见 [buildSkillInstallJson]）：只写网关自有库，不写 agent 目录。
+     */
+    fun installSkills(status: GatewayStatus, source: String, paths: List<String>): SkillInstallResult =
+        parseSkillInstallResult(
+            request(
+                status = status,
+                method = "POST",
+                path = "/api/library/skills/install",
+                body = buildSkillInstallJson(source, paths),
+                timeoutMs = SkillsNetworkTimeoutMs,
+            ),
+        )
+
+    /** 检查更新：`POST /api/library/skills/check`（服务端逐个比对远端内容，可能跑满 30s）。 */
+    fun checkSkills(status: GatewayStatus): SkillCheckReport =
+        parseSkillChecks(
+            request(
+                status = status,
+                method = "POST",
+                path = "/api/library/skills/check",
+                body = "{}",
+                timeoutMs = SkillsNetworkTimeoutMs,
+            ),
+        )
+
+    /** 更新全部：`POST /api/library/skills/update-all`（服务端自己挑出"从仓库安装"的技能）。 */
+    fun updateAllSkills(status: GatewayStatus): SkillUpdateResult =
+        parseSkillUpdateResult(
+            request(
+                status = status,
+                method = "POST",
+                path = "/api/library/skills/update-all",
+                body = "{}",
+                timeoutMs = SkillsNetworkTimeoutMs,
+            ),
+        )
+
+    private fun request(
+        status: GatewayStatus,
+        method: String,
+        path: String,
+        body: String?,
+        timeoutMs: Int = readTimeoutMs,
+    ): String {
         if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
             throw ManagementApiException("gateway_not_running", "网关未启动")
         }
         val connection = (URL("http://${status.addr}$path").openConnection() as HttpURLConnection)
         connection.connectTimeout = connectTimeoutMs
-        connection.readTimeout = readTimeoutMs
+        connection.readTimeout = timeoutMs
         connection.requestMethod = method
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
@@ -252,3 +323,274 @@ internal fun parseMcpToolList(body: String, name: String): McpToolList {
         detail = result?.optString("detail").orEmpty().trim(),
     )
 }
+
+/* ============================================================================
+ * 技能：从仓库安装 / 检查更新 / 更新全部
+ *
+ * 端点（`internal/core/gateway/gateway.go`）：
+ * - `POST /api/library/skills/probe`      `gateway.go:1041` → `handleSkillsProbe`（library_skills_install.go:346）
+ * - `POST /api/library/skills/install`    `gateway.go:1042` → `handleSkillsInstall`（:380）
+ * - `POST /api/library/skills/check`      `gateway.go:1043` → `handleSkillsCheck`（library_skills_update.go:122）
+ * - `POST /api/library/skills/update-all` `gateway.go:1045` → `handleSkillsUpdateBulk`（:156）
+ *
+ * **写的是网关自有库，不是 agent 目录**：install 最终落到 `g.library.SaveSkill(...)`
+ * （library_skills_install.go:168），update 走 `g.library.BackupContent` + `SaveSkill`
+ * （library_skills_update.go:107-116）。只有请求体里 `agents` 非空时才会额外
+ * `ApplySkillAs` 写进 agent 目录（:178-192）——所以手机端**恒传 `agents: []`**，
+ * 只动本机库，绝不碰桌面 agent 配置。
+ * ========================================================================== */
+
+/** 仓库里探测到的一个候选技能（`handleSkillsProbe` 的 `candidates[]`）。 */
+data class SkillCandidate(
+    val name: String,
+    val path: String,
+    val description: String,
+    /** 库里已经有同名技能（桌面把它置灰，不允许重复勾选）。 */
+    val have: Boolean,
+)
+
+data class SkillProbe(
+    val source: String,
+    val kind: String,
+    val candidates: List<SkillCandidate>,
+)
+
+/** 一条"哪一项失败了、服务端原话是什么"。 */
+data class SkillProblem(val what: String, val error: String)
+
+/** install/move 的结果（`handleSkillsInstall` 的 `result`）。 */
+data class SkillInstallResult(
+    val installed: List<String> = emptyList(),
+    val had: List<String> = emptyList(),
+    val applied: List<String> = emptyList(),
+    val skipped: List<SkillProblem> = emptyList(),
+)
+
+/** 单个技能的更新检查结果（library view 里 `skills[].check`，library_api.go:326-328）。 */
+data class SkillCheckRow(val name: String, val status: String, val error: String)
+
+data class SkillCheckReport(val rows: List<SkillCheckRow>)
+
+/** 更新全部的结果（`handleSkillsUpdateBulk` 的 `result`）。 */
+data class SkillUpdateResult(
+    val updated: List<String> = emptyList(),
+    val unupdated: List<SkillProblem> = emptyList(),
+    val gone: List<String> = emptyList(),
+)
+
+/** `{"source":…}`：探测与安装共用（桌面 `library.js:655/685`）。 */
+internal fun buildSkillSourceJson(source: String): String =
+    JSONObject().put("source", source.trim()).toString()
+
+/**
+ * `{"source":…,"paths":[…],"agents":[]}`。
+ *
+ * **`agents` 恒为空数组**：服务端只有 agents 非空才会往 agent 目录写（install:178-192），
+ * 手机端不提供"装完写进 agent"的选项，避免越过写集去改桌面配置。
+ */
+internal fun buildSkillInstallJson(source: String, paths: List<String>): String {
+    val array = JSONArray()
+    paths.map { it.trim() }.filter { it.isNotEmpty() }.distinct().forEach { array.put(it) }
+    return JSONObject()
+        .put("source", source.trim())
+        .put("paths", array)
+        .put("agents", JSONArray())
+        .toString()
+}
+
+/**
+ * 从候选路径推技能名：取 `SKILL.md` 的**父目录名**，不是文件名。
+ *
+ * 与桌面/服务端同一口径：`probeGitHubSkills` 用 `name := path.Base(path.Dir(p))`
+ * （`library_skills_install.go:213-217`），所以 `skills/pdf/SKILL.md` 的名字是 `pdf`。
+ * 早先这里写成 `path.substringAfterLast('/')` 会得到 `SKILL.md`——一个所有技能都同名的错值。
+ *
+ * 根目录的 `SKILL.md`（`path.Dir` 为 `.`）服务端会回退成仓库名，客户端拿不到仓库名，
+ * 只好回退成文件名；这种情况会被页面的勾选列表如实显示出来，不做猜测。
+ */
+internal fun skillNameFromPath(path: String): String {
+    val trimmed = path.trim()
+    val parent = trimmed.substringBeforeLast('/', missingDelimiterValue = "").substringAfterLast('/')
+    return parent.ifBlank { trimmed.substringAfterLast('/') }
+}
+
+internal fun parseSkillProbe(body: String): SkillProbe {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "探测仓库技能返回的数据格式不正确")
+    }
+    val candidates = ArrayList<SkillCandidate>()
+    val array = root.optJSONArray("candidates")
+    if (array != null) {
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val path = item.optString("path").trim()
+            if (path.isEmpty()) {
+                continue
+            }
+            candidates.add(
+                SkillCandidate(
+                    // 服务端一般已经给了 name；缺的时候按父目录名补（与桌面同一口径）。
+                    name = item.optString("name").trim().ifBlank { skillNameFromPath(path) },
+                    path = path,
+                    description = item.optString("description").trim(),
+                    have = item.optBoolean("have", false),
+                ),
+            )
+        }
+    }
+    return SkillProbe(
+        source = root.optString("source").trim(),
+        kind = root.optString("kind").trim(),
+        candidates = candidates,
+    )
+}
+
+internal fun parseSkillInstallResult(body: String): SkillInstallResult {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "安装技能返回的数据格式不正确")
+    }
+    val result = root.optJSONObject("result") ?: JSONObject()
+    return SkillInstallResult(
+        installed = stringList(result.optJSONArray("installed")),
+        had = stringList(result.optJSONArray("had")),
+        applied = stringList(result.optJSONArray("applied")),
+        skipped = skillProblems(result.optJSONArray("skipped")),
+    )
+}
+
+/**
+ * 更新检查的回包就是资源库全量视图（`writeLibraryView` → `libraryPluginView`）。
+ * 只读 `skills[].check{status,error}`：没有 check 的技能表示本轮没查到（不是"最新"）。
+ */
+internal fun parseSkillChecks(body: String): SkillCheckReport {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "检查技能更新返回的数据格式不正确")
+    }
+    val rows = ArrayList<SkillCheckRow>()
+    val array = root.optJSONArray("skills")
+    if (array != null) {
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val name = item.optString("name").trim()
+            if (name.isEmpty()) {
+                continue
+            }
+            val check = item.optJSONObject("check") ?: continue
+            val status = check.optString("status").trim()
+            if (status.isEmpty()) {
+                continue
+            }
+            rows.add(
+                SkillCheckRow(
+                    name = name,
+                    status = status,
+                    error = check.optString("error").trim(),
+                ),
+            )
+        }
+    }
+    return SkillCheckReport(rows = rows.sortedBy { it.name })
+}
+
+internal fun parseSkillUpdateResult(body: String): SkillUpdateResult {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "更新技能返回的数据格式不正确")
+    }
+    val result = root.optJSONObject("result") ?: JSONObject()
+    return SkillUpdateResult(
+        updated = stringList(result.optJSONArray("updated")),
+        unupdated = skillProblems(result.optJSONArray("unupdated")),
+        gone = stringList(result.optJSONArray("gone")),
+    )
+}
+
+private fun stringList(array: JSONArray?): List<String> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        array.optString(index).trim().takeIf { it.isNotEmpty() }
+    }
+}
+
+/**
+ * 把服务端的 `skipped[]` / `unupdated[]` 折成可显示的行。
+ *
+ * **一条都不能静默丢弃**：这两个数组的长度就是结论行里"跳过 N 个 / 未更新 N 个"的来源
+ * （[skillInstallSummary] / [skillUpdateSummary] 数的是折完之后的条数）。如果某个元素
+ * 字段缺失就把它丢掉，用户会看到"跳过 1 个"却一条明细都没有，等于把失败原因咽掉。
+ * 所以字段全空时补成「未知项：未返回原因」——用户看到的是"有一项失败了，但服务端没说是哪项"。
+ */
+private fun skillProblems(array: JSONArray?): List<SkillProblem> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        // 数组里塞 null 是畸形元素（连对象都不是），不是"一条失败"，这种才跳过。
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val what = item.optString("what").trim()
+        val error = item.optString("error").trim()
+        SkillProblem(what = what.ifBlank { "未知项" }, error = error.ifBlank { "未返回原因" })
+    }
+}
+
+/** 检查结果的用户可读说法（桌面 `checkChip`，library.js:625-630）。 */
+internal fun skillCheckLabel(status: String): String = when (status.lowercase(Locale.US)) {
+    "update" -> "可更新"
+    "current" -> "最新"
+    "gone" -> "来源已删除"
+    "unknown" -> "检查失败"
+    else -> status.ifBlank { "未检查" }
+}
+
+/** 只有 `status == update` 的技能能被更新（桌面「可更新」chip 同一口径）。 */
+internal fun updatableSkillNames(report: SkillCheckReport): List<String> =
+    report.rows.filter { it.status.equals("update", ignoreCase = true) }.map { it.name }
+
+/** 结论行：可更新 / 最新 / 来源已删除 / 检查失败；空报告直说"没查到"。 */
+internal fun skillCheckSummary(report: SkillCheckReport): String {
+    if (report.rows.isEmpty()) {
+        return "没有查到可比较的技能：只有「从仓库安装」的技能（带 repo + 路径）才会参与检查。"
+    }
+    fun count(status: String) = report.rows.count { it.status.equals(status, ignoreCase = true) }
+    return "可更新 ${count("update")} · 最新 ${count("current")} · " +
+        "来源已删除 ${count("gone")} · 检查失败 ${count("unknown")}"
+}
+
+/** 安装结论：安装 / 已存在 / 跳过 / 写入 agent（恒 0，手机端不写 agent 目录）。 */
+internal fun skillInstallSummary(result: SkillInstallResult): String {
+    val parts = mutableListOf("已安装 ${result.installed.size} 个")
+    if (result.had.isNotEmpty()) {
+        parts.add("已存在 ${result.had.size} 个")
+    }
+    if (result.skipped.isNotEmpty()) {
+        parts.add("跳过 ${result.skipped.size} 个")
+    }
+    parts.add("写入 agent ${result.applied.size} 个")
+    return parts.joinToString(" · ")
+}
+
+/** 更新结论：已更新 / 未更新 / 来源已删除。 */
+internal fun skillUpdateSummary(result: SkillUpdateResult): String {
+    val parts = mutableListOf("已更新 ${result.updated.size} 个")
+    if (result.unupdated.isNotEmpty()) {
+        parts.add("未更新 ${result.unupdated.size} 个")
+    }
+    if (result.gone.isNotEmpty()) {
+        parts.add("来源已删除 ${result.gone.size} 个")
+    }
+    return parts.joinToString(" · ")
+}
+
+/** 失败项逐条文案（`what：error`），给结果面板用。 */
+internal fun skillProblemLines(problems: List<SkillProblem>): List<String> =
+    problems.map { "${it.what}：${it.error}" }
+

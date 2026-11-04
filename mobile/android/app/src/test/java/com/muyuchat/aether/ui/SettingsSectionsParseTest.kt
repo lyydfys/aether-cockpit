@@ -161,8 +161,8 @@ class SettingsSectionsParseTest {
         assertEquals("tavily", tools.webSearchProvider)
         assertEquals(2, tools.webSearchKeyCount)
         assertEquals(5, tools.webSearchMaxResults)
-        // ****** 视为"未保存"（那是打码值，不是真 Key）
-        assertTrue(!tools.imageKeySaved)
+        // 服务端只在**存过** Key 时才回掩码 `******`（tools_api.go:45-47）→ 看到掩码就是"已保存"。
+        assertTrue(tools.imageKeySaved)
         assertTrue(tools.audioKeySaved)
         assertTrue(!tools.videoKeySaved)
 
