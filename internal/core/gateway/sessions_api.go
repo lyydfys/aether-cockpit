@@ -161,7 +161,7 @@ func (g *Gateway) buildSessionsManage(agent string) map[string]any {
 	list := make([]map[string]any, 0, len(byAgent[agent]))
 	for _, s := range byAgent[agent] {
 		// resume 覆盖扫描器支持的全部三个客户端（原来只给 Claude Code 拼）。
-		resume := resumeCommand(s.Agent, s.ID)
+		resume := g.resumeCommand(s.Agent, s.ID)
 		// 本机会话可删（进回收站，可恢复）；WSL 会话跨发行版搬运风险高，标不可删。
 		deletable := s.WSL == "" && strings.TrimSpace(s.Path) != ""
 		list = append(list, map[string]any{

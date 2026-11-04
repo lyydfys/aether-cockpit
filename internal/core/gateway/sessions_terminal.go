@@ -29,12 +29,41 @@ var resumeCommands = map[string]string{
 // resumeCommand 返回某会话的重开命令；不支持的 agent 返回空串。
 //
 // 会话 ID 只允许安全字符：它会被拼进一条要交给 shell 的命令行。
-func resumeCommand(agent, id string) string {
-	tpl, ok := resumeCommands[strings.ToLower(strings.TrimSpace(agent))]
-	if !ok || !safeSessionID(id) {
+// 模板来源：用户设置里的覆盖优先，其次是内置的三个。
+//
+// 为什么允许用户覆盖：各客户端"续接上次会话"的参数并不统一（有的 --resume、
+// 有的 resume 子命令、有的 --session），猜错就是给用户一条跑不通的命令。
+// 让用户自己填模板，既覆盖了未知客户端，也不用我们为每个 agent 发一次版。
+func (g *Gateway) resumeCommand(agent, id string) string {
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	if agent == "" || !safeSessionID(id) {
+		return ""
+	}
+	tpl := ""
+	if g != nil {
+		g.settingsMu.Lock()
+		tpl = strings.TrimSpace(g.settings.ResumeCommands[agent])
+		g.settingsMu.Unlock()
+	}
+	if !validResumeTemplate(tpl) {
+		// 用户模板不合法（缺 %s 或占位符过多）时退回内置，而不是拼出坏命令。
+		tpl = resumeCommands[agent]
+	}
+	if tpl == "" {
 		return ""
 	}
 	return fmt.Sprintf(tpl, id)
+}
+
+// validResumeTemplate 校验模板：必须且只能有一个 %s 占位符（会话 ID）。
+//
+// 为什么不允许多个：多出来的占位符拿不到参数，会被格式化成 "%!s(MISSING)"，
+// 交给 shell 就是一条坏命令；而且模板最终会进终端，越简单越安全。
+func validResumeTemplate(tpl string) bool {
+	if tpl == "" || strings.Contains(tpl, "%%") {
+		return false
+	}
+	return strings.Count(tpl, "%s") == 1
 }
 
 // safeSessionID 限制会话 ID 的字符集，避免把任意内容拼进 shell 命令行。
@@ -68,7 +97,7 @@ func (g *Gateway) handleSessionTerminal(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体解析失败: " + err.Error()})
 		return
 	}
-	command := resumeCommand(body.Agent, body.ID)
+	command := g.resumeCommand(body.Agent, body.ID)
 	if command == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "暂不支持在该客户端重开会话: " + strings.TrimSpace(body.Agent),

@@ -169,6 +169,12 @@ type runtimeSettings struct {
 	// CustomChannels 是用户自建的渠道（任意 OpenAI/Anthropic 兼容端点）。
 	// 与内置渠道走同一套实现，只是配置来自这里而不是编译期常量。
 	CustomChannels []CustomChannel `json:"custom_channels,omitempty"`
+	// ResumeCommands 覆盖/扩展"会话在终端重开"的命令模板（agent → 命令）。
+	//
+	// 内置只收录了确认过命令形态的三个客户端；其余客户端各家的"续接上次会话"
+	// 参数不统一，猜错会给用户一条跑不通的命令。让用户自己填模板，既覆盖了
+	// 未知客户端，也不需要我们为每个 agent 发一次版。
+	ResumeCommands map[string]string `json:"resume_commands,omitempty"`
 	// ProviderOrder 是渠道页的展示/优先级顺序。
 	ProviderOrder []string `json:"provider_order,omitempty"`
 	// ProviderBalances 是渠道自定义余额接口（aether 的 balanceURL / balancePath）。

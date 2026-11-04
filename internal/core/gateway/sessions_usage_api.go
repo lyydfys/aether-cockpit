@@ -145,7 +145,7 @@ func (g *Gateway) sessionViewOf(s sessions.Session, prices map[string]ModelPrice
 	})
 	v.Priced = !v.Unpriced
 	// 三个已支持客户端都给重开命令（与 manage 端点用同一套模板）。
-	v.Resume = resumeCommand(s.Agent, s.ID)
+	v.Resume = g.resumeCommand(s.Agent, s.ID)
 	if withPath {
 		v.Path = s.Path
 	}
