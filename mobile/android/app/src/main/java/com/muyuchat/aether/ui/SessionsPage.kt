@@ -518,13 +518,14 @@ private fun SessionUsageRowCard(name: String, detail: String) {
     DeepCard {
         Text(
             text = name,
-            style = MaterialTheme.typography.titleSmall,
+            // UI_REFRESH_SPEC §1.1：行主文本用 bodyMedium（Bold/Medium 只作轻强调）
+            style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             text = detail,
             style = MaterialTheme.typography.bodySmall,
