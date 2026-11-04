@@ -12,10 +12,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +27,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +49,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.CheckinVendor
+import com.muyuchat.aether.runtime.MoveDirection
+import com.muyuchat.aether.runtime.moveProvider
 import com.muyuchat.aether.runtime.QuotaHistoryAccount
 import com.muyuchat.aether.runtime.QuotaHistoryLine
 import com.muyuchat.aether.runtime.QuotaHistoryPoint
@@ -69,6 +74,7 @@ import com.muyuchat.aether.runtime.vendorCheckinSummary
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
+import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
@@ -107,6 +113,14 @@ internal fun UsagePage(
     // 额度历史与周期估算：本节自己读（不改 GatewayHome 的接线点）。
     val quotaHistory by viewModel.quotaHistory.collectAsStateWithLifecycle()
     val quotaHolds by viewModel.quotaHolds.collectAsStateWithLifecycle()
+    // 卡片顺序：纯本地偏好（服务端 `/api/usage/arrange` 是空实现，见 UsageCardKey 上方注释）。
+    // 存成逗号串而不是 List<String>：`rememberSaveable` 的自动 saver 对 ArrayList 之外
+    // 的集合类型不稳，字符串是 Bundle 里最稳的形态。
+    var cardOrderRaw by rememberSaveable { mutableStateOf(DefaultUsageCardOrder.joinToString(",")) }
+    val cardOrder = remember(cardOrderRaw) {
+        normalizeUsageCardOrder(cardOrderRaw.split(","))
+    }
+    var showCardOrder by remember { mutableStateOf(false) }
     val vendorCheckin by viewModel.vendorCheckin.collectAsStateWithLifecycle()
     LaunchedEffect(status.running) {
         if (status.running) {
@@ -126,14 +140,71 @@ internal fun UsagePage(
             Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
                 MobileHeader(status)
                 UsageTitle(state, onRefresh)
-                UsageScopeBar(
-                    period = period,
-                    onPeriod = onPeriod,
-                    currency = currency,
-                    usdCny = rate,
-                    pricingKnown = pricing != null,
-                    onCurrency = viewModel::setCurrency,
-                )
+            }
+        }
+        // 卡片内容按 `cardOrder` 顺序渲染（顺序是纯本地偏好）。
+        // 时间范围条也在其中：它跟其它卡一样是"页面上的一块"，但不包含页头标题。
+        cardOrder.forEach { key ->
+            item(key = key) {
+                when (key) {
+                    UsageCardKey.SCOPE.name -> UsageScopeBar(
+                        period = period,
+                        onPeriod = onPeriod,
+                        currency = currency,
+                        usdCny = rate,
+                        pricingKnown = pricing != null,
+                        onCurrency = viewModel::setCurrency,
+                        onOpenCardOrder = { showCardOrder = true },
+                    )
+                    UsageCardKey.KPI.name -> (state as? UsageUiState.Ready)?.let { ready ->
+                        UsageKpiCard(ready.summary, period, currency, rate)
+                    }
+                    UsageCardKey.TREND.name -> (state as? UsageUiState.Ready)?.let { ready ->
+                        UsageTrendCard(ready.summary.series, period, currency, rate)
+                    }
+                    UsageCardKey.BREAKDOWN.name -> (state as? UsageUiState.Ready)?.let { ready ->
+                        UsageBreakdownCard(
+                            summary = ready.summary,
+                            breakdown = breakdown,
+                            onBreakdown = viewModel::setBreakdown,
+                            currency = currency,
+                            rate = rate,
+                            onOpenOverview = onOpenOverview,
+                        )
+                    }
+                    UsageCardKey.CHECKIN.name -> (state as? UsageUiState.Ready)?.let {
+                        UsageVendorCheckinCard(
+                            state = vendorCheckin,
+                            onCheckin = viewModel::checkinVendor,
+                            onDismiss = viewModel::dismissVendorCheckin,
+                        )
+                    }
+                    UsageCardKey.QUOTA_HISTORY.name -> (state as? UsageUiState.Ready)?.let {
+                        UsageQuotaHistoryCard(
+                            history = quotaHistory,
+                            holds = quotaHolds,
+                            onRetry = { viewModel.loadQuotaHistory() },
+                        )
+                    }
+                    UsageCardKey.CALENDAR.name -> (state as? UsageUiState.Ready)?.let {
+                        when (detail) {
+                            UsageDetailUiState.Idle, UsageDetailUiState.Loading ->
+                                UsageLoadingCard("正在读取用量日历…")
+                            is UsageDetailUiState.Failed -> DeepStateCard(
+                                title = "用量日历读不到",
+                                detail = usageDetailErrorLine(detail.code, detail.message),
+                                tone = DeepTone.Danger,
+                                actionLabel = "重试",
+                                onAction = onRefreshDetail,
+                            )
+                            is UsageDetailUiState.Ready -> UsageHeatmapSection(
+                                days = detail.heatmap.recentDays(30, java.time.LocalDate.now().toString()),
+                                error = detail.errors["heatmap"],
+                                rangeLabel = usageCalendarRangeLabel(detail.heatmap.from, detail.heatmap.to),
+                            )
+                        }
+                    }
+                }
             }
         }
         currencyError?.let { message ->
@@ -145,6 +216,8 @@ internal fun UsagePage(
                 )
             }
         }
+        // 空/加载/失败态仍然是**固定位置**（在卡片区之上），不参与排序：
+        // 这时候页面上没有可排序的卡片，把错误挪到 KPI 下面就说不清"哪块失败了"。
         when (state) {
             UsageUiState.Idle -> item {
                 DeepStateCard(
@@ -165,59 +238,7 @@ internal fun UsagePage(
                     onAction = onRefresh,
                 )
             }
-            is UsageUiState.Ready -> {
-                val summary = state.summary
-                // ① KPI 四格（桌面 usage.js:96-101）
-                item { UsageKpiCard(summary, period, currency, rate) }
-                // ② 趋势（桌面 usage.js:104-211）
-                item { UsageTrendCard(summary.series, period, currency, rate) }
-                // ③ 用量分布（桌面 usage.js:213-237）
-                item {
-                    UsageBreakdownCard(
-                        summary = summary,
-                        breakdown = breakdown,
-                        onBreakdown = viewModel::setBreakdown,
-                        currency = currency,
-                        rate = rate,
-                        onOpenOverview = onOpenOverview,
-                    )
-                }
-                // ④ 渠道每日签到（`POST /api/usage/{vendor}-checkin`）
-                item {
-                    UsageVendorCheckinCard(
-                        state = vendorCheckin,
-                        onCheckin = viewModel::checkinVendor,
-                        onDismiss = viewModel::dismissVendorCheckin,
-                    )
-                }
-                // ⑤ 额度历史 + 周期估算（`GET /api/usage/quotas/history` 与 `/history/holds`）
-                item {
-                    UsageQuotaHistoryCard(
-                        history = quotaHistory,
-                        holds = quotaHolds,
-                        onRetry = { viewModel.loadQuotaHistory() },
-                    )
-                }
-                // ⑤ 用量日历（桌面 usage.js:251-345）
-                item {
-                    when (detail) {
-                        UsageDetailUiState.Idle, UsageDetailUiState.Loading ->
-                            UsageLoadingCard("正在读取用量日历…")
-                        is UsageDetailUiState.Failed -> DeepStateCard(
-                            title = "用量日历读不到",
-                            detail = usageDetailErrorLine(detail.code, detail.message),
-                            tone = DeepTone.Danger,
-                            actionLabel = "重试",
-                            onAction = onRefreshDetail,
-                        )
-                        is UsageDetailUiState.Ready -> UsageHeatmapSection(
-                            days = detail.heatmap.recentDays(30, java.time.LocalDate.now().toString()),
-                            error = detail.errors["heatmap"],
-                            rangeLabel = usageCalendarRangeLabel(detail.heatmap.from, detail.heatmap.to),
-                        )
-                    }
-                }
-            }
+            is UsageUiState.Ready -> Unit
         }
         item {
             Text(
@@ -227,6 +248,83 @@ internal fun UsagePage(
             )
         }
     }
+
+    // 卡片排序面板：顺序只存在本地保存态里（不调 /api/usage/arrange，理由见 UsageCardKey 注释）。
+    if (showCardOrder) {
+        UsageCardOrderDialog(
+            order = cardOrder,
+            onMove = { key, direction ->
+                cardOrderRaw = moveUsageCard(cardOrder, key, direction).joinToString(",")
+            },
+            onReset = { cardOrderRaw = DefaultUsageCardOrder.joinToString(",") },
+            onDismiss = { showCardOrder = false },
+        )
+    }
+}
+
+/**
+ * 「卡片排序」面板：每行一张卡 + ↑/↓。
+ *
+ * 首行 ↑、末行 ↓ **置灰不隐藏**——隐藏会让列表长短不一，置灰才说明"到顶了"。
+ * 面板本身不落盘，改动即时写回 `rememberSaveable` 的顺序串。
+ */
+@Composable
+private fun UsageCardOrderDialog(
+    order: List<String>,
+    onMove: (String, MoveDirection) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("卡片排序", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "顺序只保存在本机（应用内重启后仍在）；网关不保存排序。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                order.forEach { key ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = usageCardLabel(key),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        McaButton(
+                            onClick = { onMove(key, MoveDirection.Up) },
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            enabled = canMoveUsageCard(order, key, MoveDirection.Up),
+                        ) { Text("↑", maxLines = 1) }
+                        Spacer(Modifier.width(4.dp))
+                        McaButton(
+                            onClick = { onMove(key, MoveDirection.Down) },
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            enabled = canMoveUsageCard(order, key, MoveDirection.Down),
+                        ) { Text("↓", maxLines = 1) }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    McaButton(onClick = onReset, style = McaButtonStyle.Outlined) { Text("恢复默认顺序") }
+                }
+            }
+        },
+        confirmButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Primary) { Text("完成") }
+        },
+    )
 }
 
 @Composable
@@ -269,6 +367,8 @@ private fun UsageScopeBar(
     usdCny: Double,
     pricingKnown: Boolean,
     onCurrency: (String) -> Unit,
+    /** 「卡片排序」入口；null 时不渲染（页面未接线时保持原样）。 */
+    onOpenCardOrder: (() -> Unit)? = null,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(TightGap)) {
         Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
@@ -309,6 +409,16 @@ private fun UsageScopeBar(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // 「卡片排序」入口：顺序是纯本地偏好（服务端 arrange 只是回显），所以只在本地改。
+        if (onOpenCardOrder != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
+                McaButton(
+                    onClick = onOpenCardOrder,
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text("卡片排序", maxLines = 1) }
+            }
+        }
     }
 }
 
@@ -1187,4 +1297,86 @@ private fun UsageVendorCheckinCard(
         }
     }
 }
+
+/* ============================================================================
+ * 卡片排序（纯客户端偏好）
+ *
+ * `POST /api/usage/arrange`（`gateway.go:1009` → `usage_quota_api.go:584-592`）**是空实现**：
+ * 只把 `order` 原样回显，注释明说"排序属于前端本地偏好（localStorage），服务端不持久化"。
+ * 所以这里**不调那个端点**——发一次只会拿到 `{ok:true}` 假装保存成功，下次启动顺序照样丢，
+ * 比不保存更误导。顺序只用 `rememberSaveable` 存在保存态里（应用内重启/配置变更保留）。
+ * ========================================================================== */
+
+/**
+ * 用量页可排序的卡片。枚举顺序 = 默认渲染顺序（与改造前逐块一致）。
+ *
+ * 页头（`MobileHeader` / `UsageTitle`）不在其中：标题不该被排到 KPI 下面。
+ */
+internal enum class UsageCardKey(val label: String) {
+    SCOPE("时间范围"),
+    KPI("KPI 四格"),
+    TREND("趋势"),
+    BREAKDOWN("用量分布"),
+    CHECKIN("渠道签到"),
+    QUOTA_HISTORY("额度历史"),
+    CALENDAR("用量日历"),
+}
+
+/** 默认顺序：枚举声明顺序。 */
+internal val DefaultUsageCardOrder: List<String> = UsageCardKey.entries.map { it.name }
+
+/** `rememberSaveable` 的键名：改名等于静默清空老用户的顺序，所以抽常量并配单测钉住。 */
+internal const val USAGE_CARD_ORDER_SAVED_KEY: String = "usage_card_order"
+
+/**
+ * 上移/下移一格。直接复用 [moveProvider]（`runtime/AccountQuotaApiClient.kt:826`：
+ * 越界钳制、未知 id 原样返回），不为一次排序再写第二套移动逻辑。
+ */
+internal fun moveUsageCard(order: List<String>, key: String, direction: MoveDirection): List<String> =
+    moveProvider(order, key, direction)
+
+/**
+ * 该方向现在能不能动：首行不能上移、末行不能下移。按钮**置灰不隐藏**——
+ * 隐藏会让列表看起来长短不一，置灰才说明"到顶了"。
+ */
+internal fun canMoveUsageCard(order: List<String>, key: String, direction: MoveDirection): Boolean {
+    val index = order.indexOf(key)
+    if (index < 0) {
+        return false
+    }
+    return index + direction.indexDelta in order.indices
+}
+
+/**
+ * 规范化保存下来的顺序：丢未知 key、去重、补上缺失的新卡片（追加到末尾）。
+ *
+ * 补是必须的：以后再加卡片时老用户存下的列表里没有它，不补就永远不显示。
+ * 空列表/全非法 → 回落默认顺序。
+ */
+internal fun normalizeUsageCardOrder(saved: List<String>?): List<String> {
+    if (saved.isNullOrEmpty()) {
+        return DefaultUsageCardOrder
+    }
+    val known = UsageCardKey.entries.map { it.name }.toSet()
+    val out = LinkedHashSet<String>()
+    saved.forEach { raw ->
+        val key = raw.trim()
+        if (key in known) {
+            out.add(key)
+        }
+    }
+    if (out.isEmpty()) {
+        return DefaultUsageCardOrder
+    }
+    DefaultUsageCardOrder.forEach { key ->
+        if (key !in out) {
+            out.add(key)
+        }
+    }
+    return out.toList()
+}
+
+/** 卡片名（弹窗列表用）；未知 key 原样回显，不静默显示空行。 */
+internal fun usageCardLabel(key: String): String =
+    UsageCardKey.entries.firstOrNull { it.name == key }?.label ?: key
 

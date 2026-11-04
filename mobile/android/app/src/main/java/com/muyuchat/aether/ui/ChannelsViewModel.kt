@@ -12,6 +12,7 @@ import com.muyuchat.aether.runtime.AccountBundlePreview
 import com.muyuchat.aether.runtime.AccountCheckin
 import com.muyuchat.aether.runtime.AccountQuotaApiClient
 import com.muyuchat.aether.runtime.AccountQuotaRow
+import com.muyuchat.aether.runtime.ExtraModelAction
 import com.muyuchat.aether.runtime.AccountSettingsPatch
 import com.muyuchat.aether.runtime.BundleImportResult
 import com.muyuchat.aether.runtime.ChannelProbe
@@ -207,6 +208,18 @@ sealed interface ChannelsAction {
 
     /** 删除账号：`DELETE /api/accounts/{id}`，只移除本机记录。 */
     data class DeleteAccount(val accountId: String) : ChannelsAction
+
+    /**
+     * 渠道额外模型：`POST /api/providers/{id}/models/extra {model, action}`。
+     *
+     * 桌面入口 `channels.js:1018-1034`：上游 `/models` 漏报时手动补；
+     * 成功回完整渠道列表 → 整页重拉最省事。
+     */
+    data class ExtraModel(
+        val providerId: String,
+        val model: String,
+        val action: ExtraModelAction,
+    ) : ChannelsAction
 
     /**
      * 渠道顺序：`POST /api/providers/arrange {"order":[…]}`。
@@ -562,6 +575,10 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     private val _models = MutableStateFlow<Map<String, ProviderModelsUiState>>(emptyMap())
     val models: StateFlow<Map<String, ProviderModelsUiState>> = _models.asStateFlow()
 
+    /** 渠道额外模型弹窗：进行中 / 失败原文（失败贴服务端原话，便于用户判断是不是内置模型被拒）。 */
+    val extraModelBusy = MutableStateFlow(false)
+    val extraModelError = MutableStateFlow<String?>(null)
+
     fun loadModels(providerId: String) {
         if (providerId.isBlank()) {
             return
@@ -602,6 +619,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             is ChannelsAction.WakeAccount -> wakeAccount(action.accountId)
             is ChannelsAction.DeleteAccount -> deleteAccount(action.accountId)
             is ChannelsAction.ArrangeProviders -> arrangeProviders(action.order)
+            is ChannelsAction.ExtraModel -> applyExtraModel(action)
             is ChannelsAction.UpdateAccountDetails -> updateAccountDetails(action.accountId, action.patch)
             is ChannelsAction.SetAccountTags -> setAccountTags(action.accountId, action.tags)
             is ChannelsAction.SetAccountNote -> setAccountNote(action.accountId, action.note)
@@ -978,6 +996,41 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     private fun removeAccountRow(accountId: String) {
         lockCurrentRows()
         accountsOverride.value = currentAccountRows().filterNot { it.accountId == accountId }
+    }
+
+    /**
+     * 渠道额外模型增删：`POST /api/providers/{id}/models/extra`（`gateway.go:1139`）。
+     *
+     * 成功回完整渠道列表 → 直接 `invalidate()` 整页重拉（不在本地拼，避免与服务端清单不一致）；
+     * 失败贴服务端原文（对内置模型发 remove 会被服务端拒绝）。
+     */
+    fun applyExtraModel(action: ChannelsAction.ExtraModel) {
+        val status = repository.status.value
+        if (!status.running) {
+            extraModelError.value = "网关未启动"
+            return
+        }
+        if (extraModelBusy.value) {
+            return
+        }
+        extraModelError.value = null
+        extraModelBusy.value = true
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    accountsClient.setExtraModel(status, action.providerId, action.model, action.action)
+                }
+                invalidate()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                extraModelError.value = e.message
+            } catch (_: Exception) {
+                extraModelError.value = "保存失败，请重试"
+            } finally {
+                extraModelBusy.value = false
+            }
+        }
     }
 
     /**

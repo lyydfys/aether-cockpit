@@ -523,6 +523,39 @@ class AccountQuotaApiClient(
     }
 
     /**
+     * 渠道额外模型：`POST /api/providers/{id}/models/extra`（`gateway.go:1139`）。
+     *
+     * 请求体 `{model, action:"add"|"remove"}`；成功回**完整渠道列表**（调用方整页重拉），
+     * 失败把服务端 `{error}` 原文抛出（例如对内置模型发 remove 会被拒）。
+     */
+    fun setExtraModel(
+        status: GatewayStatus,
+        providerId: String,
+        model: String,
+        action: ExtraModelAction,
+    ) {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        if (providerId.isBlank()) {
+            throw ManagementApiException("invalid_provider", "缺少渠道 id")
+        }
+        if (action == ExtraModelAction.Add) {
+            validateExtraModelName(model)?.let { problem ->
+                throw ManagementApiException("invalid_model", problem)
+            }
+        }
+        request(
+            status = status,
+            method = "POST",
+            path = providerExtraModelsPath(providerId),
+            body = buildExtraModelJson(model, action),
+            timeoutMs = readTimeoutMs,
+        )
+    }
+
+    /**
      * 渠道顺序：`POST /api/providers/arrange {"order":[id,…]}`（`gateway.go:882`）。
      *
      * 服务端只保留 `provider.Get(id)` 认识的 id（未知 id 静默丢弃），保存后回完整渠道列表；
@@ -573,8 +606,7 @@ class AccountQuotaApiClient(
     }
 
     /** 预设列表：`GET /api/presets`（`request_presets.go:340-343`）。 */
-    fun fetchPresets(status: GatewayStatus): PresetsView {
-        val guard = guardOf(status)
+    fun fetchPresets(status: GatewayStatus): PresetsView {        val guard = guardOf(status)
         if (guard != null) {
             throw guard
         }
@@ -808,6 +840,56 @@ internal fun buildProviderBalanceJson(draft: ProviderBalanceDraft, clear: Boolea
 
 /** 余额配置端点路径（`gateway.go:884`）。 */
 internal fun providerBalancePath(): String = "/api/provider/balance"
+
+/* ==========================================================================
+ * 渠道额外模型（`POST /api/providers/{id}/models/extra`，`gateway.go:1139`）
+ *
+ * 契约（`provider_extra_models.go:111`）：路径 `{id}` 是渠道 id，请求体
+ * `{model, action:"add"|"remove"}`（缺省按 add）；未知 action 回 400 + `{error}`。
+ * 桌面入口（`channels.js:1018-1034`）：「添加缺失模型」输入框 + 「添加」，
+ * 每个模型行的「删除」走 `action:"remove"`；说明「上游 /models 漏报或厂商不实现 /models 时用」。
+ * ========================================================================== */
+
+/** 额外模型动作（服务端只认 add / remove，缺省 = add）。 */
+enum class ExtraModelAction(val wire: String) {
+    Add("add"),
+    Remove("remove"),
+}
+
+/** 额外模型路径：渠道 id 要编码，避免 `/` 把路径拆坏。 */
+internal fun providerExtraModelsPath(providerId: String): String =
+    "/api/providers/${encodeAccountSegment(providerId)}/models/extra"
+
+/** 额外模型请求体：`{model, action}`。 */
+internal fun buildExtraModelJson(model: String, action: ExtraModelAction): String =
+    JSONObject()
+        .put("model", model.trim())
+        .put("action", action.wire)
+        .toString()
+
+/** 校验：模型名不能为空、不能含空白（上游模型名不允许空格）。 */
+internal fun validateExtraModelName(model: String): String? {
+    val name = model.trim()
+    if (name.isEmpty()) {
+        return "请输入模型名"
+    }
+    if (name.any { it.isWhitespace() }) {
+        return "模型名里不能有空格"
+    }
+    return null
+}
+
+/** 额外模型弹窗的说明（桌面 `channels.js:1034` 原话）。 */
+internal fun extraModelNote(): String =
+    "上游 /models 漏报或厂商不实现 /models 时用；添加后参与路由与 /v1/models"
+
+/**
+ * 「删除」按钮是否该出现在这一行。
+ *
+ * 只有**额外模型**（手动追加的）才能移除：服务端 `removeProviderExtraModel` 只认额外模型，
+ * 对渠道登记的内置模型发 remove 会 400，所以内置模型行不渲染删除按钮。
+ */
+internal fun extraModelRowShowsRemove(isExtraModel: Boolean): Boolean = isExtraModel
 
 /** 上移 / 下移方向。**不暴露裸 delta**：方向搞反过，签名上直接说清楚。 */
 internal enum class MoveDirection(val indexDelta: Int) {
