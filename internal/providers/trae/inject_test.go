@@ -26,7 +26,7 @@ func TestInjectLocalAccountUpdatesStorage(t *testing.T) {
 	path := filepath.Join(dir, "storage.json")
 	auth := `{"token":"old","refreshToken":"oldr","host":"https://api.example","userId":"u1","expiredAt":1234567890123}`
 	storage := map[string]any{
-		authStorageKey:       auth,
+		authStorageKey:        auth,
 		"telemetry.machineId": "machine-1",
 		"window.state":        map[string]any{"x": 1.0},
 	}

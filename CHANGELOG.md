@@ -1,5 +1,24 @@
 # 更新日志
 
+## 0.1.17（2026-11-04）
+
+### 积分类渠道（签到/credits）读数修正
+
+对照 `ref-local-vault` / `ref-local-provider-switch` 逐渠道审计后发现四个渠道的积分读数确实不对，已修：
+
+- **Trae（最严重）**：用量卡读的是**签到累计积分**（`checkin_credits/status`），不是套餐额度。改为读 `pay/ide_user_ent_usage`（`basic_usage_amount` 已用 / `basic_usage_limit` 总量 / `end_time` 重置），多个额度包合并求和；签到积分降级为兜底并在文案里标明"这是签到积分"。国际版 / Solo 之前直接报"没有公开接口"，现在按 region 拼 `api.trae.ai` / `api.trae.cn` 也能读。
+- **WorkBuddy**：字段优先级反了——用"购买总量"（`Capacity*`）而不是"本周期额度"（`Cycle*`），导致显示"还剩一大截"却马上被限流。现在 `Cycle*` 优先；剩余一律 `total - used` 反算（上游的 `*Remain` 在部分账号上不刷新）；额度用尽（0）不再被当成"没读到"而回落到别的接口；`CycleEndTime` 同时支持 RFC3339 与毫秒/秒时间戳（过去被当数字解析成 0）。
+- **Qoder**：额度路径改为 `/api/v2/quota/usage`（v1 作兜底），并补上 `Cosy-*` 客户端标识头（只带 Authorization 时部分账号拿不到额度）；`used` 缺失时用 `total - remaining` 反推，避免"已用 90% 显示成 0%"。
+- **CodeBuddy（新增）**：此前完全没有额度读取器（能力声明里也没有 Quota），卡片永远是空。现在接腾讯 meter 接口（`get-user-resource` + 企业回落 `get-enterprise-user-usage`），`Cycle*` 优先、只有 Used 时反算剩余、加量包（`TCACA_code_009_*`）单列不相加。
+
+### 尚未处理（下一轮）
+
+- Kiro：host 用的是老域 `codewhisperer.*`、缺 `resourceType=AGENTIC_REQUEST`、没读 `freeTrialInfo`（试用账号读不到）。
+- MiniMax：只有"计数"没有百分比时的兜底缺失（`current_interval_usage_count` 是**剩余**，最易写反）。
+- Antigravity：漏读 `paidTier.availableCredits`（积分余额不显示）。
+- ZCode：没有 reader。
+- 全渠道：401（登录失效）/ 403（缺权限或封禁）/ 404（无该接口）的错误语义仍较粗。
+
 ## 0.1.16（2026-11-04）
 
 ### 额度读取：按中转面板的真实接口重做

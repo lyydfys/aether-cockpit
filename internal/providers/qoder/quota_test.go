@@ -12,8 +12,13 @@ import (
 
 func TestQueryQuota(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/me/usage" {
+		// v2 是主路径；v1 只在 v2 404 时才该被访问。
+		if r.URL.Path != "/api/v2/quota/usage" {
 			t.Errorf("path = %s", r.URL.Path)
+		}
+		// 额度请求必须带 Cosy 客户端标识，否则部分账号会拿到空桶。
+		if r.Header.Get("Cosy-MachineToken") == "" {
+			t.Errorf("缺少 Cosy-MachineToken")
 		}
 		if r.Header.Get("Authorization") != "Bearer qoder-test-token" {
 			t.Errorf("authorization = %q", r.Header.Get("Authorization"))

@@ -82,6 +82,8 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 		Capabilities: provider.CapabilitySet{
 			Chat:    true,
 			Refresh: true,
+			// 积分类渠道：额度来自腾讯 meter 接口（见 quota.go）。
+			Quota: true,
 		},
 	}
 }
