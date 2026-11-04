@@ -12,6 +12,7 @@ import com.muyuchat.aether.runtime.OnboardAuthApiClient
 import com.muyuchat.aether.runtime.OnboardAuthSession
 import com.muyuchat.aether.runtime.OnboardDeviceSession
 import com.muyuchat.aether.runtime.ProviderFormField
+import com.muyuchat.aether.runtime.ProviderSaveApiClient
 import com.muyuchat.aether.runtime.ProviderSummary
 import com.muyuchat.aether.runtime.onboardDeviceKind
 import com.muyuchat.aether.runtime.onboardManualSchema
@@ -20,6 +21,7 @@ import com.muyuchat.aether.runtime.onboardMethodLabel
 import com.muyuchat.aether.runtime.onboardMethods
 import com.muyuchat.aether.runtime.onboardMissingRequired
 import com.muyuchat.aether.runtime.onboardParseTokenInput
+import com.muyuchat.aether.runtime.parseProviderModelList
 import com.muyuchat.aether.runtime.validateCustomProviderDraft
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +69,10 @@ class OnboardViewModel(application: Application) : AndroidViewModel(application)
     private val _formError = MutableStateFlow<String?>(null)
     val formError: StateFlow<String?> = _formError.asStateFlow()
 
+    /** 「获取模型」的进行中/结果状态（只作用于自定义渠道表单）。 */
+    private val _modelsFetch = MutableStateFlow<ModelsFetchUiState>(ModelsFetchUiState.Idle)
+    val modelsFetch: StateFlow<ModelsFetchUiState> = _modelsFetch.asStateFlow()
+
     /** 保存成功的回执，由页面展示一次后清掉。 */
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
@@ -99,6 +105,7 @@ class OnboardViewModel(application: Application) : AndroidViewModel(application)
 
     fun openForm() {
         _formError.value = null
+        _modelsFetch.value = ModelsFetchUiState.Idle
         // 表单第 1 项给默认值：名称默认「自定义渠道」。
         _draft.value = CustomProviderDraft(name = "自定义渠道")
     }
@@ -106,6 +113,7 @@ class OnboardViewModel(application: Application) : AndroidViewModel(application)
     fun dismissForm() {
         _draft.value = null
         _formError.value = null
+        _modelsFetch.value = ModelsFetchUiState.Idle
     }
 
     fun updateName(value: String) = updateDraft { it.copy(name = value) }
@@ -115,6 +123,53 @@ class OnboardViewModel(application: Application) : AndroidViewModel(application)
     fun updateApiKey(value: String) = updateDraft { it.copy(apiKey = value) }
 
     fun updateModels(value: String) = updateDraft { it.copy(modelsText = value) }
+
+    /**
+     * 「获取模型」：拿表单里的 Base URL + API Key 直接问服务端要清单
+     * （`POST /api/provider/models {base,key}`，**不需要先保存渠道**）。
+     *
+     * 成功：把清单**合并**进模型字段（手填的不覆盖，只补缺的）；失败：贴服务端原文 + 一句可操作建议。
+     * apiKey 只进请求体一次，不打印、不落盘、不写剪贴板。
+     */
+    fun fetchModels() {
+        val draft = _draft.value ?: return
+        if (!canFetchDraftModels(draft.baseUrl, draft.apiKey)) {
+            _modelsFetch.value = ModelsFetchUiState.Failed(draftModelsFetchHint(draft.baseUrl, draft.apiKey).orEmpty())
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _modelsFetch.value = ModelsFetchUiState.Failed("网关未启动")
+            return
+        }
+        if (_modelsFetch.value is ModelsFetchUiState.Loading) {
+            return
+        }
+        _modelsFetch.value = ModelsFetchUiState.Loading
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    ProviderSaveApiClient().fetchModels(status, draft.baseUrl, draft.apiKey)
+                }
+                val fetched = result.models
+                val merged = mergeFetchedModels(draft.modelsText, fetched)
+                if (merged != draft.modelsText) {
+                    updateDraft { it.copy(modelsText = merged) }
+                }
+                _modelsFetch.value = if (fetched.isEmpty()) {
+                    ModelsFetchUiState.Failed(modelsFetchEmptyLine())
+                } else {
+                    ModelsFetchUiState.Ready(count = fetched.size, source = result.source)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _modelsFetch.value = ModelsFetchUiState.Failed(modelsFetchErrorLine(e.message.orEmpty()))
+            } catch (_: Exception) {
+                _modelsFetch.value = ModelsFetchUiState.Failed(modelsFetchErrorLine(""))
+            }
+        }
+    }
 
     fun updateProtocol(value: CustomProviderProtocol) = updateDraft {
         it.copy(protocol = value)
@@ -383,6 +438,119 @@ internal fun onboardAuthActionKind(
     else -> OnboardAuthActionKind.ExternalBrowser
 }
 
+/* ==========================================================================
+ * 「手机端必然失败的登录方式」统一表
+ *
+ * 教训（Trae）：授权码必须由 **Trae 桌面客户端**回传（`login_channel=native_ide` /
+ * `auth_type=local`），浏览器/WebView 只能拿到 `isRedirect`，永远完成不了。
+ * 这类渠道的登录按钮点了必失败，所以按 **provider id 前缀** 判（不解析错误文案——太脆），
+ * 在构建方法列表时就标成 blocked，页面因此不会渲染那颗按钮。
+ *
+ * 以后新增同类渠道：只改 [onboardLoginDesktopRequired]，其余代码不用动。
+ * ========================================================================== */
+
+/** 只用桌面端客户端才能完成登录的渠道（目前是 Trae 四个渠道：`trae-` 前缀）。 */
+internal fun onboardLoginDesktopRequired(providerId: String): Boolean =
+    providerId.trim().lowercase().startsWith("trae-")
+
+/**
+ * Trae 的说明文案（逐字按用户给的原话，别改写意思）。
+ *
+ * 结构：**不能做什么 + 为什么 + 该走哪条路 + 怎么拿到凭据**。
+ */
+internal fun onboardTraeDesktopLoginNote(): String =
+    "手机端无法完成 Trae 网页授权：授权码需要由 Trae 桌面客户端回传。" +
+        "请改用「手动凭据 · Token」：在桌面端登录 Trae 后从本机导入，或粘贴 access token。"
+
+/** 登录类方式（这些在"必须桌面端"的渠道上一律不可用）。 */
+private val OnboardLoginMethods = setOf(
+    "oauth_pkce",
+    "device_code",
+    "windsurf_login",
+    "qoder_device",
+)
+
+/**
+ * 纯函数：某登录方式在该渠道上是否**必然失败**；null 表示可以试。
+ *
+ * 只拦"登录类"方式——`manual_input`（手动凭据）、`token_json`（Token / JSON）
+ * 这类不需要回调的方式必须继续可用，它们才是这些渠道真正的接入路径。
+ */
+internal fun onboardLoginMethodBlockedReason(method: String, providerId: String): String? = when {
+    !onboardLoginDesktopRequired(providerId) -> null
+    method in OnboardLoginMethods || method.endsWith("_device") -> onboardTraeDesktopLoginNote()
+    else -> null
+}
+
+/* ==========================================================================
+ * 自定义渠道「获取模型」（`POST /api/provider/models {base,key}`）
+ *
+ * 契约（`internal/core/gateway/provider_detect.go:212-307`）：
+ *   请求 `{base?, chat?, key?, model?, id?}`；服务端 GET `{base}/models`，
+ *   解析 `data[].id` 与 `models[].name`（去掉 `models/` 前缀），回
+ *   `{count, models[], dropped[], source?}`；400 / 502 时回 `{error}`。
+ *   **不需要先保存渠道**：base+key 直接传即可。
+ * ========================================================================== */
+
+/** 「获取模型」的状态。`public` 是因为 `OnboardViewModel.modelsFetch` 是公开属性，
+ *  暴露 internal 类型会触发 Kotlin 的「public property exposes internal type」编译错误。 */
+sealed interface ModelsFetchUiState {
+    data object Idle : ModelsFetchUiState
+    data object Loading : ModelsFetchUiState
+    data class Ready(val count: Int, val source: String = "") : ModelsFetchUiState
+    data class Failed(val message: String) : ModelsFetchUiState
+}
+
+/** 两个字段都填了才允许发探测（服务端没有 Base URL 直接 400）。 */
+internal fun canFetchDraftModels(baseUrl: String, apiKey: String): Boolean =
+    baseUrl.isNotBlank() && apiKey.isNotBlank()
+
+/** 按钮置灰时告诉用户还差什么；null = 可以点。 */
+internal fun draftModelsFetchHint(baseUrl: String, apiKey: String): String? = when {
+    canFetchDraftModels(baseUrl, apiKey) -> null
+    baseUrl.isBlank() && apiKey.isBlank() -> "先填 Base URL 与 API Key"
+    baseUrl.isBlank() -> "先填 Base URL"
+    else -> "先填 API Key"
+}
+
+/**
+ * 合并模型清单：**手填的排前面且不被覆盖**，探测到的只补缺（去重、保序）。
+ *
+ * "获取"是辅助手段，不能把用户已经写好的模型清掉。
+ */
+internal fun mergeFetchedModels(existing: String, fetched: List<String>): String {
+    val out = ArrayList<String>()
+    parseProviderModelList(existing).forEach { model ->
+        if (!out.contains(model)) {
+            out.add(model)
+        }
+    }
+    fetched.forEach { raw ->
+        val model = raw.trim()
+        if (model.isNotEmpty() && !out.contains(model)) {
+            out.add(model)
+        }
+    }
+    return out.joinToString(", ")
+}
+
+/** 失败文案：**服务端原文在前**，后面跟一句可操作建议（不吞掉原因）。 */
+internal fun modelsFetchErrorLine(serverMessage: String): String {
+    val raw = serverMessage.trim()
+    val suggestion = when {
+        raw.isEmpty() -> "获取不到模型：检查网关是否在运行、Base URL 是否可达"
+        raw.contains("先填一个 Base URL") -> "先把 Base URL 填上"
+        raw.contains("401") || raw.contains("403") || raw.contains("Unauthorized") -> "API Key 是否正确、是否已过期？"
+        raw.contains("404") || raw.contains("Not Found") -> "Base URL 是否需要包含 /v1？"
+        raw.contains("连接失败") -> "检查手机到该域名的网络，以及 Base URL 是否写错"
+        else -> "检查 Base URL 是否包含 /v1、Key 是否有效"
+    }
+    return if (raw.isEmpty()) suggestion else "$raw（$suggestion）"
+}
+
+/** 端点正常返回但没有模型：不当成失败，提示仍可手填。 */
+internal fun modelsFetchEmptyLine(): String = "该端点没有返回模型清单：仍可手动填写模型"
+
 /**
  * 接入向导的编排：发起 → 轮询 → 入库，全部经本机网关，不依赖桌面。
  *
@@ -405,7 +573,9 @@ internal class OnboardConnectController(
             OnboardMethodOption(
                 id = method,
                 label = onboardMethodLabel(method),
-                blockedReason = onboardMethodBlockedBy(method, provider),
+                // 「手机端必然失败」的方式在这里统一拦下：页面因此永远不渲染点了会失败的按钮。
+                blockedReason = onboardMethodBlockedBy(method, provider)
+                    ?: onboardLoginMethodBlockedReason(method, provider.id),
             )
         }
         val withToken = options + OnboardMethodOption("token_json", onboardMethodLabel("token_json"))
@@ -414,6 +584,7 @@ internal class OnboardConnectController(
             providerName = provider.name.ifBlank { provider.id },
             providerDescription = provider.description,
             methods = withToken,
+            // 登录类全部不可用时，主入口直接落到「Token / JSON」（唯一真能走通的路）。
             active = withToken.firstOrNull { it.enabled }?.id ?: "token_json",
             manualSchema = onboardManualSchema(provider),
         )

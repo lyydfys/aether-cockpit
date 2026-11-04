@@ -86,17 +86,30 @@ data class WorkspaceEntry(
 }
 
 /**
+ * 设置分组的**路由目的地**（数据驱动分发，不再靠标题/序号字符串比较）。
+ *
+ * - `Partition`：01–08，内容就在设置页里的某个分区（`SettingsPage(initialGroup=...)`）；
+ * - `Backup`：09 同步与备份 → 独立的 `BackupPage`；
+ * - `About`：10 关于 → `SettingsAboutSection`。
+ */
+sealed interface SettingsRoute {
+    data class Partition(val id: String) : SettingsRoute
+    data object Backup : SettingsRoute
+    data object About : SettingsRoute
+}
+
+/**
  * One of the 9 Windows settings groups.
  *
- * [available] 表示该组的内容**今天真的能在设置页里找到**。只有 02（网络与共享：端口/局域网/
- * 代理/CORS/IP 白名单）与 06（隐私与脱敏：脱敏开关、动作、自定义规则、个人信息）为真；
- * 其余仍在后续阶段，点了要如实说，不能因为"设置页存在"就宣称 9 组都能用。
+ * [available] 表示该组的内容**今天真的能在设置页里找到**。
+ * [route] 是点击后的目的地；09/10 有了 route 就是真能到的独立目的地。
  */
 data class SettingsGroup(
     val index: String,
     val title: String,
     val subtitle: String,
     val available: Boolean = false,
+    val route: SettingsRoute,
 )
 
 /**
@@ -141,20 +154,21 @@ fun workspaceEntries(): List<WorkspaceEntry> = listOf(
  * 设置页的分组 = 桌面 `settings.js:44-47` 的 10 个 tab，**标题与顺序逐字照抄**：
  * 常规 / 网络与共享 / 工具服务 / 预设 / 定价 / 模型目录 / 隐私 / 可观测 / 同步与备份 / 关于。
  *
- * [available] 表示该组内容**今天真的能在手机的设置页里找到**（02 网络与共享、07 隐私）。
- * 其余 8 组桌面有、手机端还没做——点了要如实说"尚未移植"，不能因为设置页存在就宣称 10 组都能用。
+ * [available] 表示该组内容**今天真的能在手机的设置页里找到**：10 组全部已接内容
+ * （01–08 → 设置页对应分区；09 同步与备份 → BackupPage；10 关于 → SettingsAboutSection）。
+ * [route] 给出分发目的地，GatewayHome 不再按标题判断。
  */
 fun settingsGroups(): List<SettingsGroup> = listOf(
-    SettingsGroup("01", "常规", "外观、语言、通知、更新与启动策略"),
-    SettingsGroup("02", "网络与共享", "监听、局域网、代理、CORS 与访问控制", available = true),
-    SettingsGroup("03", "工具服务", "搜索、图像、音频、视频与实时语音"),
-    SettingsGroup("04", "预设", "客户端、模型与请求参数模板"),
-    SettingsGroup("05", "定价", "模型单价、自定义倍率与成本估算"),
-    SettingsGroup("06", "模型目录", "模型重定向与目录刷新"),
-    SettingsGroup("07", "隐私", "脱敏开关、动作、自定义规则与个人信息", available = true),
-    SettingsGroup("08", "可观测", "OTLP、指标、链路与运行诊断"),
-    SettingsGroup("09", "同步与备份", "本机加密备份；云同步需主动配置"),
-    SettingsGroup("10", "关于", "版本、更新通道、许可与诊断包"),
+    SettingsGroup("01", "常规", "外观、语言、通知、更新与启动策略", available = true, route = SettingsRoute.Partition("01")),
+    SettingsGroup("02", "网络与共享", "监听、局域网、代理、CORS 与访问控制", available = true, route = SettingsRoute.Partition("02")),
+    SettingsGroup("03", "工具服务", "搜索、图像、音频、视频与实时语音", available = true, route = SettingsRoute.Partition("03")),
+    SettingsGroup("04", "预设", "客户端、模型与请求参数模板", available = true, route = SettingsRoute.Partition("04")),
+    SettingsGroup("05", "定价", "模型单价、自定义倍率与成本估算", available = true, route = SettingsRoute.Partition("05")),
+    SettingsGroup("06", "模型目录", "模型重定向与目录刷新", available = true, route = SettingsRoute.Partition("06")),
+    SettingsGroup("07", "隐私", "脱敏开关、动作、自定义规则与个人信息", available = true, route = SettingsRoute.Partition("07")),
+    SettingsGroup("08", "可观测", "OTLP、指标、链路与运行诊断", available = true, route = SettingsRoute.Partition("08")),
+    SettingsGroup("09", "同步与备份", "本机加密备份；云同步需主动配置", available = true, route = SettingsRoute.Backup),
+    SettingsGroup("10", "关于", "版本、更新通道、许可与诊断包", available = true, route = SettingsRoute.About),
 )
 
 fun filterWorkspaces(query: String): List<WorkspaceEntry> = workspaceEntries().filter { entry ->

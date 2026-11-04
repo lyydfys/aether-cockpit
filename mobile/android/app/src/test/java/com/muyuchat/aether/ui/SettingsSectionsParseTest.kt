@@ -213,8 +213,15 @@ class SettingsSectionsParseTest {
         assertTrue(meta.contains("Body 2"))
         assertTrue(meta.contains("提示词"))
         assertTrue(meta.contains("未挂载"))
-        assertTrue(presetEmptyCopy().contains("为什么空"))
-        assertTrue(presetEmptyCopy().contains("下一步"))
+        // 空态改用桌面原话（settings.js:850-851），不再自造「为什么空 / 下一步」
+        assertTrue(presetEmptyCopy().contains("还没有预设"))
+        assertTrue(presetEmptyCopy().contains("Body / Headers"))
+        // 挂载数文案（settings.js:857）
+        assertEquals("未挂载", presetAttachedLabel(PresetSummary(id = "p", name = "n")))
+        assertEquals(
+            "2 渠道 · 1 路由",
+            presetAttachedLabel(PresetSummary(id = "p", name = "n", attachedProviders = 2, attachedRoutes = 1)),
+        )
     }
 
     // —— 零散小函数 ——

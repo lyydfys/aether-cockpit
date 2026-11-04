@@ -113,14 +113,21 @@ class SettingsToolsPresetsTest {
         val blankName = validatePresetDraft(PresetDraft(name = " "))
         assertTrue("名称全空白必须被拒，实际：$blankName", blankName != null && blankName.contains("名称不能为空"))
 
-        // Body 非法 → 带行号
+        // Body 非法 → 桌面措辞「Body 不是合法 JSON」+ 行号
         val badBody = validatePresetDraft(PresetDraft(name = "x", bodyJson = "{\n\"a\": 1\n,,}"))
-        assertTrue("Body 非法必须被拒，实际：$badBody", badBody != null && badBody.contains("Body"))
+        assertTrue("Body 非法必须被拒，实际：$badBody", badBody != null && badBody.startsWith("Body 不是合法 JSON"))
         assertTrue("Body 错误必须带行号，实际：$badBody", badBody!!.contains("行"))
 
-        // 数组不是对象
-        val arrayHeaders = validatePresetDraft(PresetDraft(name = "x", headersJson = "[1,2]"))
-        assertTrue("数组必须被拒，实际：$arrayHeaders", arrayHeaders != null && arrayHeaders.contains("JSON 对象"))
+        // Headers 非法 → 「Headers 不是合法 JSON」
+        val badHeadersJson = validatePresetDraft(PresetDraft(name = "x", headersJson = "{oops"))
+        assertTrue(
+            "Headers 非法必须被拒，实际：$badHeadersJson",
+            badHeadersJson != null && badHeadersJson.startsWith("Headers 不是合法 JSON"),
+        )
+
+        // 恰好是数组 → 桌面措辞「必须是 JSON 对象」（Body / Headers 各一条）
+        assertEquals("Body 必须是 JSON 对象", validatePresetDraft(PresetDraft(name = "x", bodyJson = "[1]")))
+        assertEquals("Headers 必须是 JSON 对象", validatePresetDraft(PresetDraft(name = "x", headersJson = "[1,2]")))
 
         // Headers 的值必须是字符串（服务端 map[string]string）
         val nonStringHeader = validatePresetDraft(PresetDraft(name = "x", headersJson = """{"n":1}"""))

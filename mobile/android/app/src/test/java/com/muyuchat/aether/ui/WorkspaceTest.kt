@@ -118,13 +118,13 @@ class WorkspaceTest {
     }
 
     /**
-     * 只有 02（网络与共享）与 07（隐私）的内容今天真的在设置页里；
-     * 不能因为"设置页存在"就宣称 10 组都能用。
+     * 10 组现在都有 route 且 available=true；route 由 SettingsRoute 分发，
+     * 不再拿标题/序号做字符串比较。
      */
     @Test
-    fun onlyImplementedsSettingsGroupsAreMarkedAvailable() {
+    fun allSettingsGroupsAreAvailableWithRoutes() {
         val available = settingsGroups().filter { it.available }.map { it.index }
-        assertEquals(listOf("02", "07"), available)
+        assertEquals(listOf("01", "02", "03", "04", "05", "06", "07", "08", "09", "10"), available)
     }
 
     @Test

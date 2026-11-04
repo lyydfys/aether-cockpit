@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -88,7 +89,9 @@ internal fun SettingsPage(
     status: GatewayStatus,
     state: SettingsUiState,
     onRefresh: () -> Unit,
-    onBack: () -> Unit,
+    onBack: () -> Unit = {},
+    /** 非空时只渲染该设置分组（01–08），并在顶部给「返回 + 组标题」。由 SettingsRoute 分发。 */
+    initialGroup: String? = null,
     onOpenOverview: () -> Unit,
     onOpenBackup: () -> Unit,
     onShareReport: (Intent) -> Unit = {},
@@ -136,11 +139,122 @@ internal fun SettingsPage(
 ) {
     LaunchedEffect(Unit) { onLoadCallerKeys() }
     var redactCustomFirst by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    // 聚焦某个分组时滚到顶部：LazyColumn 用 scrollToItem(0)（不是 ScrollState.animateScrollTo）。
+    LaunchedEffect(initialGroup) {
+        if (initialGroup != null) {
+            listState.scrollToItem(0)
+        }
+    }
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize(),
         contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
+        // ——— 聚焦模式：只渲染目标分组，顶部「‹ 返回 + 组标题」 ———
+        if (initialGroup != null) {
+            item {
+                FocusedSettingsHeader(
+                    title = settingsGroupTitle(initialGroup) ?: "设置",
+                    onBack = onBack,
+                )
+            }
+            when (state) {
+                SettingsUiState.Idle -> item {
+                    SettingsStateCard(
+                        title = "网关未启动",
+                        detail = "启动本地网关后可读取本机设置。",
+                        actionLabel = "前往概览",
+                        onAction = onOpenOverview,
+                    )
+                }
+                SettingsUiState.Loading -> item { SettingsLoadingCard() }
+                is SettingsUiState.Failed -> item {
+                    SettingsErrorCard(state.code, state.message, onRefresh)
+                }
+                is SettingsUiState.Ready -> {
+                    val blocks = settingsBlocksFor(initialGroup)
+                    if (blocks.isEmpty()) {
+                        item {
+                            SettingsStateCard(
+                                title = "找不到设置分组",
+                                detail = "分组「$initialGroup」不是设置页里的分区（01–08）。",
+                                actionLabel = "返回",
+                                onAction = onBack,
+                            )
+                        }
+                    } else {
+                        blocks.forEach { block ->
+                            item {
+                                when (block.id) {
+                                    "01" -> SettingsGeneralSection(status = status)
+                                    "02" -> Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
+                                        SettingsSection("本机监听") {
+                                            Text(
+                                                text = "手机端特有：桌面版的端口由启动参数决定（设置里只读），手机端必须在页内改。",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                            PreferredPortRow(
+                                                preferredPort = preferredPort,
+                                                saving = preferredPortSaving,
+                                                error = preferredPortError,
+                                                notice = preferredPortNotice,
+                                                onSave = onSavePreferredPort,
+                                            )
+                                        }
+                                        SettingsSections(
+                                            settings = state.settings,
+                                            status = status,
+                                            saveState = saveState,
+                                            onToggleRedact = onToggleRedact,
+                                            personalSaving = personalSaving,
+                                            personalError = personalError,
+                                            onToggleRedactPersonal = onToggleRedactPersonal,
+                                            onOpenRedactDetail = {
+                                                redactCustomFirst = false
+                                                onOpenRedactDetail()
+                                            },
+                                            onOpenRedactRules = {
+                                                redactCustomFirst = true
+                                                onOpenRedactDetail()
+                                            },
+                                            lanSaving = lanSaving,
+                                            lanError = lanError,
+                                            onToggleLan = onToggleLan,
+                                            proxySaving = proxySaving,
+                                            proxyError = proxyError,
+                                            onSaveProxy = onSaveProxy,
+                                            corsSaving = corsSaving,
+                                            corsError = corsError,
+                                            onSaveCors = onSaveCors,
+                                            ipsSaving = ipsSaving,
+                                            ipsError = ipsError,
+                                            onSaveAllowIPs = onSaveAllowIPs,
+                                        )
+                                        CallerKeysSection(
+                                            state = callerKeys,
+                                            error = keysError,
+                                            onCreate = onCreateCallerKey,
+                                            onToggle = onToggleCallerKey,
+                                            onRemove = onRemoveCallerKey,
+                                        )
+                                    }
+                                    "03" -> SettingsToolsSection(status = status)
+                                    "04" -> SettingsPresetsSection(status = status)
+                                    "05" -> SettingsPricingSection(status = status)
+                                    "06" -> SettingsModelsSection(status = status)
+                                    "07" -> SettingsPrivacySection(status = status)
+                                    "08" -> SettingsObservabilitySection(status = status)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return@LazyColumn
+        }
         item { MobileHeader(status) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -255,16 +369,21 @@ internal fun SettingsPage(
                         onRemove = onRemoveCallerKey,
                     )
                 }
-                // —— 桌面设置 tab 补齐：常规 → 定价 → 隐私补充 → 工具服务 → 预设 → 模型目录 → 可观测 ——
-                // 每个 section 自加载各自端点（GET /api/settings、GET /api/pricing、GET /api/presets、
-                // GET /api/model-redirects），失败只在本卡报服务端原文，不连坐整页。
-                item { SettingsGeneralSection(status = status) }
-                item { SettingsPricingSection(status = status) }
-                item { SettingsPrivacySection(status = status) }
-                item { SettingsToolsSection(status = status) }
-                item { SettingsPresetsSection(status = status) }
-                item { SettingsModelsSection(status = status) }
-                item { SettingsObservabilitySection(status = status) }
+                // 块表驱动（顺序 = 现在屏幕上的顺序）：
+                // 常规 → 定价 → 隐私 → 工具服务 → 预设 → 模型目录 → 可观测。
+                settingsBlocksFor(initialGroup = null).forEach { block ->
+                    item {
+                        when (block.id) {
+                            "01" -> SettingsGeneralSection(status = status)
+                            "05" -> SettingsPricingSection(status = status)
+                            "07" -> SettingsPrivacySection(status = status)
+                            "03" -> SettingsToolsSection(status = status)
+                            "04" -> SettingsPresetsSection(status = status)
+                            "06" -> SettingsModelsSection(status = status)
+                            "08" -> SettingsObservabilitySection(status = status)
+                        }
+                    }
+                }
             }
         }
         // 桌面设置的第 9 个 tab「同步与备份」（settings.js:45 TABS）。
@@ -1849,6 +1968,76 @@ private fun MaskingRecordRow(record: MaskingRecord) {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
             maxLines = 1,
+        )
+    }
+}
+
+/* ========================================================================== */
+/* 设置分组 → 区块（数据驱动分发，纯函数部分可单测）                           */
+/* ========================================================================== */
+
+/** 一个设置分区区块：id 与 `settingsGroups()` 的序号对齐。 */
+internal data class SettingsBlockSpec(val id: String, val title: String)
+
+/**
+ * 01–08 的分区块表（id 顺序 = 桌面 tab 顺序，不代表整页渲染顺序）。
+ * 整页渲染顺序见 [settingsBlocksFor] 的 null 分支（保持现有屏幕顺序）。
+ */
+internal val SETTINGS_PARTITION_BLOCKS: List<SettingsBlockSpec> = listOf(
+    SettingsBlockSpec("01", "常规"),
+    SettingsBlockSpec("02", "网络与共享"),
+    SettingsBlockSpec("03", "工具服务"),
+    SettingsBlockSpec("04", "预设"),
+    SettingsBlockSpec("05", "定价"),
+    SettingsBlockSpec("06", "模型目录"),
+    SettingsBlockSpec("07", "隐私"),
+    SettingsBlockSpec("08", "可观测"),
+)
+
+/** 整页渲染顺序（= 改造前 261-267 行的顺序，保持现状不变）。 */
+private val SETTINGS_FULL_PAGE_ORDER = listOf("01", "05", "07", "03", "04", "06", "08")
+
+/**
+ * 块表过滤：null → 整页 7 个区块（原顺序）；非空 → 只保留该分组。
+ * 未知 id 返回空表（调用方渲染"找不到分组"，不崩）。
+ */
+internal fun settingsBlocksFor(initialGroup: String?): List<SettingsBlockSpec> {
+    if (initialGroup == null) {
+        return SETTINGS_FULL_PAGE_ORDER.mapNotNull { id ->
+            SETTINGS_PARTITION_BLOCKS.firstOrNull { it.id == id }
+        }
+    }
+    return SETTINGS_PARTITION_BLOCKS.filter { it.id == initialGroup }
+}
+
+/** 组标题：用 `settingsGroups()` 的标题，未知 id 返回 null。 */
+internal fun settingsGroupTitle(initialGroup: String?): String? {
+    if (initialGroup.isNullOrBlank()) {
+        return null
+    }
+    return settingsGroups().firstOrNull { it.index == initialGroup }?.title
+}
+
+/** 聚焦模式的顶部：‹ 返回 + 组标题。 */
+@Composable
+private fun FocusedSettingsHeader(title: String, onBack: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        McaIconButton(contentDescription = "返回", onClick = onBack) {
+            Icon(
+                painter = painterResource(R.drawable.ic_back),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(McaIconSize.Optical.Action),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

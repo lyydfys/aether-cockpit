@@ -105,6 +105,7 @@ internal fun OnboardPage(
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val saving by viewModel.saving.collectAsStateWithLifecycle()
     val formError by viewModel.formError.collectAsStateWithLifecycle()
+    val modelsFetch by viewModel.modelsFetch.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     val connect by viewModel.connect.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
@@ -330,10 +331,12 @@ internal fun OnboardPage(
             draft = current,
             saving = saving,
             error = formError,
+            modelsFetch = modelsFetch,
             onNameChange = viewModel::updateName,
             onBaseUrlChange = viewModel::updateBaseUrl,
             onApiKeyChange = viewModel::updateApiKey,
             onModelsChange = viewModel::updateModels,
+            onFetchModels = viewModel::fetchModels,
             onProtocolChange = viewModel::updateProtocol,
             onDismiss = viewModel::dismissForm,
             onSave = {
@@ -680,10 +683,12 @@ private fun OnboardCustomProviderDialog(
     draft: CustomProviderDraft,
     saving: Boolean,
     error: String?,
+    modelsFetch: ModelsFetchUiState,
     onNameChange: (String) -> Unit,
     onBaseUrlChange: (String) -> Unit,
     onApiKeyChange: (String) -> Unit,
     onModelsChange: (String) -> Unit,
+    onFetchModels: () -> Unit,
     onProtocolChange: (CustomProviderProtocol) -> Unit,
     onDismiss: () -> Unit,
     onSave: () -> Unit,
@@ -741,6 +746,33 @@ private fun OnboardCustomProviderDialog(
                     value = draft.modelsText,
                     placeholder = "gpt-4o-mini, claude-sonnet-4",
                 ) { onModelsChange(it) }
+                // 「获取模型」：拿 Base URL + Key 直接问端点（`POST /api/provider/models`），
+                // 不用先保存；成功只**补**模型，不覆盖手填的内容。
+                val fetchHint = draftModelsFetchHint(draft.baseUrl, draft.apiKey)
+                val fetching = modelsFetch is ModelsFetchUiState.Loading
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    McaButton(
+                        onClick = onFetchModels,
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                        enabled = fetchHint == null && !fetching,
+                    ) { Text(if (fetching) "获取中…" else "获取模型") }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = when (modelsFetch) {
+                            ModelsFetchUiState.Idle -> fetchHint.orEmpty()
+                            ModelsFetchUiState.Loading -> "正在向该端点要模型清单…"
+                            is ModelsFetchUiState.Ready -> "已获取 ${modelsFetch.count} 个模型"
+                            is ModelsFetchUiState.Failed -> modelsFetch.message
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (modelsFetch is ModelsFetchUiState.Failed) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = "备注：服务端 providerDraft 没有备注字段，这里不提交（也不伪造成 name 或其它字段）。",
@@ -917,6 +949,16 @@ private fun OnboardConnectDialog(
                     )
                     Spacer(Modifier.height(8.dp))
                 }
+                // Trae 四渠道：网页授权在手机端必然失败（授权码要桌面客户端回传），
+                // 一进来就把原因和唯一可行路径写清楚。
+                if (onboardLoginDesktopRequired(state.providerId)) {
+                    Text(
+                        text = onboardTraeDesktopLoginNote(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 OnboardField("账号备注（可选）", state.label, "例如 主力号") { onLabel(it) }
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -1039,13 +1081,16 @@ private fun OnboardConnectDialog(
                     blocked.forEach { method ->
                         Spacer(Modifier.height(4.dp))
                         // 会被桌面端拦下的登录方式：不再给"点了会失败"的按钮，直接写清只能桌面端做。
-                        val desktopOnly = method.blockedReason?.contains("桌面") == true
+                        val reason = method.blockedReason.orEmpty()
+                        val desktopOnly = reason.contains("桌面")
                         Text(
-                            text = if (desktopOnly) {
-                                "${method.label}：${onboardAuthButtonLabel(OnboardAuthActionKind.DesktopOnly)}" +
-                                    "（${method.blockedReason}）"
-                            } else {
-                                "${method.label}：${method.blockedReason}"
+                            text = when {
+                                // Trae 的长说明已经在顶部显示过一次，这里不重复整段。
+                                reason == onboardTraeDesktopLoginNote() ->
+                                    "${method.label}：${onboardAuthButtonLabel(OnboardAuthActionKind.DesktopOnly)}"
+                                desktopOnly ->
+                                    "${method.label}：${onboardAuthButtonLabel(OnboardAuthActionKind.DesktopOnly)}（$reason）"
+                                else -> "${method.label}：$reason"
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

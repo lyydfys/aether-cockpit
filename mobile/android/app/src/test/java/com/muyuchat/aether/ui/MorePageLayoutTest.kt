@@ -44,18 +44,18 @@ class MorePageLayoutTest {
 
     @Test
     fun settingsTailOnlyClaimsWiredForAvailableGroups() {
-        val wired = SettingsGroup("02", "网络与共享", "端口与局域网", available = true)
-        val pending = SettingsGroup("01", "常规", "外观与语言")
+        val wired = SettingsGroup("02", "网络与共享", "端口与局域网", available = true, route = SettingsRoute.Partition("02"))
+        val pending = SettingsGroup("01", "常规", "外观与语言", route = SettingsRoute.Partition("01"))
         assertEquals("已接入", settingsRowTrailing(wired))
         assertEquals("后续阶段", settingsRowTrailing(pending))
         // 目录本身的事实：12 个工作区、10 个设置分组（= 桌面 settings.js:44-47 的 10 个 tab），
-        // 其中只有 2 组真的接进了设置页。
+        // 10 组现在都有 route 且 available=true（09→BackupPage、10→About）。
         // 12 = 桌面 16 项导航（shell.js:17-43）去掉底栏已有的 4 项（概览 / 账号与额度 /
         // 用量 / 请求日志），加「客户端」（桌面是 gateway.js:113 的一张卡，手机端有独立页），
         // 再减「会话」（手机端恒空，已整页删除）。
         assertEquals(12, workspaceEntries().size)
         assertEquals(10, settingsGroups().size)
-        assertEquals(2, settingsGroups().count { it.available })
+        assertEquals(10, settingsGroups().count { it.available })
     }
 
     @Test
@@ -94,7 +94,7 @@ class MorePageLayoutTest {
     fun settingsGroupNoticeNamesTheGroupsThatActuallyExist() {
         // 没接入的设置分组：点出手机端真正能改的是哪两组，而不是笼统"暂不支持"。
         val notice = notReadyNoticeForSettingsGroup(
-            SettingsGroup("04", "预设", "客户端、模型与请求参数模板"),
+            SettingsGroup("04", "预设", "客户端、模型与请求参数模板", route = SettingsRoute.Partition("04")),
         )
         assertTrue(notice.title, notice.title.contains("04"))
         assertTrue(notice.title, notice.title.contains("预设"))

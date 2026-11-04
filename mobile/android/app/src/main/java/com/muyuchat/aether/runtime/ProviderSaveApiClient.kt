@@ -130,6 +130,17 @@ internal fun buildProviderSaveJson(draft: CustomProviderDraft): String {
 }
 
 /**
+ * 「获取模型」的请求体：`{base, key}`（`handleProviderModelList` 只认这两个即可工作）。
+ *
+ * 不传 `id`：草稿还没保存，服务端不需要它；不传 `chat`：`base` 已经足够。
+ */
+internal fun buildDraftModelsJson(baseUrl: String, apiKey: String): String =
+    JSONObject()
+        .put("base", normalizeProviderBaseUrl(baseUrl))
+        .put("key", apiKey.trim())
+        .toString()
+
+/**
  * `POST /api/provider/save` 的最小客户端：只发自定义渠道需要的字段，不调 detect、
  * 不改任何其它渠道（`detect` 是可选探测，保存流程不依赖它，见 provider_detect.go）。
  *
@@ -164,6 +175,52 @@ class ProviderSaveApiClient(
             }
             // 成功回包是完整渠道列表（respondProviders）；调用方刷新列表取回。
             connection.inputStream.bufferedReader(Charsets.UTF_8).use { drain(it) }
+        } catch (e: ManagementApiException) {
+            throw e
+        } catch (_: IOException) {
+            throw ManagementApiException("network_error", "无法连接本机管理接口")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * 「获取模型」：拿表单里的 Base URL + API Key 直接问服务端要清单。
+     *
+     * 契约（`internal/core/gateway/provider_detect.go:212-307` 的 `handleProviderModelList`）：
+     * 请求 `{base, key}` → 服务端 GET `{base}/models` → 回 `{count, models[], dropped[]}`；
+     * **不需要先保存渠道**（只有 `id` 路径才依赖已存账号）。
+     * 失败时服务端回 `{error}`，这里原样抛给 UI 显示。
+     *
+     * 安全：apiKey 只作为请求体字段出现一次；不打印、不落盘、不写剪贴板。
+     */
+    fun fetchModels(status: GatewayStatus, baseUrl: String, apiKey: String): ProviderModels {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val body = buildDraftModelsJson(baseUrl, apiKey)
+        val connection = (URL("http://${status.addr}${providerModelsPath()}").openConnection() as HttpURLConnection)
+        connection.connectTimeout = connectTimeoutMs
+        // 服务端对上游用的是 12s 超时；这里给足余量，避免手机端先断。
+        connection.readTimeout = 18_000
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+        try {
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(2_048) }
+                        ?.let { JSONObject(it).optString("error") }
+                }.getOrNull().orEmpty()
+                throw ManagementApiException("http_$code", detail.ifBlank { "管理接口返回 $code" }.take(400))
+            }
+            return connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                parseProviderModels(reader.readText().take(1 shl 20))
+            }
         } catch (e: ManagementApiException) {
             throw e
         } catch (_: IOException) {

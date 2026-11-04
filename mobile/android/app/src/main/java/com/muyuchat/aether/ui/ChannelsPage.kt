@@ -49,7 +49,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import org.json.JSONObject
@@ -922,16 +924,32 @@ private fun AccountQuotaCard(
                 )
             }
 
-            // 标签 / 备注（桌面端就在卡片上；手机端同样常显，保存后立刻能看到结果）
+            // 标签：做成 chip 并横滚（两个以上标签不许换行、不许把标题挤下去）
             if (row.tags.isNotEmpty()) {
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "标签 ${row.tags.joinToString(" · ")}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    row.tags.forEach { tag ->
+                        Surface(
+                            shape = McaShape.Badge,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = McaHairline.stroke(),
+                        ) {
+                            Text(
+                                text = tag,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                }
             }
             if (row.note.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
@@ -944,55 +962,22 @@ private fun AccountQuotaCard(
                 )
             }
 
-            // 额度
+            // 额度窗口（有窗口画窗口条，有总量画总条，都没有就说明原因）
             Spacer(Modifier.height(12.dp))
             QuotaBlock(row = row, nowMs = nowMs, actionFailure = failure, readOutcome = readOutcome)
 
-            // 重置时间 / 最近使用
+            // 读取时间 / 状态：桌面 `acct-foot` 的元信息行（左标签定宽、右值右对齐）
             Spacer(Modifier.height(8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                accountTimeLabel(row.resetAt)?.let { resetAt ->
-                    Text(
-                        text = "额度重置 $resetAt",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Text(
-                    text = "最近使用 ${accountTimeLabel(row.lastUsed) ?: "尚未使用"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            AccountStatusRows(row = row)
 
-            // 签到（只有渠道真的声明了签到能力才出现）
+            // 签到（只有渠道真的声明了签到能力才出现；状态色与按钮并行，不挤成竖排）
             if (row.checkinSupported) {
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "每日签到",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = checkinLabel(row.checkin),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = checkinColor(row.checkin),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    McaButton(
-                        onClick = onCheckin,
-                        style = McaButtonStyle.Outlined,
-                        size = McaButtonSize.CardAction,
-                        enabled = !busyCheckin && !row.disabled && !checkinSettled(row.checkin),
-                    ) {
-                        Text(if (busyCheckin) "签到中…" else checkinButtonLabel(row.checkin))
-                    }
-                }
+                Spacer(Modifier.height(8.dp))
+                AccountCheckinRow(
+                    row = row,
+                    busy = busyCheckin,
+                    onCheckin = onCheckin,
+                )
             }
 
             // 探测结论：独占一行（1.3× 字号下跟按钮挤一行会压成竖排单字）
@@ -1009,69 +994,33 @@ private fun AccountQuotaCard(
                 )
             }
 
-            // 三个动作排成一行：模型 / 渠道启停 / 测试。
-            // 选择态下整行隐藏：这时候点卡片是勾选，误触渠道启停的代价太大。
+            // 动作行（桌面 `acct-foot` 的右侧动作）：读取额度 + 更多。
+            // 查看模型 / 测试 / 启停都收进「更多」菜单，卡片上只留最常用的一颗。
+            // 用横滚而不是换行：1.3× 字号下并排两三个中文按钮会被压成竖排单字。
             if (!selectionMode) {
                 Spacer(Modifier.height(12.dp))
-                // 四个动作排成两行 × 两列：1.3× 字号下四个中文按钮并排放进 288dp 会顶边
-                // （读取额度 89 + 查看模型 89 + 停用渠道 89 + 测试 58 + 间距 24 = 349dp），
-                // 所以让它们换行，而不是横滚或被压成分行单字。
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (row.quotaSupported) {
-                            McaButton(
-                                onClick = onReadQuota,
-                                style = McaButtonStyle.Outlined,
-                                size = McaButtonSize.CardAction,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                                enabled = quotaReadEnabled(row.quotaSupported, anyBusy),
-                            ) { Text(quotaReadLabel(busyQuota)) }
-                        }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (row.quotaSupported) {
                         McaButton(
-                            onClick = onLoadModels,
+                            onClick = onReadQuota,
                             style = McaButtonStyle.Outlined,
                             size = McaButtonSize.CardAction,
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                            enabled = provider != null && modelsState !is ProviderModelsUiState.Loading,
-                        ) {
-                            Text(if (modelsState is ProviderModelsUiState.Loading) "读取中…" else "查看模型")
-                        }
+                            enabled = quotaReadEnabled(row.quotaSupported, anyBusy),
+                        ) { Text(quotaReadLabel(busyQuota)) }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        McaButton(
-                            onClick = { confirmToggle = true },
-                            style = McaButtonStyle.Outlined,
-                            size = McaButtonSize.CardAction,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                            enabled = provider != null && !toggling,
-                        ) {
-                            Text(
-                                when {
-                                    toggling -> "切换中…"
-                                    provider?.off == true -> "启用渠道"
-                                    else -> "停用渠道"
-                                },
-                            )
-                        }
-                        McaButton(
-                            onClick = onTest,
-                            style = McaButtonStyle.Outlined,
-                            size = McaButtonSize.CardAction,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                            enabled = provider != null && !probing,
-                        ) {
-                            Text(if (probing) "探测中…" else "测试")
-                        }
-                    }
-                    // 桌面端更多菜单（详情/标签/备注/预设/复制配置）收进这一个按钮
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        McaButton(
-                            onClick = { sheet = CardSheet.MORE },
-                            style = McaButtonStyle.Outlined,
-                            size = McaButtonSize.CardAction,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                        ) { Text("更多") }
-                    }
+                    McaButton(
+                        onClick = { sheet = CardSheet.MORE },
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    ) { Text("更多") }
                 }
             }
         }
@@ -1119,7 +1068,85 @@ private fun AccountQuotaCard(
         onAction = onAccountAction,
         onClose = { sheet = CardSheet.NONE },
         onOpen = { next -> sheet = next },
+        onTest = onTest,
+        onSetDisabled = onSetDisabled,
+        onLoadModels = onLoadModels,
+        onConfirmToggleChannel = { confirmToggle = true },
     )
+}
+
+/**
+ * 卡片底部的状态两行：`额度重置` / `最近使用`。
+ *
+ * 版式照桌面 `acct-foot` 的元信息行：**左侧标签定宽、右侧数值右对齐**，
+ * 这样多张卡纵向排下来时数值是一列，而不是每行各自飘。
+ */
+@Composable
+private fun AccountStatusRows(row: AccountQuotaRow) {
+    val labelWidth = 76.dp
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        AccountStatusRow("额度重置", accountTimeLabel(row.resetAt) ?: "—", labelWidth)
+        AccountStatusRow("最近使用", accountTimeLabel(row.lastUsed) ?: "尚未使用", labelWidth)
+    }
+}
+
+@Composable
+private fun AccountStatusRow(label: String, value: String, labelWidth: Dp) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(labelWidth),
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * 每日签到行（桌面 `channels.js:373-399` 的 `checkinRow`）。
+ *
+ * 左边状态文字可换两行并省略，右边按钮定宽；1.3× 字号下也不会挤成竖排单字。
+ */
+@Composable
+private fun AccountCheckinRow(
+    row: AccountQuotaRow,
+    busy: Boolean,
+    onCheckin: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "每日签到",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = checkinLabel(row.checkin),
+                style = MaterialTheme.typography.bodySmall,
+                color = checkinColor(row.checkin),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        McaButton(
+            onClick = onCheckin,
+            style = McaButtonStyle.Outlined,
+            size = McaButtonSize.CardAction,
+            enabled = !busy && !row.disabled && !checkinSettled(row.checkin),
+        ) {
+            Text(if (busy) "签到中…" else checkinButtonLabel(row.checkin), maxLines = 1)
+        }
+    }
 }
 
 /** 额度区：有窗口画窗口条，有总量/已用画一条总条，都没有就说明原因（绝不画 0%）。 */
@@ -1776,6 +1803,119 @@ internal enum class CardSheet {
     COPY,
 }
 
+/* ==========================================================================
+ * 「更多」菜单（桌面 `channels.js:303-318` 的顺序与逐字文案）
+ *
+ * 用户反馈「表达不清」：光给一个词（预设 / 标签 / 复制配置）没人知道点下去干什么，
+ * 所以每项都配一句"它到底做什么"。危险项（停用 / 删除）单独标记，渲染时用错误色 + 二次确认。
+ * ========================================================================== */
+
+/** 菜单里的一项对应哪个动作。 */
+internal enum class AccountMoreAction {
+    Details,
+    Settings,
+    Models,
+    Presets,
+    Tags,
+    Note,
+    CopyConfig,
+    Test,
+    ToggleDisabled,
+    ToggleChannel,
+    Delete,
+}
+
+/** 一项菜单：文案 + 一句话说明 + 是否危险（危险项要二次确认）。 */
+internal data class AccountMoreItem(
+    val action: AccountMoreAction,
+    val label: String,
+    val detail: String,
+    val danger: Boolean = false,
+)
+
+/**
+ * 账号卡「更多」菜单的完整表（纯函数，便于单测与"以后加项只改这里"）。
+ *
+ * @param canDelete 手机端目前**没有**删除账号的端点（`ChannelsAction` 里没有删除，
+ *   桌面 `DELETE accounts/{id}` 未接入），所以默认不渲染该项——不给点了必失败的入口。
+ *   等端点接上后这里传 true 即可，页面不用改。
+ * @param disabled 账号当前是否已停用：决定危险项显示「停用账号」还是「启用账号」。
+ */
+internal fun accountMoreMenuItems(
+    hasNote: Boolean,
+    tagCount: Int,
+    presetCount: Int,
+    disabled: Boolean = false,
+    canDelete: Boolean = false,
+    channelOff: Boolean = false,
+): List<AccountMoreItem> {
+    val items = mutableListOf(
+        AccountMoreItem(
+            action = AccountMoreAction.Details,
+            label = "详情",
+            detail = "账号的只读信息（渠道、入库时间、额度来源）",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.Settings,
+            label = "设置：优先级 / 权重 / 并发",
+            detail = "决定路由优先级、负载权重与并发上限",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.Models,
+            label = "查看模型",
+            detail = "这个渠道声明了哪些模型、是否已启用",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.Presets,
+            label = if (presetCount > 0) "预设（已挂 $presetCount 个）" else "预设",
+            detail = "这个渠道的参数预设，换模型/换额度规则时用",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.Tags,
+            label = if (tagCount > 0) "标签（$tagCount 个）" else "标签",
+            detail = "给账号打标签，列表里可按标签筛",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.Note,
+            label = if (hasNote) "编辑备注" else "加备注",
+            detail = "自己记一句，只存在本机",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.CopyConfig,
+            label = "复制配置",
+            detail = "复制接入片段（Base URL / 渠道 / 模型，不含凭据）",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.Test,
+            label = "测试连通性",
+            detail = "发一个最小请求验证 Key 现在还能用",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.ToggleDisabled,
+            label = if (disabled) "启用账号" else "停用账号",
+            detail = if (disabled) "恢复参与路由" else "停用后不再参与路由，凭据保留",
+            // 停用是写操作，用危险色 + 二次确认；启用不算危险。
+            danger = !disabled,
+        ),
+        // 渠道级开关（桌面 `acct-acts` 里的那个 toggle）：整条渠道退出/恢复路由。
+        AccountMoreItem(
+            action = AccountMoreAction.ToggleChannel,
+            label = if (channelOff) "启用渠道" else "停用渠道",
+            detail = if (channelOff) "恢复这个渠道的所有账号" else "整个渠道退出路由，所有账号一起停",
+            danger = !channelOff,
+        ),
+    )
+    if (canDelete) {
+        items += AccountMoreItem(
+            action = AccountMoreAction.Delete,
+            label = "删除账号",
+            detail = "只移除本机记录，渠道本身不动",
+            danger = true,
+        )
+    }
+    return items
+}
+
 /** 桌面端一样的小输入框：Surface(hairline) + BasicTextField，自己撑到 48dp。 */
 @Composable
 private fun ChannelTextField(
@@ -1853,10 +1993,15 @@ private fun AccountSheets(
     onAction: (ChannelsAction) -> Unit,
     onClose: () -> Unit,
     onOpen: (CardSheet) -> Unit,
+    onTest: () -> Unit,
+    onSetDisabled: (Boolean) -> Unit,
+    onLoadModels: () -> Unit,
+    onConfirmToggleChannel: () -> Unit,
 ) {
     if (sheet == CardSheet.NONE) {
         return
     }
+    var confirmDisable by remember { mutableStateOf(false) }
     val savingKind = (edit as? AccountEditUiState.Saving)?.takeIf { it.accountId == row.accountId }?.kind
     McaDialog(
         onDismissRequest = onClose,
@@ -1877,23 +2022,63 @@ private fun AccountSheets(
         },
         text = {
             when (sheet) {
-                CardSheet.MORE -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                CardSheet.MORE -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     val presetCount = (presetsState as? PresetsUiState.Ready)
                         ?.view?.providerPresets?.get(row.providerId)?.size ?: 0
-                    McaButton(onClick = { onOpen(CardSheet.DETAILS) }, style = McaButtonStyle.Text) {
-                        Text("详情与设置（优先级 / 权重 / 并发）")
-                    }
-                    McaButton(onClick = { onOpen(CardSheet.TAGS) }, style = McaButtonStyle.Text) {
-                        Text(if (row.tags.isEmpty()) "添加标签" else "标签（${row.tags.size} 个）")
-                    }
-                    McaButton(onClick = { onOpen(CardSheet.NOTE) }, style = McaButtonStyle.Text) {
-                        Text(if (row.note.isBlank()) "添加备注" else "编辑备注")
-                    }
-                    McaButton(onClick = { onOpen(CardSheet.PRESETS) }, style = McaButtonStyle.Text) {
-                        Text(if (presetCount > 0) "预设（已挂 $presetCount 个）" else "预设")
-                    }
-                    McaButton(onClick = { onOpen(CardSheet.COPY) }, style = McaButtonStyle.Text) {
-                        Text("复制配置（不含凭据）")
+                    // 菜单表是纯函数（`accountMoreMenuItems`）：文案、说明、危险标记都在那里定，
+                    // 这里只负责渲染与分发。
+                    val items = accountMoreMenuItems(
+                        hasNote = row.note.isNotBlank(),
+                        tagCount = row.tags.size,
+                        presetCount = presetCount,
+                        disabled = row.disabled,
+                        channelOff = provider?.off == true,
+                    )
+                    items.forEach { item ->
+                        val color = if (item.danger) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(McaShape.CardAction)
+                                .clickable {
+                                    when (item.action) {
+                                        AccountMoreAction.Details,
+                                        AccountMoreAction.Settings,
+                                        -> onOpen(CardSheet.DETAILS)
+                                        AccountMoreAction.Presets -> onOpen(CardSheet.PRESETS)
+                                        AccountMoreAction.Models -> {
+                                            onClose()
+                                            onLoadModels()
+                                        }
+                                        AccountMoreAction.Tags -> onOpen(CardSheet.TAGS)
+                                        AccountMoreAction.Note -> onOpen(CardSheet.NOTE)
+                                        AccountMoreAction.CopyConfig -> onOpen(CardSheet.COPY)
+                                        AccountMoreAction.Test -> {
+                                            onClose()
+                                            onTest()
+                                        }
+                                        AccountMoreAction.ToggleDisabled -> confirmDisable = true
+                                        AccountMoreAction.ToggleChannel -> onConfirmToggleChannel()
+                                        AccountMoreAction.Delete -> Unit // 手机端没有该端点，表里不会出现
+                                    }
+                                }
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                text = item.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = color,
+                            )
+                            Text(
+                                text = item.detail,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 CardSheet.DETAILS -> AccountDetailsBody(
@@ -1959,6 +2144,36 @@ private fun AccountSheets(
             McaButton(onClick = onClose, style = McaButtonStyle.Outlined) { Text("关闭") }
         },
     )
+
+    // 危险动作（停用）二次确认：桌面 `channels.js:475` 的「停用后不再参与路由」同一口径。
+    if (confirmDisable) {
+        McaDialog(
+            onDismissRequest = { confirmDisable = false },
+            title = { Text("停用账号「${row.label}」？", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = "停用后不再参与路由，凭据仍保留在本机；随时可以再启用。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        confirmDisable = false
+                        onClose()
+                        onSetDisabled(true)
+                    },
+                    style = McaButtonStyle.Primary,
+                ) { Text("停用") }
+            },
+            dismissButton = {
+                McaButton(onClick = { confirmDisable = false }, style = McaButtonStyle.Outlined) {
+                    Text("取消")
+                }
+            },
+        )
+    }
 }
 
 @Composable

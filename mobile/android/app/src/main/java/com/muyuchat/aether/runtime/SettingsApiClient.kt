@@ -193,9 +193,17 @@ class SettingsApiClient(
     fun setTheme(status: GatewayStatus, theme: String): SettingsSummary =
         parseSettings(requestJson(status, "/api/settings", "POST", buildThemeJson(theme)))
 
-    /** 渠道自动探测间隔（分钟，0 = 关闭）。 */
-    fun setMonitorMinutes(status: GatewayStatus, minutes: Int): SettingsSummary =
-        parseSettings(requestJson(status, "/api/settings", "POST", buildMonitorMinutesJson(minutes)))
+    /** 渠道自动探测间隔（分钟，0 = 关闭）。服务端专用端点，不能混进 /api/settings。 */
+    fun setMonitorMinutes(status: GatewayStatus, minutes: Int): SettingsSummary {
+        requestJson(
+            status,
+            "/api/settings/channel-monitor",
+            "POST",
+            buildChannelMonitorJson(minutes),
+        )
+        // 保存后强制重新 GET，界面拿到的是服务端真实值（含 5..1440 的钳制）。
+        return fetchSettings(status)
+    }
 
     /** 防休眠（桌面宿主能力；手机端只做展示与置灰）。 */
     fun setKeepAwake(status: GatewayStatus, enabled: Boolean): SettingsSummary =
@@ -209,9 +217,13 @@ class SettingsApiClient(
     fun setRedactShape(status: GatewayStatus, enabled: Boolean): SettingsSummary =
         parseSettings(requestJson(status, "/api/settings", "POST", buildRedactShapeJson(enabled)))
 
-    /** 响应回填（`privacy_mask.enabled`）。 */
-    fun setPrivacyMask(status: GatewayStatus, enabled: Boolean): SettingsSummary =
-        parseSettings(requestJson(status, "/api/settings", "POST", buildPrivacyMaskJson(enabled)))
+    /** 响应回填（`privacy_mask.enabled`）。必须先 GET 完整对象再整体回写，避免清掉 rules/sidecar。 */
+    fun setPrivacyMask(status: GatewayStatus, enabled: Boolean): SettingsSummary {
+        val current = requestJson(status, "/api/settings", "GET", null)
+        return parseSettings(
+            requestJson(status, "/api/settings", "POST", buildPrivacyMaskJson(current, enabled)),
+        )
+    }
 
     /** 请求钩子四项一次写回（桌面 `saveHooks` 同口径：整对象覆盖）。 */
     fun saveHooks(status: GatewayStatus, hooks: PipelineHooks): SettingsSummary =
@@ -907,19 +919,25 @@ data class PresetDraft(
     val headersJson: String = "{}",
 )
 
-/** 草稿校验：null = 通过；否则为人类可读原因（JSON 错误带行号）。 */
+/**
+ * 草稿校验：null = 通过；否则为人类可读原因。
+ *
+ * **措辞与顺序照桌面 `settings.js:911-918`**（名称 → Body → Headers → 对象形状），
+ * 只在桌面那句后面补「第 N 行附近」——桌面是 toast，手机没有 toast 通道，行号是本地增益。
+ */
 internal fun validatePresetDraft(draft: PresetDraft): String? {
     if (draft.name.trim().isEmpty()) {
         return "名称不能为空"
     }
-    parseJsonObjectOrError(draft.bodyJson)?.let { return "Body $it" }
+    jsonObjectError(draft.bodyJson)?.let { return "Body $it" }
     val headersText = draft.headersJson.trim().ifEmpty { "{}" }
-    parseJsonObjectOrError(headersText)?.let { return "Headers $it" }
+    jsonObjectError(headersText)?.let { return "Headers $it" }
     val headers = runCatching { org.json.JSONObject(headersText) }.getOrNull() ?: return null
     val keys = headers.keys()
     while (keys.hasNext()) {
         val key = keys.next()
         if (headers.opt(key) !is String) {
+            // 桌面不查这一条，但服务端是 map[string]string，不拦就会 400。
             return "Headers 的值必须是字符串（键「$key」不是）"
         }
     }
@@ -929,6 +947,28 @@ internal fun validatePresetDraft(draft: PresetDraft): String? {
         return "ID 只能包含小写字母、数字和连字符"
     }
     return null
+}
+
+/**
+ * 对象形状/语法检查，返回**桌面措辞**的片段：
+ *  - 不是合法 JSON → `不是合法 JSON（第 N 行附近）：<原因>`
+ *  - 是数组/字符串 → `必须是 JSON 对象`
+ */
+internal fun jsonObjectError(text: String): String? {
+    val trimmed = text.trim().ifEmpty { "{}" }
+    if (trimmed.startsWith("[") || trimmed.startsWith("\"")) {
+        return "必须是 JSON 对象"
+    }
+    return try {
+        org.json.JSONObject(trimmed)
+        null
+    } catch (e: org.json.JSONException) {
+        val detail = jsonErrorMessage(trimmed, e.message.orEmpty())
+        // jsonErrorMessage 已带「JSON 不合法（第 N 行附近）：<原因>」外框，这里只取内容部分。
+        val inner = detail.substringAfter("）").substringAfter("：").trim().ifBlank { "无法解析" }
+        val line = Regex("""第 (\d+) 行""").find(detail)?.groupValues?.getOrNull(1)
+        if (line == null) "不是合法 JSON：$inner" else "不是合法 JSON（第 $line 行附近）：$inner"
+    }
 }
 
 /**
@@ -1053,10 +1093,11 @@ internal fun parsePipelineHooks(obj: org.json.JSONObject?): PipelineHooks {
 }
 
 internal fun buildThemeJson(theme: String): String =
-    "{\"ui\":{\"theme\":${quoteJson(theme.trim())}}}"
+    // 必须顶层 "theme"：applyUIPrefs 会跳过 reserved 的 "ui"，发 {"ui":...} 等于没保存。
+    "{\"theme\":${quoteJson(theme.trim())}}"
 
-internal fun buildMonitorMinutesJson(minutes: Int): String =
-    "{\"monitor_minutes\":${minutes.coerceAtLeast(0)}}"
+internal fun buildChannelMonitorJson(minutes: Int): String =
+    "{\"minutes\":${minutes.coerceAtLeast(0)}}"
 
 internal fun buildKeepAwakeJson(enabled: Boolean): String = "{\"keep_awake\":$enabled}"
 
@@ -1064,7 +1105,14 @@ internal fun buildWslDisabledJson(disabled: Boolean): String = "{\"wsl_disabled\
 
 internal fun buildRedactShapeJson(enabled: Boolean): String = "{\"redactShape\":$enabled}"
 
-internal fun buildPrivacyMaskJson(enabled: Boolean): String = "{\"privacy_mask\":{\"enabled\":$enabled}}"
+internal fun buildPrivacyMaskJson(currentSettingsBody: String, enabled: Boolean): String {
+    val privacy = runCatching {
+        JSONObject(currentSettingsBody.trim()).optJSONObject("privacy_mask")
+    }.getOrNull() ?: JSONObject()
+    // enabled 是唯一改动；rules/sidecar 等字段必须原样带回，服务端是整结构体替换。
+    privacy.put("enabled", enabled)
+    return JSONObject().put("privacy_mask", privacy).toString()
+}
 
 /**
  * 钩子保存体：**必须是 `{"hooks":{...}}` 包裹**（服务端读 `settings.ui["hooks"]`，
