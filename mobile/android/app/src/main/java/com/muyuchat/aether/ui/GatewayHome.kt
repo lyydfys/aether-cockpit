@@ -534,10 +534,16 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
             showProbe -> {
                 val probeViewModel: GatewayProbeViewModel = viewModel()
                 val probeState by probeViewModel.state.collectAsStateWithLifecycle()
+                val probeAlerts by probeViewModel.alerts.collectAsStateWithLifecycle()
                 GatewayProbePage(
                     status = state.status,
                     state = probeState,
                     onRefresh = probeViewModel::refresh,
+                    alerts = probeAlerts,
+                    onOpenUsage = {
+                        showProbe = false
+                        selectedTab = MobileTab.USAGE
+                    },
                     onBack = { showProbe = false },
                     onOpenOverview = {
                         showProbe = false

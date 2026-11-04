@@ -16,6 +16,7 @@ import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.ProbeApiClient
+import com.muyuchat.aether.runtime.QuotaAlertsReport
 import com.muyuchat.aether.runtime.SessionProbeReport
 import com.muyuchat.aether.runtime.SettingsApiClient
 import com.muyuchat.aether.runtime.SettingsSummary
@@ -59,6 +60,19 @@ sealed interface ProbeUiState {
 }
 
 /**
+ * 额度提醒状态（桌面 `gateway.js:86-100`）。
+ *
+ * `Ready` 里为空列表时桌面**整卡不渲染**，所以页面也按"有提醒才画"处理；
+ * 读失败单独成一个状态，原样贴服务端文案，不伪装成"没有提醒"。
+ */
+sealed interface QuotaAlertsUiState {
+    data object Idle : QuotaAlertsUiState
+    data object Loading : QuotaAlertsUiState
+    data class Ready(val report: QuotaAlertsReport) : QuotaAlertsUiState
+    data class Failed(val code: String, val message: String) : QuotaAlertsUiState
+}
+
+/**
  * 探针工作区的 ViewModel。
  *
  * 与桌面 `gateway.js:22-52` 同策略：各块各自兜底（`Promise.all(... .catch(() => ({})))`），
@@ -75,6 +89,26 @@ class GatewayProbeViewModel(application: Application) : AndroidViewModel(applica
 
     private val _state = MutableStateFlow<ProbeUiState>(ProbeUiState.Idle)
     val state: StateFlow<ProbeUiState> = _state.asStateFlow()
+
+    // —— 额度提醒（桌面 gateway.js:86-100）：与整页探测分开取，失败不影响其它块 ——
+    private val _alerts = MutableStateFlow<QuotaAlertsUiState>(QuotaAlertsUiState.Idle)
+    val alerts: StateFlow<QuotaAlertsUiState> = _alerts.asStateFlow()
+
+    private fun loadQuotaAlerts(status: GatewayStatus) {
+        viewModelScope.launch {
+            _alerts.value = QuotaAlertsUiState.Loading
+            _alerts.value = try {
+                val report = withContext(Dispatchers.IO) { probeClient.fetchQuotaAlerts(status) }
+                QuotaAlertsUiState.Ready(report)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                QuotaAlertsUiState.Failed(e.code, e.message)
+            } catch (_: Exception) {
+                QuotaAlertsUiState.Failed("unknown", "读取额度提醒失败，请重试")
+            }
+        }
+    }
 
     fun refresh() {
         load(userInitiated = true)
@@ -93,6 +127,7 @@ class GatewayProbeViewModel(application: Application) : AndroidViewModel(applica
         if (current !is ProbeUiState.Ready) {
             _state.value = ProbeUiState.Loading
         }
+        loadQuotaAlerts(status)
         viewModelScope.launch {
             _state.value = withContext(Dispatchers.IO) { collect(status, current) }
         }

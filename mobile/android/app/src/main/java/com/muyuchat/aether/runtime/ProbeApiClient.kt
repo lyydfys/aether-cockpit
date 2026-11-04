@@ -99,6 +99,8 @@ data class SessionProbeReport(
  */
 internal fun probeNeedsSession(path: String): Boolean = when (path) {
     "/readyz", "/version", "/metrics", "/api/runtime" -> true
+    // 额度提醒（`GET /api/alerts`，`gateway.go:874`）落在 `/api/` 管理面：必须带会话凭据。
+    "/api/alerts" -> true
     // /healthz 与 /api/health：移动运行时里显式匿名。
     else -> false
 }
@@ -158,9 +160,22 @@ class ProbeApiClient(
         )
     }
 
+    /**
+     * 额度提醒：`GET /api/alerts`（`gateway.go:874` → `quota_alert.go:225-244`），
+     * 桌面把它放在网关页第一块（`internal/web/ui2/js/views/gateway.js:86-100`）。
+     *
+     * 数据来自网关里**仍然成立**的额度窗口（`ActiveQuotaAlerts()` 会过滤掉已重置的），
+     * 手机网关同样有账号池与额度读数，所以不是桌面专属数据。
+     */
+    fun fetchQuotaAlerts(status: GatewayStatus): QuotaAlertsReport {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        return parseQuotaAlerts(probe(status, "/api/alerts").body)
+    }
+
     /** 凭据只由 [probeAuthorization] 决定，调用点不可能"顺手"把 Bearer 带到匿名端点。 */
-    private fun probe(
-        status: GatewayStatus,
+    private fun probe(        status: GatewayStatus,
         path: String,
         acceptedCodes: Set<Int> = emptySet(),
     ): HttpTextResult = getText(status.addr, path, probeAuthorization(path, status), acceptedCodes)
@@ -274,6 +289,126 @@ private fun requireKeys(root: JSONObject, label: String, keys: List<String>) {
     val missing = keys.filterNot { root.has(it) && !root.isNull(it) }
     if (missing.isNotEmpty()) {
         throw ManagementApiException("invalid_response", "$label 缺少字段：${missing.joinToString("、")}")
+    }
+}
+
+/**
+ * 一条额度提醒（`quota_alert.go:4-17` 的 `QuotaAlert`）。
+ *
+ * `kind` 只有三种：`low`（额度偏低）/ `expiring`（即将重置）/ `exhausted`（已用尽）。
+ * 桌面按 kind 上不同颜色：expiring = amber，其余 = red（`gateway.js:95-96`）。
+ */
+data class QuotaAlert(
+    val key: String,
+    val kind: String,
+    val providerId: String,
+    val provider: String,
+    val accountId: String,
+    val account: String,
+    val window: String,
+    /** 已用比例（0–1，服务端口径）；服务端可能不给。 */
+    val used: Double,
+    val resetsAt: Long,
+    val message: String,
+    val at: Long,
+)
+
+/** `/api/alerts` 整包：`{"alerts":[…],"rejected":{callerKeyId:被拒次数}}`（`quota_alert.go:225-244`）。 */
+data class QuotaAlertsReport(
+    val alerts: List<QuotaAlert>,
+    /** 今天被限流拒绝的次数，按调用方 key id。桌面只用它回答"今天被拒了多少次"。 */
+    val rejected: Map<String, Int>,
+)
+
+/** 解析 `/api/alerts`：`alerts` 缺省当空数组；`rejected` 只收数值项，脏数据丢掉。 */
+internal fun parseQuotaAlerts(body: String): QuotaAlertsReport {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "额度提醒返回的数据格式不正确")
+    }
+    val alerts = root.optJSONArray("alerts")?.let { array ->
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val kind = item.optString("kind").trim().lowercase()
+            if (kind.isEmpty()) {
+                return@mapNotNull null
+            }
+            QuotaAlert(
+                key = item.optString("key").trim(),
+                kind = kind,
+                providerId = item.optString("provider_id").trim(),
+                provider = item.optString("provider").trim(),
+                accountId = item.optString("account_id").trim(),
+                account = item.optString("account").trim(),
+                window = item.optString("window").trim(),
+                used = item.optDouble("used", 0.0).let { if (it.isFinite()) it.coerceIn(0.0, 1.0) else 0.0 },
+                resetsAt = item.optLong("resets_at", 0L).coerceAtLeast(0L),
+                message = item.optString("message").trim(),
+                at = item.optLong("at", 0L).coerceAtLeast(0L),
+            )
+        }
+    }.orEmpty()
+    val rejected = LinkedHashMap<String, Int>()
+    root.optJSONObject("rejected")?.let { obj ->
+        for (key in obj.keys()) {
+            val value = obj.optInt(key, 0)
+            if (value > 0) {
+                rejected[key] = value
+            }
+        }
+    }
+    return QuotaAlertsReport(alerts = alerts, rejected = rejected)
+}
+
+/**
+ * 桌面 `gateway.js:95` 的 kind → chip 文案。
+ *
+ * 注意服务端只有 `low` / `expiring` / `exhausted` 三种；未知 kind 按「额度偏低」处理，
+ * 与桌面的 `else` 分支一致。
+ */
+internal fun quotaAlertKindLabel(kind: String): String = when (kind.trim().lowercase()) {
+    "expiring" -> "即将重置"
+    "exhausted" -> "已用尽"
+    else -> "额度偏低"
+}
+
+/** 桌面只给 expiring 上 amber，其余 red（`gateway.js:95-96`）。 */
+internal fun quotaAlertKindIsAmber(kind: String): Boolean =
+    kind.trim().lowercase() == "expiring"
+
+/** 卡片右上角「N 条」；0 时不显示（桌面整卡都不显示）。 */
+internal fun quotaAlertCountLabel(count: Int): String = "$count 条"
+
+/** 桌面最多列 3 条（`gateway.js:93` 的 `alerts.slice(0, 3)`）。 */
+internal fun quotaAlertRows(alerts: List<QuotaAlert>, limit: Int = 3): List<QuotaAlert> =
+    alerts.take(limit.coerceAtLeast(0))
+
+/**
+ * 一条提醒的展示文案：渠道名（优先 `provider`，回退 id）+ 账号 + 窗口 + 剩余% + 服务端原文。
+ *
+ * 剩余% 由 `used` 折算（服务端口径 0–1）；`used` 缺省时**不显示百分比**，不退化成 0%。
+ */
+internal fun quotaAlertLine(alert: QuotaAlert): String = buildString {
+    val channel = alert.provider.ifBlank { alert.providerId }
+    if (channel.isNotBlank()) {
+        append(channel)
+    }
+    if (alert.account.isNotBlank()) {
+        if (isNotEmpty()) append(" · ")
+        append(alert.account)
+    }
+    if (alert.window.isNotBlank()) {
+        if (isNotEmpty()) append(" · ")
+        append(alert.window)
+    }
+    if (alert.used > 0.0) {
+        if (isNotEmpty()) append(" · ")
+        append("已用 ").append(((alert.used * 100).toInt()).coerceIn(0, 100)).append("%")
+    }
+    if (alert.message.isNotBlank()) {
+        if (isNotEmpty()) append(" — ")
+        append(alert.message)
     }
 }
 

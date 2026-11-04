@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -44,6 +45,12 @@ import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.HealthzProbe
 import com.muyuchat.aether.runtime.MetricsDigest
 import com.muyuchat.aether.runtime.ProbeOutcome
+import com.muyuchat.aether.runtime.QuotaAlertsReport
+import com.muyuchat.aether.runtime.quotaAlertCountLabel
+import com.muyuchat.aether.runtime.quotaAlertKindIsAmber
+import com.muyuchat.aether.runtime.quotaAlertKindLabel
+import com.muyuchat.aether.runtime.quotaAlertLine
+import com.muyuchat.aether.runtime.quotaAlertRows
 import com.muyuchat.aether.runtime.ReadyzProbe
 import com.muyuchat.aether.runtime.VersionInfo
 import com.muyuchat.aether.runtime.channelProbeAgeLabel
@@ -89,6 +96,10 @@ internal fun GatewayProbePage(
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     onOpenOverview: () -> Unit,
+    /** 额度提醒（桌面 `gateway.js:86-100` 的第一块）；数据来自 `GET /api/alerts`。 */
+    alerts: QuotaAlertsUiState = QuotaAlertsUiState.Idle,
+    /** 「去用量页」；为 null 时不渲染该按钮（避免死按钮）。 */
+    onOpenUsage: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var protocol by remember { mutableStateOf("openai") }
@@ -115,6 +126,24 @@ internal fun GatewayProbePage(
                 onRefresh = onRefresh,
                 enabled = state !is ProbeUiState.Loading,
             )
+        }
+        // ① 额度提醒：桌面网关页的第一块（gateway.js:86-100）；无提醒时桌面**整卡不渲染**。
+        when (alerts) {
+            QuotaAlertsUiState.Idle -> Unit
+            is QuotaAlertsUiState.Loading -> Unit
+            is QuotaAlertsUiState.Failed -> item {
+                QuotaAlertsFailedCard(alerts)
+            }
+            is QuotaAlertsUiState.Ready -> {
+                if (alerts.report.alerts.isNotEmpty()) {
+                    item {
+                        QuotaAlertsCard(
+                            report = alerts.report,
+                            onOpenUsage = onOpenUsage,
+                        )
+                    }
+                }
+            }
         }
         when (state) {
             ProbeUiState.Idle, ProbeUiState.Loading -> item { ProbeLoadingCard() }
@@ -192,6 +221,90 @@ internal fun GatewayProbePage(
 
     drawer?.let { path ->
         ProbeEndpointDialog(path = path, state = state, onDismiss = { drawer = null })
+    }
+}
+
+/* ---------------- 额度提醒（桌面 gateway.js:86-100） ---------------- */
+
+/**
+ * 有提醒时的卡片：标题「额度提醒」+「N 条」+「去用量页」，下面最多 3 条（桌面 `alerts.slice(0, 3)`）。
+ *
+ * 视觉：amber 描边（桌面用的是 `--amber` 边框 + 圆角）；每条一行「kind chip + 文案」，
+ * 用 `Row` + 文案 `weight(1f)`，1.0×/1.3× 都只是换行，不会挤成竖排。
+ */
+@Composable
+private fun QuotaAlertsCard(report: QuotaAlertsReport, onOpenUsage: (() -> Unit)?) {
+    val amber = MaterialTheme.colorScheme.tertiary
+    Surface(
+        shape = McaShape.Sheet,
+        color = McaTonal.fill(),
+        border = BorderStroke(1.dp, amber),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "额度提醒",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = quotaAlertCountLabel(report.alerts.size),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                if (onOpenUsage != null) {
+                    McaButton(onClick = onOpenUsage, style = McaButtonStyle.Text) {
+                        Text("去用量页")
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            for (alert in quotaAlertRows(report.alerts)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text(
+                        text = quotaAlertKindLabel(alert.kind),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (quotaAlertKindIsAmber(alert.kind)) {
+                            MaterialTheme.colorScheme.tertiary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        maxLines = 1,
+                    )
+                    Text(
+                        text = quotaAlertLine(alert),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 读失败：贴服务端原文，不装作"没有提醒"。 */
+@Composable
+private fun QuotaAlertsFailedCard(state: QuotaAlertsUiState.Failed) {
+    DeepCard {
+        DeepCardTitle("额度提醒读取失败")
+        Spacer(Modifier.height(4.dp))
+        DeepCardBody(
+            if (state.code == "gateway_not_running") {
+                "网关未启动；启动后这一卡会自动出现。"
+            } else {
+                "${state.message}（错误码：${state.code}）"
+            },
+            tone = if (state.code == "gateway_not_running") DeepTone.Info else DeepTone.Danger,
+        )
     }
 }
 
