@@ -109,6 +109,9 @@ enum class AccountActionKind {
 
     /** 删除账号（`DELETE /api/accounts/{id}`；桌面 `channels.js:315`）。 */
     DELETE,
+
+    /** 渠道额外模型增删（`POST /api/providers/{id}/models/extra`）。 */
+    EXTRA_MODEL,
 }
 
 /** 删除成功后的收尾步骤。 */
@@ -575,10 +578,6 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     private val _models = MutableStateFlow<Map<String, ProviderModelsUiState>>(emptyMap())
     val models: StateFlow<Map<String, ProviderModelsUiState>> = _models.asStateFlow()
 
-    /** 渠道额外模型弹窗：进行中 / 失败原文（失败贴服务端原话，便于用户判断是不是内置模型被拒）。 */
-    val extraModelBusy = MutableStateFlow(false)
-    val extraModelError = MutableStateFlow<String?>(null)
-
     fun loadModels(providerId: String) {
         if (providerId.isBlank()) {
             return
@@ -1007,28 +1006,33 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     fun applyExtraModel(action: ChannelsAction.ExtraModel) {
         val status = repository.status.value
         if (!status.running) {
-            extraModelError.value = "网关未启动"
+            accountAction.value = AccountActionUiState.Failed(
+                action.providerId, "gateway_not_running", "网关未启动", AccountActionKind.EXTRA_MODEL,
+            )
             return
         }
-        if (extraModelBusy.value) {
+        if (accountAction.value is AccountActionUiState.Busy) {
             return
         }
-        extraModelError.value = null
-        extraModelBusy.value = true
+        accountAction.value = AccountActionUiState.Busy(action.providerId, AccountActionKind.EXTRA_MODEL)
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     accountsClient.setExtraModel(status, action.providerId, action.model, action.action)
                 }
+                accountAction.value = AccountActionUiState.Idle
+                // 端点回完整渠道列表：整页重拉最省事，不本地拼。
                 invalidate()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                extraModelError.value = e.message
+                accountAction.value = AccountActionUiState.Failed(
+                    action.providerId, e.code, e.message, AccountActionKind.EXTRA_MODEL,
+                )
             } catch (_: Exception) {
-                extraModelError.value = "保存失败，请重试"
-            } finally {
-                extraModelBusy.value = false
+                accountAction.value = AccountActionUiState.Failed(
+                    action.providerId, "unknown", "保存失败，请重试", AccountActionKind.EXTRA_MODEL,
+                )
             }
         }
     }

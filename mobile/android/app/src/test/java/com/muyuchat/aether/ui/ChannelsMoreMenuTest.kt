@@ -43,6 +43,8 @@ class ChannelsMoreMenuTest {
                 AccountMoreAction.Details,
                 AccountMoreAction.Settings,
                 AccountMoreAction.Models,
+                // 「添加缺失模型」紧跟「查看模型」（桌面 channels.js:1018-1034）
+                AccountMoreAction.ExtraModels,
                 // 账号级模型映射（POST /api/provider/accountmapping，整表替换）
                 AccountMoreAction.ModelMapping,
                 AccountMoreAction.Presets,
@@ -70,6 +72,7 @@ class ChannelsMoreMenuTest {
                 AccountMoreAction.Details,
                 AccountMoreAction.Settings,
                 AccountMoreAction.Models,
+                AccountMoreAction.ExtraModels,
                 AccountMoreAction.ModelMapping,
                 AccountMoreAction.Presets,
                 AccountMoreAction.Tags,

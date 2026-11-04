@@ -68,6 +68,8 @@ import com.muyuchat.aether.runtime.RequestPreset
 import com.muyuchat.aether.runtime.parseTagInput
 import com.muyuchat.aether.runtime.formatAccountMappingLines
 import com.muyuchat.aether.runtime.parseAccountMappingLines
+import com.muyuchat.aether.runtime.extraModelNote
+import com.muyuchat.aether.runtime.validateExtraModelName
 import com.muyuchat.aether.runtime.AccountQuotaWindow
 import com.muyuchat.aether.runtime.ChannelProbe
 import com.muyuchat.aether.runtime.CUSTOM_CHANNEL_PROTOCOLS
@@ -79,6 +81,7 @@ import com.muyuchat.aether.runtime.slugifyCustomChannelId
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.QUOTA_UNSUPPORTED_COPY
 import com.muyuchat.aether.runtime.relativeTimeLabel
+import com.muyuchat.aether.runtime.ExtraModelAction
 import com.muyuchat.aether.runtime.ProviderSummary
 import com.muyuchat.aether.runtime.channelProbeAgeLabel
 import com.muyuchat.aether.runtime.channelProbeSummary
@@ -1134,6 +1137,7 @@ private fun AccountQuotaCard(
         edit = edit,
         presetsState = presetsState,
         baseUrl = baseUrl,
+        action = action,
         onAction = onAccountAction,
         onClose = { sheet = CardSheet.NONE },
         onOpen = { next -> sheet = next },
@@ -1871,6 +1875,7 @@ internal enum class CardSheet {
     MAPPING,
     PRESETS,
     COPY,
+    EXTRA_MODELS,
 }
 
 /* ==========================================================================
@@ -1886,6 +1891,8 @@ internal enum class AccountMoreAction {
     Settings,
     Models,
     ModelMapping,
+    // 桌面 channels.js:1018-1034 的「添加缺失模型」：上游 /models 漏报时手工追加。
+    ExtraModels,
     Presets,
     Tags,
     Note,
@@ -1999,6 +2006,13 @@ internal fun accountMoreMenuItems(
             action = AccountMoreAction.Models,
             label = "查看模型",
             detail = "这个渠道声明了哪些模型、是否已启用",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.ExtraModels,
+            label = "添加缺失模型",
+            // 菜单里用一句话；完整桌面原话（含"添加后参与路由与 /v1/models"）放在弹窗正文，
+        // 因为菜单行只放得下一句话（ChannelsMoreMenuTest 有 ≤48 字的约束）。
+        detail = "上游 /models 漏报时手工追加",
         ),
         AccountMoreItem(
             action = AccountMoreAction.ModelMapping,
@@ -2223,6 +2237,103 @@ private fun AccountFieldEditor(
     }
 }
 
+
+/**
+ * 额外模型弹窗（桌面 `channels.js:1018-1034`）：说明 + 已登记模型（可删）+ 添加输入框。
+ *
+ * 复用卡片既有的 [AccountActionUiState] 通道（`AccountActionKind.EXTRA_MODEL`），
+ * 不额外引入状态：进行中禁用、失败贴服务端原文。
+ */
+@Composable
+private fun ExtraModelsBody(
+    provider: ProviderSummary?,
+    action: AccountActionUiState,
+    onAction: (ChannelsAction) -> Unit,
+) {
+    var input by remember(provider?.id) { mutableStateOf("") }
+    val busy = action is AccountActionUiState.Busy && action.kind == AccountActionKind.EXTRA_MODEL
+    val failure = (action as? AccountActionUiState.Failed)
+        ?.takeIf { it.kind == AccountActionKind.EXTRA_MODEL }
+    val invalid = if (input.isBlank()) null else validateExtraModelName(input)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = extraModelNote(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val models = provider?.modelIds.orEmpty()
+        if (models.isEmpty()) {
+            Text(
+                text = "还没有额外模型",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                models.forEach { model ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = model,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        McaButton(
+                            onClick = {
+                                onAction(
+                                    ChannelsAction.ExtraModel(
+                                        providerId = provider?.id.orEmpty(),
+                                        model = model,
+                                        action = ExtraModelAction.Remove,
+                                    ),
+                                )
+                            },
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            enabled = !busy,
+                        ) { Text(if (busy) "处理中…" else "删除", maxLines = 1) }
+                    }
+                }
+            }
+        }
+        ChannelTextField(
+            value = input,
+            onValueChange = { input = it },
+            label = "模型名",
+            placeholder = "例如 deepseek-v4.1-flash",
+        )
+        invalid?.let { problem ->
+            Text(
+                text = problem,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        McaButton(
+            onClick = {
+                onAction(
+                    ChannelsAction.ExtraModel(
+                        providerId = provider?.id.orEmpty(),
+                        model = input,
+                        action = ExtraModelAction.Add,
+                    ),
+                )
+            },
+            style = McaButtonStyle.Primary,
+            enabled = !busy && invalid == null && input.isNotBlank(),
+        ) { Text(if (busy) "处理中…" else "添加", maxLines = 1) }
+        failure?.let {
+            Text(
+                text = it.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
 /** 桌面端一样的小输入框：Surface(hairline) + BasicTextField，自己撑到 48dp。 */
 @Composable
 private fun ChannelTextField(
@@ -2299,6 +2410,7 @@ private fun AccountSheets(
     edit: AccountEditUiState,
     presetsState: PresetsUiState,
     baseUrl: String,
+    action: AccountActionUiState,
     onAction: (ChannelsAction) -> Unit,
     onClose: () -> Unit,
     onOpen: (CardSheet) -> Unit,
@@ -2323,6 +2435,7 @@ private fun AccountSheets(
                     CardSheet.NOTE -> "备注 · ${row.label}"
                     CardSheet.MAPPING -> "模型映射 · ${row.label}"
                     CardSheet.PRESETS -> "渠道预设 · ${provider?.name ?: row.providerId}"
+                    CardSheet.EXTRA_MODELS -> "添加缺失模型 · ${provider?.name ?: row.providerId}"
                     CardSheet.COPY -> "复制配置 · ${row.label}"
                     else -> "更多 · ${row.label}"
                 },
@@ -2363,6 +2476,7 @@ private fun AccountSheets(
                                         AccountMoreAction.Details,
                                         AccountMoreAction.Settings,
                                         -> onOpen(CardSheet.DETAILS)
+                                        AccountMoreAction.ExtraModels -> onOpen(CardSheet.EXTRA_MODELS)
                                         AccountMoreAction.Presets -> onOpen(CardSheet.PRESETS)
                                         AccountMoreAction.Models -> {
                                             onClose()
@@ -2468,6 +2582,11 @@ private fun AccountSheets(
                         ) { Text("复制到剪贴板") }
                     }
                 }
+                CardSheet.EXTRA_MODELS -> ExtraModelsBody(
+                    provider = provider,
+                    action = action,
+                    onAction = onAction,
+                )
                 CardSheet.NONE -> Unit
                 else -> Unit
             }
