@@ -6,7 +6,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -32,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +55,9 @@ import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.CallerKeySummary
+import com.muyuchat.aether.runtime.CallerKeysApiClient
+import com.muyuchat.aether.runtime.CallerModelCatalog
+import com.muyuchat.aether.runtime.CallerModelOption
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.MaskingApiClient
 import com.muyuchat.aether.runtime.MaskingPreview
@@ -234,11 +241,13 @@ internal fun SettingsPage(
                                             onSaveAllowIPs = onSaveAllowIPs,
                                         )
                                         CallerKeysSection(
+                                            status = status,
                                             state = callerKeys,
                                             error = keysError,
                                             onCreate = onCreateCallerKey,
                                             onToggle = onToggleCallerKey,
                                             onRemove = onRemoveCallerKey,
+                                            onReload = onLoadCallerKeys,
                                         )
                                     }
                                     "03" -> SettingsToolsSection(status = status)
@@ -363,11 +372,13 @@ internal fun SettingsPage(
                 }
                 item {
                     CallerKeysSection(
+                        status = status,
                         state = callerKeys,
                         error = keysError,
                         onCreate = onCreateCallerKey,
                         onToggle = onToggleCallerKey,
                         onRemove = onRemoveCallerKey,
+                        onReload = onLoadCallerKeys,
                     )
                 }
                 // 块表驱动（顺序 = 现在屏幕上的顺序）：
@@ -787,16 +798,19 @@ private fun actionLabel(action: String): String = when (action) {
 
 @Composable
 private fun CallerKeysSection(
+    status: GatewayStatus,
     state: CallerKeysUiState,
     error: String?,
     onCreate: (String) -> Unit,
     onToggle: (CallerKeySummary) -> Unit,
     onRemove: (String) -> Unit,
+    onReload: () -> Unit,
 ) {
     var creating by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var deleting by remember { mutableStateOf<CallerKeySummary?>(null) }
     var confirmName by remember { mutableStateOf("") }
+    var editingModels by remember { mutableStateOf<CallerKeySummary?>(null) }
     Column {
         DeepSectionTitle(
             text = "调用方密钥",
@@ -855,6 +869,17 @@ private fun CallerKeysSection(
                                     maxLines = 1,
                                     softWrap = false,
                                     overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = callerKeyModelsSummary(key.models),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .clickable { editingModels = key }
+                                        .padding(top = 4.dp),
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
@@ -990,8 +1015,174 @@ private fun CallerKeysSection(
             },
         )
     }
+    val editing = editingModels
+    if (editing != null) {
+        CallerModelsDialog(
+            status = status,
+            key = editing,
+            onDismiss = { editingModels = null },
+            onSaved = {
+                editingModels = null
+                onReload()
+            },
+        )
+    }
 }
 
+@Composable
+private fun CallerModelsDialog(
+    status: GatewayStatus,
+    key: CallerKeySummary,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+) {
+    val client = remember { CallerKeysApiClient() }
+    val scope = rememberCoroutineScope()
+    var catalog by remember(key.id) { mutableStateOf<CallerModelCatalog?>(null) }
+    var selected by remember(key.id) { mutableStateOf(key.models.toSet()) }
+    var loading by remember(key.id) { mutableStateOf(true) }
+    var error by remember(key.id) { mutableStateOf<String?>(null) }
+    var saving by remember(key.id) { mutableStateOf(false) }
+    LaunchedEffect(key.id, status.addr) {
+        loading = true
+        error = null
+        runCatching {
+            withContext(Dispatchers.IO) {
+                // 先 GET 完整 key 对象，拿到服务端当前白名单；再拉模型选择器。
+                val fresh = client.fetch(status).keys.firstOrNull { it.id == key.id }
+                    ?: throw ManagementApiException("key_missing", "密钥已不存在，请刷新列表")
+                fresh to client.fetchModels(status)
+            }
+        }.onSuccess { (fresh, models) ->
+            selected = fresh.models.toSet()
+            catalog = models
+        }.onFailure { error = it.message ?: "读取模型白名单失败" }
+        loading = false
+    }
+    McaDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = {
+            Text(
+                text = "模型白名单 · ${key.name.ifBlank { key.id }}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "不勾选 = 不限制（全部模型）。这里只改白名单；名称、限流、启停状态保持不变。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                when {
+                    loading -> Text(
+                        text = "正在读取模型清单…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    error != null -> Text(
+                        text = error ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    catalog != null -> {
+                        Text(
+                            text = if (selected.isEmpty()) "当前：不限制" else "当前已选 ${selected.size} 个模型",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                            items(catalog?.models.orEmpty(), key = { it.id }) { model ->
+                                ModelWhitelistRow(
+                                    model = model,
+                                    checked = model.id in selected,
+                                    onToggle = {
+                                        selected = if (model.id in selected) {
+                                            selected - model.id
+                                        } else {
+                                            selected + model.id
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            McaButton(
+                onClick = {
+                    if (!saving) {
+                        saving = true
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    client.saveModels(status, key.id, selected.toList())
+                                }
+                                onSaved()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: ManagementApiException) {
+                                error = e.message
+                            } catch (_: Exception) {
+                                error = "保存模型白名单失败，请重试"
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    }
+                },
+                style = McaButtonStyle.Primary,
+                enabled = !saving && catalog != null,
+            ) { Text(if (saving) "保存中…" else "保存") }
+        },
+        dismissButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined, enabled = !saving) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun ModelWhitelistRow(
+    model: CallerModelOption,
+    checked: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = checked, onCheckedChange = { onToggle() })
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = model.name,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (model.provider.isNotBlank()) {
+                Text(
+                    text = model.provider,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
 @Composable
 private fun CallerSecretDialog(secret: String, onDismiss: () -> Unit) {
     McaDialog(
@@ -1530,6 +1721,13 @@ internal fun callerKeyMetaLine(key: CallerKeySummary): String = buildString {
     append(key.usedTokens)
     append(" tokens · $")
     append("%.4f".format(java.util.Locale.US, key.usedCost))
+}
+
+/** 白名单摘要必须单行可读；空列表是服务端的“不限制”，不能写成 0 个。 */
+internal fun callerKeyModelsSummary(models: List<String>): String = when {
+    models.isEmpty() -> "模型白名单：不限制（编辑）"
+    models.size == 1 -> "模型白名单：${models.first()}（编辑）"
+    else -> "模型白名单：${models.size} 个模型（编辑）"
 }
 
 @Composable

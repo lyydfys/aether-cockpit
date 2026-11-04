@@ -1,6 +1,8 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,15 +15,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -35,13 +45,22 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.QuotaHistoryAccount
+import com.muyuchat.aether.runtime.QuotaHistoryLine
+import com.muyuchat.aether.runtime.QuotaHistoryPoint
+import com.muyuchat.aether.runtime.QuotaHoldWindow
 import com.muyuchat.aether.runtime.UsageBreakdownRow
 import com.muyuchat.aether.runtime.UsageDayPoint
 import com.muyuchat.aether.runtime.UsageSummary
 import com.muyuchat.aether.runtime.formatTokens
 import com.muyuchat.aether.runtime.formatUsageAmount
 import com.muyuchat.aether.runtime.formatUsageCount
+import com.muyuchat.aether.runtime.normalizeQuotaPoints
 import com.muyuchat.aether.runtime.percentText
+import com.muyuchat.aether.runtime.quotaAccountLabel
+import com.muyuchat.aether.runtime.quotaConsumedPercent
+import com.muyuchat.aether.runtime.quotaHistoryEmptyHint
+import com.muyuchat.aether.runtime.quotaHoldsWhyLabel
 import com.muyuchat.aether.runtime.usageCacheHitRatePercent
 import com.muyuchat.aether.runtime.usageSuccessRatePercent
 import com.muyuchat.core.designsystem.McaButton
@@ -82,6 +101,14 @@ internal fun UsagePage(
     val breakdown by viewModel.breakdown.collectAsStateWithLifecycle()
     val pricing by viewModel.pricing.collectAsStateWithLifecycle()
     val currencyError by viewModel.currencyError.collectAsStateWithLifecycle()
+    // 额度历史与周期估算：本节自己读（不改 GatewayHome 的接线点）。
+    val quotaHistory by viewModel.quotaHistory.collectAsStateWithLifecycle()
+    val quotaHolds by viewModel.quotaHolds.collectAsStateWithLifecycle()
+    LaunchedEffect(status.running) {
+        if (status.running) {
+            viewModel.loadQuotaHistory()
+        }
+    }
 
     val currency = pricing?.currency?.takeIf { it.isNotBlank() } ?: "USD"
     val rate = pricing?.usdCny?.takeIf { it > 0.0 } ?: 7.2
@@ -151,7 +178,15 @@ internal fun UsagePage(
                         onOpenOverview = onOpenOverview,
                     )
                 }
-                // ④ 用量日历（桌面 usage.js:251-345）
+                // ④ 额度历史 + 周期估算（`GET /api/usage/quotas/history` 与 `/history/holds`）
+                item {
+                    UsageQuotaHistoryCard(
+                        history = quotaHistory,
+                        holds = quotaHolds,
+                        onRetry = { viewModel.loadQuotaHistory() },
+                    )
+                }
+                // ⑤ 用量日历（桌面 usage.js:251-345）
                 item {
                     when (detail) {
                         UsageDetailUiState.Idle, UsageDetailUiState.Loading ->
@@ -448,7 +483,10 @@ private fun UsageBreakdownCard(
     rate: Double,
     onOpenOverview: () -> Unit,
 ) {
-    val rows = usageBreakdownRows(summary, breakdown)
+    // 排序是纯本地偏好（服务端 /api/usage/arrange 只是回显，见 usageBreakdownComparator 注释），
+    // 所以状态就放在卡片里：离开页面即恢复默认「按费用」，不需要持久化。
+    var sortKey by remember { mutableStateOf(UsageSortKey.COST) }
+    val rows = usageBreakdownRows(summary, breakdown, sortKey)
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             DeepCardTitle("用量分布")
@@ -466,6 +504,28 @@ private fun UsageBreakdownCard(
                     style = if (value == breakdown) McaButtonStyle.Primary else McaButtonStyle.Outlined,
                     size = McaButtonSize.CardAction,
                 ) { Text(value.label) }
+            }
+        }
+        // 排序维度：默认「按费用」（桌面固定顺序），另外两档按调用/按 Token 看同一批数据。
+        // 单行横滚，1.3× 下也不会挤成两行或竖排。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(TightGap),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "排序",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            UsageSortKey.entries.forEach { value ->
+                McaButton(
+                    onClick = { sortKey = value },
+                    style = if (value == sortKey) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text(value.label, maxLines = 1) }
             }
         }
         if (rows.isEmpty()) {
@@ -710,7 +770,11 @@ internal fun usageBreakdownCacheRateText(row: UsageBreakdownRow): String = perce
  * 分类行：渠道 → `summary.providers`、模型 → `summary.models`、调用方 → `summary.agents`。
  * 排序与桌面一致（`usage.js:215`）：成本降序，其次调用数降序。
  */
-internal fun usageBreakdownRows(summary: UsageSummary, breakdown: UsageBreakdown): List<UsageBreakdownRow> {
+internal fun usageBreakdownRows(
+    summary: UsageSummary,
+    breakdown: UsageBreakdown,
+    sort: UsageSortKey = UsageSortKey.COST,
+): List<UsageBreakdownRow> {
     val rows = when (breakdown) {
         UsageBreakdown.PROVIDER -> summary.providers.map { provider ->
             UsageBreakdownRow(
@@ -740,9 +804,28 @@ internal fun usageBreakdownRows(summary: UsageSummary, breakdown: UsageBreakdown
         }
         UsageBreakdown.AGENT -> summary.agents
     }
-    return rows.sortedWith(
-        compareByDescending<UsageBreakdownRow> { it.cost }.thenByDescending { it.calls },
-    )
+    return rows.sortedWith(usageBreakdownComparator(sort))
+}
+
+/**
+ * 用量分布的排序维度（桌面默认固定按费用降序，`usage.js:215`：
+ * `sort((a,b) => (b.cost||0)-(a.cost||0) || (b.calls||0)-(a.calls||0))`）。
+ *
+ * 手机端把"按费用"作为默认值原样保留，另外给两个对照维度：看谁在烧成本、谁在占调用量、
+ * 谁在吃 Token。**不是**桌面 `POST /api/usage/arrange`（那个端点只回 `{ok:true, order}`，
+ * 服务端不持久化任何东西——见 `usage_quota_api.go:584-592`，排序是纯前端偏好）。
+ */
+internal enum class UsageSortKey(val label: String) {
+    COST("按费用"),
+    CALLS("按调用"),
+    TOKENS("按 Token"),
+}
+
+/** 三种排序的比较器；同值时的次级键固定，保证顺序稳定（不是随机跳）。 */
+internal fun usageBreakdownComparator(key: UsageSortKey): Comparator<UsageBreakdownRow> = when (key) {
+    UsageSortKey.COST -> compareByDescending<UsageBreakdownRow> { it.cost }.thenByDescending { it.calls }
+    UsageSortKey.CALLS -> compareByDescending<UsageBreakdownRow> { it.calls }.thenByDescending { it.cost }
+    UsageSortKey.TOKENS -> compareByDescending<UsageBreakdownRow> { it.totalTokens }.thenByDescending { it.cost }
 }
 
 /** 账本为空时的标题：说清"为什么空"，不写"暂无数据"。 */
@@ -784,3 +867,200 @@ internal fun sectionErrorLine(code: String, message: String, subject: String): S
     } else {
         "读取$subject 失败：${message.ifBlank { "未返回原因" }}（错误码：$code）"
     }
+
+/* ---------------- 额度历史 + 周期估算 ---------------- */
+
+/** 弯线的顶点（像素，原点左上）。 */
+internal data class QuotaSparkDot(val x: Float, val y: Float)
+
+/** 额度曲线的高度：固定，不随字号变（1.0×/1.3× 同高，只把标签排稀）。 */
+private val QuotaSparkHeight = 44.dp
+
+/**
+ * 额度曲线坐标：横轴按时间（首末点铺满宽度），纵轴**固定 0..100%**（`left` 是剩余百分比）。
+ *
+ * 固定纵轴是刻意的：额度曲线的意义就是"还剩多少"，按数据自适应缩放会把"还剩 90%"和
+ * "还剩 5%"画成同一条波浪线，看着都在"正常波动"。点少于 1 个或画布非法时返回空。
+ */
+internal fun quotaSparklineDots(
+    points: List<QuotaHistoryPoint>,
+    width: Float,
+    height: Float,
+): List<QuotaSparkDot> {
+    val normalized = normalizeQuotaPoints(points)
+    if (normalized.isEmpty() || width <= 0f || height <= 0f) {
+        return emptyList()
+    }
+    val firstMs = normalized.first().atMs
+    val span = (normalized.last().atMs - firstMs).toFloat()
+    return normalized.map { point ->
+        val x = if (span <= 0f) width / 2f else ((point.atMs - firstMs) / span) * width
+        val ratio = (point.left / 100.0).coerceIn(0.0, 1.0)
+        QuotaSparkDot(x = x, y = (height - ratio * height).toFloat())
+    }
+}
+
+/** 曲线小结：`剩余 42% · 45 天消耗 38 个百分点`（只有一个点时只说剩余）。 */
+internal fun quotaLineSummaryText(line: QuotaHistoryLine): String {
+    val normalized = normalizeQuotaPoints(line.points)
+    if (normalized.isEmpty()) {
+        return "没有读数"
+    }
+    val last = normalized.last().left
+    val consumed = quotaConsumedPercent(normalized)
+    val remaining = "剩余 ${sharePctText(last)}"
+    return if (normalized.size < 2 || consumed <= 0.0) {
+        remaining
+    } else {
+        "$remaining · 期间消耗 ${sharePctText(consumed)}"
+    }
+}
+
+@Composable
+private fun UsageQuotaHistoryCard(
+    history: QuotaHistoryUiState,
+    holds: Map<String, QuotaHoldWindow>,
+    onRetry: () -> Unit,
+) {
+    when (history) {
+        QuotaHistoryUiState.Idle -> Unit
+        QuotaHistoryUiState.Loading -> UsageLoadingCard("正在读取额度历史…")
+        is QuotaHistoryUiState.Failed -> DeepStateCard(
+            title = "额度历史读不到",
+            detail = history.message,
+            tone = DeepTone.Danger,
+            actionLabel = "重试",
+            onAction = onRetry,
+        )
+        is QuotaHistoryUiState.Ready -> {
+            val accounts = history.accounts
+            DeepCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DeepCardTitle("额度历史")
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        text = if (accounts.isEmpty()) "无读数" else "${accounts.size} 个账号 · 45 天",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (accounts.isEmpty()) {
+                    Text(
+                        text = quotaHistoryEmptyHint(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    return@DeepCard
+                }
+                accounts.take(4).forEach { account ->
+                    QuotaAccountBlock(account = account, holds = holds)
+                }
+                if (accounts.size > 4) {
+                    Text(
+                        text = "还有 ${accounts.size - 4} 个账号没有展开（同屏最多 4 个，避免刷不到底）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuotaAccountBlock(account: QuotaHistoryAccount, holds: Map<String, QuotaHoldWindow>) {
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = quotaAccountLabel(account.provider, account.user),
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+    account.lines.forEach { line ->
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = line.name,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(72.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            val dots = quotaSparklineDots(line.points, width = 1_000f, height = 100f)
+            // 颜色必须在**组合期**读好再传进 Canvas：DrawScope 的 lambda 不是 @Composable 上下文，
+            // 在里面写 MaterialTheme.colorScheme.primary 会报「@Composable invocations can only
+            // happen from the context of a @Composable function」。
+            val lineColor = MaterialTheme.colorScheme.primary
+            Canvas(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(QuotaSparkHeight),
+            ) {
+                if (dots.size < 2) {
+                    return@Canvas
+                }
+                val scaleX = size.width / 1_000f
+                val scaleY = size.height / 100f
+                val path = Path()
+                val first = dots.first()
+                path.moveTo(first.x * scaleX, first.y * scaleY)
+                dots.drop(1).forEach { dot -> path.lineTo(dot.x * scaleX, dot.y * scaleY) }
+                drawPath(
+                    path = path,
+                    color = lineColor,
+                    style = Stroke(width = 2f),
+                )
+                // 末点画一个点，明确"读到这里"。
+                val last = dots.last()
+                drawCircle(
+                    color = lineColor,
+                    radius = 3f,
+                    center = Offset(last.x * scaleX, last.y * scaleY),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = quotaLineSummaryText(line),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+            )
+        }
+        val hold = holds[quotaHoldKey(account.provider, account.user, line.name)]
+        Text(
+            text = quotaHoldText(hold),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * 一个窗口的"周期估算"文案。
+ *
+ * `holds` 为空 = 还没拿到（或推不出周期）；有 `estimate` 就给估算值；只有 `why` 就照服务端
+ * 的原因代码说清"为什么估不出来"——**不给看着像真的数字**。
+ */
+internal fun quotaHoldText(window: QuotaHoldWindow?): String {
+    if (window == null) {
+        return "周期估算：缺少窗口起止时间，无法反推整窗大小"
+    }
+    val estimate = window.estimate
+    if (estimate != null) {
+        val cost = if (estimate.priced) {
+            " · 约 $${"%.2f".format(java.util.Locale.US, estimate.cost)}"
+        } else {
+            " · 成本未定价"
+        }
+        val used = sharePctText(estimate.used)
+        return "周期估算：整窗约 ${formatTokens(estimate.tokens)} Token$cost（已用 $used，" +
+            "本网关经手 ${formatTokens(estimate.routedTokens)} Token / ${formatUsageCount(estimate.routedCalls)} 次调用）"
+    }
+    return "周期估算：${quotaHoldsWhyLabel(window.why)}"
+}
+

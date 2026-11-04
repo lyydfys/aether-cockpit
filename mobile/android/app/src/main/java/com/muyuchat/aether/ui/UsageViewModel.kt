@@ -6,10 +6,13 @@ import androidx.lifecycle.viewModelScope
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.PricingCatalog
+import com.muyuchat.aether.runtime.QuotaHistoryAccount
+import com.muyuchat.aether.runtime.QuotaHoldWindow
 import com.muyuchat.aether.runtime.UsageApiClient
 import com.muyuchat.aether.runtime.UsageDetailApiClient
 import com.muyuchat.aether.runtime.UsageHeatmap
 import com.muyuchat.aether.runtime.UsageSummary
+import com.muyuchat.aether.runtime.quotaCycleRange
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -181,5 +184,91 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() {
         refresh.value++
         currencyTick.value++
+        loadQuotaHistory()
     }
+
+    /* ---------------- 额度历史 + 周期估算（holds） ---------------- */
+
+    private val _quotaHistory = MutableStateFlow<QuotaHistoryUiState>(QuotaHistoryUiState.Idle)
+    val quotaHistory: StateFlow<QuotaHistoryUiState> = _quotaHistory.asStateFlow()
+
+    private val _quotaHolds = MutableStateFlow<Map<String, QuotaHoldWindow>>(emptyMap())
+    val quotaHolds: StateFlow<Map<String, QuotaHoldWindow>> = _quotaHolds.asStateFlow()
+
+    /**
+     * 读一次额度历史（`GET /api/usage/quotas/history?days=45`）。
+     *
+     * 历史是**独立的一次只读请求**，失败不影响上面的用量汇总——读不到就是读不到，
+     * 状态留在 [QuotaHistoryUiState.Failed] 里由卡片自己说。
+     */
+    fun loadQuotaHistory(days: Int = 45) {
+        val status = repository.status.value
+        if (!status.running) {
+            _quotaHistory.value = QuotaHistoryUiState.Idle
+            return
+        }
+        _quotaHistory.value = QuotaHistoryUiState.Loading
+        viewModelScope.launch {
+            _quotaHistory.value = try {
+                val accounts = withContext(Dispatchers.IO) { detailClient.fetchQuotaHistory(status, days) }
+                QuotaHistoryUiState.Ready(accounts)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                QuotaHistoryUiState.Failed(e.message)
+            } catch (_: Exception) {
+                QuotaHistoryUiState.Failed("额度历史读取失败，请重试")
+            }
+            // 曲线到手后再逐个窗口要"周期估算"——没有读数就没有可估算的周期，所以串行。
+            loadQuotaHolds()
+        }
+    }
+
+    /**
+     * 对有 `start`/`resetsAt` 的曲线逐个调 holds（`/api/usage/quotas/history/holds`）。
+     *
+     * 只有推得出周期（[quotaCycleRange]）的窗口才发请求：推不出来就说明厂商没给窗口起止，
+     * 打过去也只会拿到空数组，白费一次网络。
+     */
+    private fun loadQuotaHolds() {
+        val status = repository.status.value
+        val ready = _quotaHistory.value as? QuotaHistoryUiState.Ready ?: return
+        if (!status.running) {
+            _quotaHolds.value = emptyMap()
+            return
+        }
+        viewModelScope.launch {
+            val result = linkedMapOf<String, QuotaHoldWindow>()
+            for (account in ready.accounts) {
+                for (line in account.lines) {
+                    val range = quotaCycleRange(line.points) ?: continue
+                    val window = runCatching {
+                        withContext(Dispatchers.IO) {
+                            detailClient.fetchQuotaHolds(
+                                status = status,
+                                provider = account.provider,
+                                user = account.user,
+                                from = range.first,
+                                to = range.second,
+                            )
+                        }
+                    }.getOrNull()?.firstOrNull()?.windows?.firstOrNull { it.name == line.name } ?: continue
+                    result[quotaHoldKey(account.provider, account.user, line.name)] = window
+                }
+            }
+            _quotaHolds.value = result
+        }
+    }
+}
+
+/** holds 缓存的键：provider|user|窗口名（同一账号可能有多条窗口曲线）。 */
+internal fun quotaHoldKey(provider: String, user: String, window: String): String =
+    "${provider.trim()}|${user.trim()}|${window.trim()}"
+
+/** 额度历史的页面状态。 */
+sealed interface QuotaHistoryUiState {
+    data object Idle : QuotaHistoryUiState
+    data object Loading : QuotaHistoryUiState
+    data class Ready(val accounts: List<QuotaHistoryAccount>) : QuotaHistoryUiState
+    data class Failed(val message: String) : QuotaHistoryUiState
 }

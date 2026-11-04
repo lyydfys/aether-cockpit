@@ -202,6 +202,14 @@ sealed interface ChannelsAction {
     /** 删除账号：`DELETE /api/accounts/{id}`，只移除本机记录。 */
     data class DeleteAccount(val accountId: String) : ChannelsAction
 
+    /**
+     * 渠道顺序：`POST /api/providers/arrange {"order":[…]}`。
+     *
+     * 手机端用上移/下移代替桌面拖拽（触屏长列表 + 1.3× 字号下拖拽容易误触），
+     * 提交的是**完整顺序**，服务端只保留认识的 id。
+     */
+    data class ArrangeProviders(val order: List<String>) : ChannelsAction
+
     /** 账号详情/设置：只把改动过的字段带上去（服务端缺省=不修改）。 */
     data class UpdateAccountDetails(val accountId: String, val patch: AccountSettingsPatch) : ChannelsAction
 
@@ -576,6 +584,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             is ChannelsAction.ReadAccountQuota -> readAccountQuota(action.accountId)
             is ChannelsAction.WakeAccount -> wakeAccount(action.accountId)
             is ChannelsAction.DeleteAccount -> deleteAccount(action.accountId)
+            is ChannelsAction.ArrangeProviders -> arrangeProviders(action.order)
             is ChannelsAction.UpdateAccountDetails -> updateAccountDetails(action.accountId, action.patch)
             is ChannelsAction.SetAccountTags -> setAccountTags(action.accountId, action.tags)
             is ChannelsAction.SetAccountNote -> setAccountNote(action.accountId, action.note)
@@ -950,6 +959,45 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     private fun removeAccountRow(accountId: String) {
         lockCurrentRows()
         accountsOverride.value = currentAccountRows().filterNot { it.accountId == accountId }
+    }
+
+    /**
+     * 渠道顺序：`POST /api/providers/arrange`（`gateway.go:882`）。
+     *
+     * 成功后整页重拉（顺序由服务端回包决定，本地不猜）；失败贴服务端原文。
+     * 手机端入口是上移/下移（见 `moveProviderOrder`），不是拖拽。
+     */
+    fun arrangeProviders(order: List<String>) {
+        if (order.isEmpty()) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            accountAction.value = AccountActionUiState.Failed(
+                accountId = "",
+                code = "gateway_not_running",
+                message = "网关未启动",
+                kind = AccountActionKind.TOGGLE,
+            )
+            return
+        }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { accountsClient.arrangeProviders(status, order) }
+                invalidate()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                accountAction.value = AccountActionUiState.Failed("", e.code, e.message, AccountActionKind.TOGGLE)
+            } catch (_: Exception) {
+                accountAction.value = AccountActionUiState.Failed(
+                    "",
+                    "unknown",
+                    "保存渠道顺序失败，请重试",
+                    AccountActionKind.TOGGLE,
+                )
+            }
+        }
     }
 
     /** 唤醒后重拉账号行：服务端没有回快照，只能重新取一次（失败静默，不覆盖已有数据）。 */

@@ -14,6 +14,19 @@ data class CallerKeySummary(
     val off: Boolean,
     val usedTokens: Long,
     val usedCost: Double,
+    /** 空 = 不限制模型（服务端语义）；非空是精确白名单。 */
+    val models: List<String> = emptyList(),
+)
+
+/** `GET /api/caller-keys/models` 的可选模型（含重定向虚拟名）。 */
+data class CallerModelOption(
+    val id: String,
+    val name: String,
+    val provider: String,
+)
+
+data class CallerModelCatalog(
+    val models: List<CallerModelOption>,
 )
 
 /** secret 只在创建/轮换/复制那一次响应里出现，界面关闭后即丢弃。 */
@@ -28,6 +41,27 @@ class CallerKeysApiClient(
 ) {
     fun fetch(status: GatewayStatus): CallerKeysPayload =
         parseCallerKeys(request(status, "/api/caller-keys", "GET", null))
+
+    /** 模型选择器数据；只读，不需要管理员会话之外的额外参数。 */
+    fun fetchModels(status: GatewayStatus): CallerModelCatalog =
+        parseCallerModelCatalog(request(status, "/api/caller-keys/models", "GET", null))
+
+    /**
+     * 只改该 key 的模型白名单。
+     *
+     * 服务端 `models-key` 的动作是"原子字段更新"：它只把 `models` 写到已有
+     * callerKey，不会碰 name/limit/off/secret。所以请求体只携带 key+models；
+     * 不能把整条 key 当新对象覆盖（服务端也没有整对象 update 动作）。
+     */
+    fun saveModels(status: GatewayStatus, key: String, models: List<String>): CallerKeysPayload =
+        parseCallerKeys(
+            request(
+                status,
+                "/api/caller-keys/models-key",
+                "POST",
+                buildCallerKeyModelsJson(key, models),
+            ),
+        )
 
     fun action(
         status: GatewayStatus,
@@ -107,6 +141,35 @@ internal fun buildCallerKeyActionJson(
     return json.toString()
 }
 
+internal fun buildCallerKeyModelsJson(key: String, models: List<String>): String {
+    val array = org.json.JSONArray()
+    models.map { it.trim() }.filter { it.isNotBlank() }.distinct().sorted().forEach { array.put(it) }
+    return JSONObject()
+        .put("key", key)
+        .put("models", array)
+        .toString()
+}
+
+internal fun parseCallerModelCatalog(body: String): CallerModelCatalog {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的模型清单格式不正确")
+    }
+    val array = root.optJSONArray("models") ?: org.json.JSONArray()
+    val models = (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id").trim()
+        if (id.isBlank()) return@mapNotNull null
+        CallerModelOption(
+            id = id,
+            name = item.optString("name").trim().ifBlank { id },
+            provider = item.optString("provider").trim(),
+        )
+    }
+    return CallerModelCatalog(models)
+}
+
 internal fun parseCallerKeys(body: String): CallerKeysPayload {
     val root = try {
         JSONObject(body.trim())
@@ -125,6 +188,11 @@ internal fun parseCallerKeys(body: String): CallerKeysPayload {
             off = item.optBoolean("off", false),
             usedTokens = used?.optLong("tokens", 0L)?.coerceAtLeast(0L) ?: 0L,
             usedCost = used?.optDouble("cost", 0.0)?.coerceAtLeast(0.0) ?: 0.0,
+            models = item.optJSONArray("models")?.let { models ->
+                (0 until models.length()).mapNotNull { index ->
+                    models.optString(index).trim().ifBlank { null }
+                }
+            } ?: emptyList(),
         )
     }
     val secret = root.optString("secret").trim().ifBlank { null }

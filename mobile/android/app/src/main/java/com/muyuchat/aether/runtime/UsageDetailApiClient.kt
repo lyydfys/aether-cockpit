@@ -95,6 +95,40 @@ class UsageDetailApiClient(
         parseQuotas(get(status, "/api/usage/quotas"))
 
     /**
+     * 额度历史（`GET /api/usage/quotas/history?days=45`，`gateway.go:1002` →
+     * `usage_quota_api.go:553` → `quota_history.go:317 view(days)`）。
+     *
+     * `days` 服务端夹在 1..90，默认 45。回包是
+     * `[{provider,user,lines:[{name,points:[{at,left,start?,resetsAt?}]}]}]`。
+     */
+    fun fetchQuotaHistory(status: GatewayStatus, days: Int = 45): List<QuotaHistoryAccount> =
+        parseQuotaHistory(get(status, "/api/usage/quotas/history?days=${days.coerceIn(1, 90)}"))
+
+    /**
+     * 某个已完成周期的"窗口有多大"估算（`GET /api/usage/quotas/history/holds`，`gateway.go:1003`
+     * → `usage_quota_api.go:571` → `quota_history.go:381`）。
+     *
+     * 四个参数缺一不可（服务端任缺其一就回空数组）；`from`/`to` 必须是 RFC3339。
+     */
+    fun fetchQuotaHolds(
+        status: GatewayStatus,
+        provider: String,
+        user: String,
+        from: String,
+        to: String,
+    ): List<QuotaHoldAccount> =
+        parseQuotaHolds(
+            get(
+                status,
+                "/api/usage/quotas/history/holds?provider=${enc(provider)}" +
+                    "&user=${enc(user)}&from=${enc(from)}&to=${enc(to)}",
+            ),
+        )
+
+    private fun enc(value: String): String =
+        java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
+
+    /**
      * 切换计价币种：桌面 `usage.js:78` → `POST /api/pricing/save {price_currency}`，
      * 回最新价格表（含 currency / usd_cny），页面据此重画所有金额。
      */
@@ -376,4 +410,264 @@ internal fun formatQuotaReset(raw: String): String {
         .getOrNull() ?: return text
     return parsed.atZoneSameInstant(java.time.ZoneId.systemDefault())
         .format(java.time.format.DateTimeFormatter.ofPattern("MM/dd HH:mm", Locale.US))
+}
+
+/* ============================================================================
+ * 额度历史 + 周期估算（holds）
+ *
+ * 端点：
+ * - `GET /api/usage/quotas/history?days=45`   `gateway.go:1002` → `usage_quota_api.go:553`
+ *   → `quota_history.go:317`：`[{provider,user,lines:[{name,points:[{at,left,…}]}]}]`
+ * - `GET /api/usage/quotas/history/holds?provider&user&from&to`  `gateway.go:1003` → `:571`
+ *   → `quota_history.go:381`：`[{provider,user,windows:[{name,holdsWhy?|holds?}]}]`
+ *
+ * `left` 是**剩余百分比**（0..100），不是绝对值——曲线越高越宽裕，这一点决定了纵轴刻度。
+ * ========================================================================== */
+
+/** 一个读数点：`at` 是 RFC3339 时间，`left` 是剩余百分比（0..100）。 */
+data class QuotaHistoryPoint(
+    val at: String,
+    val atMs: Long,
+    val left: Double,
+    val start: String,
+    val resetsAt: String,
+)
+
+/** 一条窗口曲线（`lines[].name` = 窗口名，如 `5h` / `week`）。 */
+data class QuotaHistoryLine(val name: String, val points: List<QuotaHistoryPoint>)
+
+/** 一个账号的曲线集合。 */
+data class QuotaHistoryAccount(
+    val provider: String,
+    val user: String,
+    val lines: List<QuotaHistoryLine>,
+)
+
+/** holds 里的估算值（`quota_history.go:507-514`）。 */
+data class QuotaHoldEstimate(
+    val tokens: Long,
+    val cost: Double,
+    val priced: Boolean,
+    val used: Double,
+    val routedTokens: Long,
+    val routedCalls: Long,
+    val cacheRead: Long,
+    val since: String,
+)
+
+/** holds 里的一个窗口：要么有 `estimate`，要么有 `why`（说不清的原因代码）。 */
+data class QuotaHoldWindow(
+    val name: String,
+    val why: String,
+    val estimate: QuotaHoldEstimate?,
+)
+
+data class QuotaHoldAccount(
+    val provider: String,
+    val user: String,
+    val windows: List<QuotaHoldWindow>,
+)
+
+internal fun parseQuotaHistory(body: String): List<QuotaHistoryAccount> {
+    val array = try {
+        JSONArray(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的额度历史格式不正确")
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val provider = item.optString("provider").trim()
+        val user = item.optString("user").trim()
+        if (provider.isEmpty()) {
+            return@mapNotNull null
+        }
+        val lines = ArrayList<QuotaHistoryLine>()
+        val lineArray = item.optJSONArray("lines")
+        if (lineArray != null) {
+            for (i in 0 until lineArray.length()) {
+                val line = lineArray.optJSONObject(i) ?: continue
+                val name = line.optString("name").trim()
+                if (name.isEmpty()) {
+                    continue
+                }
+                val points = ArrayList<QuotaHistoryPoint>()
+                val pointArray = line.optJSONArray("points")
+                if (pointArray != null) {
+                    for (j in 0 until pointArray.length()) {
+                        val point = pointArray.optJSONObject(j) ?: continue
+                        val at = point.optString("at").trim()
+                        val atMs = parseIsoMillis(at)
+                        if (atMs <= 0L) {
+                            continue
+                        }
+                        val left = point.optDouble("left", Double.NaN)
+                        if (!left.isFinite()) {
+                            continue
+                        }
+                        points.add(
+                            QuotaHistoryPoint(
+                                at = at,
+                                atMs = atMs,
+                                left = left.coerceIn(0.0, 100.0),
+                                start = point.optString("start").trim(),
+                                resetsAt = point.optString("resetsAt").trim(),
+                            ),
+                        )
+                    }
+                }
+                if (points.isNotEmpty()) {
+                    lines.add(QuotaHistoryLine(name = name, points = normalizeQuotaPoints(points)))
+                }
+            }
+        }
+        if (lines.isEmpty()) {
+            null
+        } else {
+            QuotaHistoryAccount(
+                provider = provider,
+                user = user,
+                lines = lines.sortedBy { it.name },
+            )
+        }
+    }
+}
+
+internal fun parseQuotaHolds(body: String): List<QuotaHoldAccount> {
+    val array = try {
+        JSONArray(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的额度估算格式不正确")
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val provider = item.optString("provider").trim()
+        if (provider.isEmpty()) {
+            return@mapNotNull null
+        }
+        val windows = ArrayList<QuotaHoldWindow>()
+        val windowArray = item.optJSONArray("windows")
+        if (windowArray != null) {
+            for (i in 0 until windowArray.length()) {
+                val win = windowArray.optJSONObject(i) ?: continue
+                val name = win.optString("name").trim()
+                if (name.isEmpty()) {
+                    continue
+                }
+                val holds = win.optJSONObject("holds")
+                val estimate = if (holds == null) {
+                    null
+                } else {
+                    val routed = holds.optJSONObject("routed")
+                    QuotaHoldEstimate(
+                        tokens = holds.optLong("tokens", 0L).coerceAtLeast(0L),
+                        cost = holds.optDouble("cost", 0.0).takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0,
+                        priced = holds.optBoolean("priced", false),
+                        used = holds.optDouble("used", 0.0).takeIf { it.isFinite() }?.coerceIn(0.0, 100.0) ?: 0.0,
+                        routedTokens = routed?.optLong("tokens", 0L)?.coerceAtLeast(0L) ?: 0L,
+                        routedCalls = routed?.optLong("calls", 0L)?.coerceAtLeast(0L) ?: 0L,
+                        cacheRead = routed?.optLong("cacheRead", 0L)?.coerceAtLeast(0L) ?: 0L,
+                        since = holds.optString("since").trim(),
+                    )
+                }
+                windows.add(
+                    QuotaHoldWindow(
+                        name = name,
+                        why = win.optString("holdsWhy").trim(),
+                        estimate = estimate,
+                    ),
+                )
+            }
+        }
+        if (windows.isEmpty()) {
+            null
+        } else {
+            QuotaHoldAccount(provider = provider, user = item.optString("user").trim(), windows = windows)
+        }
+    }
+}
+
+/**
+ * 把曲线点按时间排序、同毫秒去重（后者覆盖前者）——服务端本就按顺序写，
+ * 但手机端要拿它算"窗口内掉了多少"，顺序错了结论就反了。
+ */
+internal fun normalizeQuotaPoints(points: List<QuotaHistoryPoint>): List<QuotaHistoryPoint> {
+    if (points.size <= 1) {
+        return points
+    }
+    val byTime = LinkedHashMap<Long, QuotaHistoryPoint>()
+    points.sortedBy { it.atMs }.forEach { byTime[it.atMs] = it }
+    return byTime.values.toList()
+}
+
+/**
+ * 窗口内消耗了多少个百分点（首点剩余 − 末点剩余）。
+ *
+ * 剩余从 90% 掉到 40% → 消耗 50。少于两个点时为 0（谈不上"趋势"）；
+ * 中途重置会让差值变小甚至为负，这里按 0 夹住，不显示"消耗了 -30%"。
+ */
+internal fun quotaConsumedPercent(points: List<QuotaHistoryPoint>): Double {
+    val normalized = normalizeQuotaPoints(points)
+    if (normalized.size < 2) {
+        return 0.0
+    }
+    val delta = normalized.first().left - normalized.last().left
+    return if (delta.isFinite()) delta.coerceAtLeast(0.0) else 0.0
+}
+
+/**
+ * 从最近一个点推出"这个窗口是哪一段"（holds 的 `from`/`to`）。
+ *
+ * 服务端只在读数里带了 `start`/`resetsAt` 时才给得出；缺一个就返回 null——
+ * 与其编一个周期，不如让 UI 说"缺少窗口起止时间"。
+ */
+internal fun quotaCycleRange(points: List<QuotaHistoryPoint>): Pair<String, String>? {
+    val normalized = normalizeQuotaPoints(points)
+    val last = normalized.lastOrNull { it.start.isNotBlank() && it.resetsAt.isNotBlank() } ?: return null
+    val fromMs = parseIsoMillis(last.start)
+    val toMs = parseIsoMillis(last.resetsAt)
+    if (fromMs <= 0L || toMs <= 0L || toMs <= fromMs) {
+        return null
+    }
+    return last.start to last.resetsAt
+}
+
+/** RFC3339 → 毫秒；解析不了返回 0（调用方据此丢掉该点）。 */
+internal fun parseIsoMillis(raw: String): Long {
+    val text = raw.trim()
+    if (text.isEmpty()) {
+        return 0L
+    }
+    return runCatching { java.time.OffsetDateTime.parse(text).toInstant().toEpochMilli() }
+        .recoverCatching { java.time.Instant.parse(text).toEpochMilli() }
+        .getOrElse { 0L }
+}
+
+/**
+ * `holdsWhy` 的人话（`quota_history.go:490-500` 的五个原因代码）。
+ *
+ * 这些是**诚实的拒绝**：数据不够就明说为什么估不出来，不给一个看着像真的数字。
+ */
+internal fun quotaHoldsWhyLabel(why: String): String = when (why.trim().lowercase(Locale.US)) {
+    "low" -> "已用不足 5%，放大误差太大，不估算"
+    "credits" -> "窗口内出现过 credits / extra usage，按百分比放大会失真"
+    "log" -> "这段时间的请求日志不全，无法反推"
+    "none" -> "这段时间没有经过本网关的调用"
+    "clock" -> "缺少窗口起止时间（厂商没给 reset 时间）"
+    else -> why.ifBlank { "未说明原因" }
+}
+
+/** 额度历史的空态：为什么空 + 下一步。 */
+internal fun quotaHistoryEmptyHint(): String =
+    "还没有额度读数。网关每次刷新额度时才记一个点（`/api/usage/quotas/refresh`），" +
+        "先去渠道页刷新一次额度，这里才会出现曲线。"
+
+/** 账号标题：`provider · user`，缺 user 时只显示 provider。 */
+internal fun quotaAccountLabel(provider: String, user: String): String {
+    val p = provider.trim()
+    val u = user.trim()
+    return when {
+        p.isEmpty() -> u
+        u.isEmpty() -> p
+        else -> "$p · $u"
+    }
 }

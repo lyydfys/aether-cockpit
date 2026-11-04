@@ -476,6 +476,56 @@ class AccountQuotaApiClient(
         )
     }
 
+    /**
+     * 渠道顺序：`POST /api/providers/arrange {"order":[id,…]}`（`gateway.go:882`）。
+     *
+     * 服务端只保留 `provider.Get(id)` 认识的 id（未知 id 静默丢弃），保存后回完整渠道列表；
+     * 手机端不解析回包，交给调用方整页重拉。
+     */
+    fun arrangeProviders(status: GatewayStatus, order: List<String>) {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        request(
+            status = status,
+            method = "POST",
+            path = providersArrangePath(),
+            body = buildProvidersArrangeJson(order),
+            timeoutMs = readTimeoutMs,
+        )
+    }
+
+    /**
+     * 渠道自定义余额：`POST /api/provider/balance`（`gateway.go:884`，`provider_balance.go:139`）。
+     *
+     * [clear] = true 时发送 `{id, clearBalance:true}`，服务端清除该渠道的自定义余额配置；
+     * 否则按草稿写入 URL / path / method / headers / token（令牌留空 = 不改动）。
+     * 失败把服务端 `{error}` 原文抛出。
+     */
+    fun saveProviderBalance(
+        status: GatewayStatus,
+        draft: ProviderBalanceDraft,
+        clear: Boolean = false,
+    ) {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        if (!clear) {
+            validateProviderBalanceDraft(draft)?.let { problem ->
+                throw ManagementApiException("invalid_balance", problem)
+            }
+        }
+        request(
+            status = status,
+            method = "POST",
+            path = providerBalancePath(),
+            body = buildProviderBalanceJson(draft, clear),
+            timeoutMs = readTimeoutMs,
+        )
+    }
+
     /** 预设列表：`GET /api/presets`（`request_presets.go:340-343`）。 */
     fun fetchPresets(status: GatewayStatus): PresetsView {
         val guard = guardOf(status)
@@ -584,6 +634,171 @@ internal fun accountPath(accountId: String): String =
 
 /** 立即唤醒路径（`POST /api/wake/run`，桌面 `channels.js:427`）。 */
 internal fun wakeRunPath(): String = "/api/wake/run"
+
+/** 渠道排序路径（`POST /api/providers/arrange`，`gateway.go:882`）。 */
+internal fun providersArrangePath(): String = "/api/providers/arrange"
+
+/** 渠道排序请求体：`{"order":["id1","id2",…]}`。 */
+internal fun buildProvidersArrangeJson(order: List<String>): String =
+    JSONObject().put("order", JSONArray(order)).toString()
+
+/* ==========================================================================
+ * 渠道级自定义余额（`POST /api/provider/balance`，`provider_balance.go:139`）
+ *
+ * 服务端字段：`id` / `balanceURL` / `balancePath` / `balanceMethod` / `headers{}` /
+ * `balanceToken` / `clearBalanceToken` / `account` / `clearBalance`。
+ * 语义是**写入或清除这个渠道的余额端点配置**（不是"查一次余额"）。
+ * ========================================================================== */
+
+/** 表单草稿（headers 用文本承载，解析见 [parseHeaderLines]）。
+ *  `public`：`saveProviderBalance` 是公开客户端方法，暴露 internal 类型会触发
+ *  Kotlin 的「public function exposes its internal parameter type」编译错误。 */
+data class ProviderBalanceDraft(
+    val providerId: String,
+    val url: String = "",
+    val path: String = "",
+    val method: String = "GET",
+    /** 每行 `Key: Value`；`#` 开头与空行忽略。 */
+    val headersText: String = "",
+    /** 新令牌；留空时按"已保存，不改动"处理。 */
+    val token: String = "",
+)
+
+/** 头文本解析结果：失败带**行号**，用户能直接定位。 */
+internal data class HeaderParseResult(
+    val headers: Map<String, String> = emptyMap(),
+    val errorLine: Int = 0,
+    val error: String? = null,
+) {
+    val ok: Boolean get() = error == null
+}
+
+/**
+ * 解析 `Key: Value` 多行文本。
+ *
+ * 只按**每行第一个冒号**分界（值里可以再含冒号，例如 `Authorization: Bearer a:b`）；
+ * 空行与 `#` 注释忽略；缺冒号 / 键空 / 值空都返回行号与原因，不静默丢弃。
+ */
+internal fun parseHeaderLines(text: String): HeaderParseResult {
+    val out = LinkedHashMap<String, String>()
+    text.split('\n').forEachIndexed { index, rawLine ->
+        val line = rawLine.trim()
+        if (line.isEmpty() || line.startsWith("#")) {
+            return@forEachIndexed
+        }
+        val colon = line.indexOf(':')
+        if (colon <= 0) {
+            return HeaderParseResult(
+                errorLine = index + 1,
+                error = "第 ${index + 1} 行缺少冒号，应写成 `Key: Value`",
+            )
+        }
+        val key = line.substring(0, colon).trim()
+        val value = line.substring(colon + 1).trim()
+        if (key.isEmpty()) {
+            return HeaderParseResult(errorLine = index + 1, error = "第 ${index + 1} 行的 Key 为空")
+        }
+        if (value.isEmpty()) {
+            return HeaderParseResult(errorLine = index + 1, error = "第 ${index + 1} 行的 Value 为空")
+        }
+        out[key] = value
+    }
+    return HeaderParseResult(headers = out)
+}
+
+/** 表单校验：URL 必填且 http(s)；方法只 GET/POST；headers 必须能解析。 */
+internal fun validateProviderBalanceDraft(draft: ProviderBalanceDraft): String? {
+    if (draft.providerId.isBlank()) {
+        return "缺少渠道 id"
+    }
+    val url = draft.url.trim()
+    if (url.isEmpty()) {
+        return "请填写余额接口 URL"
+    }
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        return "余额接口 URL 必须以 http:// 或 https:// 开头"
+    }
+    val headers = parseHeaderLines(draft.headersText)
+    if (!headers.ok) {
+        return headers.error
+    }
+    if (draft.method.trim().uppercase() !in setOf("GET", "POST")) {
+        return "请求方法只支持 GET / POST"
+    }
+    return null
+}
+
+/**
+ * 组装请求体。
+ *
+ * - [clear] = true：只发 `{id, clearBalance:true}`（服务端按"清除配置"处理）；
+ * - 令牌三态：填了 → 发 `balanceToken`；留空 → **不发**（等于"不改动"，
+ *   与工具服务那套"已保存（不改动）"哨兵语义一致）；
+ * - `headers` 解析为空时不发该字段（避免把已有配置清空）。
+ */
+internal fun buildProviderBalanceJson(draft: ProviderBalanceDraft, clear: Boolean = false): String {
+    val body = JSONObject().put("id", draft.providerId.trim())
+    if (clear) {
+        return body.put("clearBalance", true).toString()
+    }
+    body.put("balanceURL", draft.url.trim())
+    val path = draft.path.trim()
+    if (path.isNotEmpty()) {
+        body.put("balancePath", path)
+    }
+    body.put("balanceMethod", draft.method.trim().uppercase())
+    val headers = parseHeaderLines(draft.headersText).headers
+    if (headers.isNotEmpty()) {
+        val json = JSONObject()
+        headers.forEach { (k, v) -> json.put(k, v) }
+        body.put("headers", json)
+    }
+    val token = draft.token.trim()
+    if (token.isNotEmpty()) {
+        body.put("balanceToken", token)
+    }
+    return body.toString()
+}
+
+/** 余额配置端点路径（`gateway.go:884`）。 */
+internal fun providerBalancePath(): String = "/api/provider/balance"
+
+/** 上移 / 下移方向。**不暴露裸 delta**：方向搞反过，签名上直接说清楚。 */
+internal enum class MoveDirection(val indexDelta: Int) {
+    /** 「↑」按钮：在数组里索引 -1（更靠前、更优先）。 */
+    Up(-1),
+
+    /** 「↓」按钮：在数组里索引 +1（更靠后）。 */
+    Down(+1),
+}
+
+/**
+ * 把 [id] 在 [order] 里按方向移动一格（UI 语义：↑ = 上移一格、↓ = 下移一格）。
+ *
+ * 越界钳制（首行上移 / 末行下移原样返回，不抛异常）；未知 id 同样原样返回。
+ */
+internal fun moveProvider(order: List<String>, id: String, direction: MoveDirection): List<String> =
+    moveProviderOrder(order, id, direction.indexDelta)
+
+/**
+ * 裸 delta 版本（保留给既有调用点）：**delta > 0 是下移**（索引 +1），delta < 0 是上移。
+ *
+ * 新代码请用 [moveProvider] + [MoveDirection]，别再传数字。
+ */
+internal fun moveProviderOrder(order: List<String>, id: String, delta: Int): List<String> {
+    val from = order.indexOf(id)
+    if (from < 0 || delta == 0) {
+        return order
+    }
+    val to = (from + delta).coerceIn(0, order.lastIndex)
+    if (to == from) {
+        return order
+    }
+    val next = order.toMutableList()
+    next.removeAt(from)
+    next.add(to, id)
+    return next
+}
 
 /** 立即唤醒请求体：`{"account_id":"…"}`。 */
 internal fun buildWakeRunJson(accountId: String): String =
