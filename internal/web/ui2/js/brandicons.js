@@ -72,7 +72,7 @@ const ICONS = {
    彩色标（Gemini 紫、MiniMax 红…）不受影响。有白底 plate 的地方不反相。 */
 const MONO = new Set([
   'claude.svg', 'cursor.svg', 'devin.svg', 'githubcopilot.svg', 'kimi.svg', 'lmstudio.svg',
-  'moonshot.svg', 'ollama.svg', 'openai.svg', 'opencode.svg', 'siliconflow.svg',
+  'moonshot.svg', 'ollama.svg', 'openai.svg', 'open-design.svg', 'opencode.svg', 'siliconflow.svg',
   'stepfun.svg', 'tencentcloud.svg', 'xai.svg',
 ]);
 

@@ -257,9 +257,25 @@ export default {
           h('div', { class: 'row-h' }, h('span', { class: 'lbl' }, '积分余额'), h('span', { class: 'pct', style: 'color:var(--green)' }, creditsText)),
           h('div', { class: 'reset' }, '积分制渠道 · 没有重置窗口' + (readAt ? ' · 读于 ' + readAt : ''))));
       } else {
-        inset.append(h('div', { class: 'acct-empty' }, a.quota_supported === false
-          ? '该渠道不支持额度窗口'
-          : (a.quota_error ? ('额度读取失败：' + a.quota_error) : ((a.quota && a.quota.message) || '这个账号没有可读的额度窗口。'))));
+        // 没有额度接口的渠道（额度只在厂商控制台里）不能显示成"读取失败"：
+        // 那会让人以为是我们的 bug，实际是根本不存在的接口。直接给出控制台入口。
+        const unsupported = a.quota_supported === false;
+        const box = h('div', { class: 'acct-empty' });
+        if (unsupported) {
+          box.append('该渠道没有额度接口，额度在厂商控制台');
+          if (p && p.keys_url) {
+            box.append(' ', h('a', {
+              href: p.keys_url,
+              rel: 'noopener',
+              onclick: (e) => { e.preventDefault(); openInBrowser(p.keys_url); },
+            }, '去查看'));
+          }
+        } else {
+          box.append(a.quota_error
+            ? ('额度读取失败：' + a.quota_error)
+            : ((a.quota && a.quota.message) || '这个账号没有可读的额度窗口。'));
+        }
+        inset.append(box);
       }
       // 只有真的读到了积分才占一行；「可用 AI 积分 —」在 6 张卡上重复 6 次，是纯噪音
       if (!balanceOnly && creditsText !== '—') {

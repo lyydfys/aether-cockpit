@@ -46,6 +46,9 @@ type Config struct {
 	NoKey bool
 	// QuotaKind：额度读取方式（"cline" 走 Cline 账号接口）。
 	QuotaKind string
+	// NoQuota：有额度但无 API 可读（只在厂商控制台里）。为真时不再对外
+	// 声明额度能力，页面也不会去探测账单接口、自然不会有 404 报错。
+	NoQuota bool
 	Models    []ir.ModelMeta
 	// AuthStyle：空 = Authorization: Bearer；"api-key" = Azure 的 api-key 头。
 	AuthStyle string
@@ -155,7 +158,7 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 		RequiredMiddlewares: []string{"stateful_session"},
 		Capabilities: provider.CapabilitySet{
 			Chat:  true,
-			Quota: true,
+			Quota: !cfg.NoQuota,
 		},
 	}
 	if cfg.OAuth != nil {

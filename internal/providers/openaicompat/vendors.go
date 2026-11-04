@@ -48,6 +48,7 @@ func init() {
 			BaseURL:     v.BaseURL,
 			NoKey:       v.NoKey,
 			QuotaKind:   v.QuotaKind,
+			NoQuota:     v.NoQuota,
 			Models:      v.Models,
 		}
 		if v.ID == "bedrock" {

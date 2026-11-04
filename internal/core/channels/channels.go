@@ -19,6 +19,12 @@ type Vendor struct {
 	NoKey       bool
 	// QuotaKind 声明该厂商的额度读取方式（目前 "cline" / "commandcode"）。
 	QuotaKind string
+	// NoQuota 表示"有额度，但没有任何 API 能读"（额度只在厂商控制台里）。
+	//
+	// 这种渠道不能当成"额度读取失败"处理：探测账单接口只会拿到 404，
+	// 卡片上就会出现一条吓人的红色报错。声明成 NoQuota 后，卡片改为
+	// 提示"去控制台查看"，并在有控制台地址时给出跳转。
+	NoQuota bool
 	Models    []ir.ModelMeta
 	// Regions 是同一厂商的多个套餐/区域端点（aether KeyPlans）：编辑器
 	// 用区域选择器切换，保存时把选中的 Base URL 写进账号。
@@ -76,6 +82,9 @@ var vendors = []Vendor{
 	{
 		ID: "open-design", DisplayName: "Open Design", Family: "opendesign", RegionTag: "CN", BrandColor: "#6D5EF8",
 		Icon:        "open-design",
+		// 额度（Design Plan 5 小时 / 7 天窗口）只在厂商控制台里，
+		// 模型网关没有任何可读的额度接口，用 API Key 也读不到。
+		NoQuota: true,
 		Description: "Open Design 聚合中转（OpenAI 兼容）：一个 Key 覆盖 Claude / GPT / DeepSeek / GLM / Kimi / MiMo / MiniMax 多家模型。",
 		BaseURL:     "https://amr-link.open-design.ai/v1",
 		Kind:        "relay",
