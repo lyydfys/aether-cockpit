@@ -1310,6 +1310,16 @@ private fun SettingsSections(
                     else -> "—"
                 },
             )
+            SettingsPathRow(
+                label = "数据目录",
+                value = settings.dataDir.ifBlank { "—" },
+                emptyNote = if (settings.dataDir.isBlank()) "网关未上报" else null,
+            )
+            Text(
+                text = "账号、库、备份与日志都存在这个目录；桌面端可改，手机端固定。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             SettingsSecuritySection(status = status)
             if (lanError != null) {
                 Text(
@@ -1600,6 +1610,47 @@ private fun SettingsRow(label: String, value: String) {
             maxLines = 1,
             softWrap = false,
         )
+    }
+}
+
+@Composable
+private fun SettingsPathRow(label: String, value: String, emptyNote: String?) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = DeepRowVertical),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            modifier = Modifier.width(96.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.End,
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (emptyNote != null) {
+                Text(
+                    text = emptyNote,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                )
+            }
+        }
     }
 }
 

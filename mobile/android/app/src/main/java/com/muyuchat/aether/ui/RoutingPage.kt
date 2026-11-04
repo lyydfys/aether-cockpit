@@ -1,6 +1,7 @@
 package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -75,6 +76,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /*
  * 路由页。
@@ -303,6 +305,80 @@ internal fun routingMemberNamesText(group: RoutingGroup): String {
     }
 }
 
+/* ---------------- 成员倍率（credit_rate）：数据层早就解析了，这里才上屏 ---------------- */
+
+/**
+ * 倍率文案：桌面 `misc.js:193` 用 `（×1.5）` 这种括号后缀，`memberInfo[].credit_rate`
+ * 来自 `groups_api.go:28`（`json:"credit_rate,omitempty"`）。
+ *
+ * 缺省即 0（服务端 omitempty）→ **返回空串，绝不渲染 `×0`**：0 是"没配倍率"，不是"倍率是 0"。
+ * 负数/NaN/Inf 同样返回空串：倍率是计费乘数，负数和无穷都说明数据坏了，显示出来只会误导。
+ * 整数倍率不带小数点（`×2` 而不是 `×2.0`），与桌面 JS 的 `'×' + m.credit_rate` 输出一致。
+ */
+internal fun memberCreditLabel(rate: Double): String {
+    if (rate.isNaN() || rate.isInfinite() || rate <= 0.0) {
+        return ""
+    }
+    // 最多 4 位小数再去掉尾零：1.5 → "1.5"、2.0 → "2"、0.0001 → "0.0001"。
+    // 不用 `rate.toString()`：它会把 1.0E-4 这种小倍率印成 "1.0E-4"，用户读不出乘数。
+    val text = String.format(Locale.US, "%.4f", rate).trimEnd('0').trimEnd('.')
+    if (text.isEmpty() || text == "0") {
+        // 小到 4 位小数显示不出来（<0.00005）：与其显示 "×0"，不如不显示。
+        return ""
+    }
+    return "×$text"
+}
+
+/**
+ * 成员 chip 文案（桌面同款形态：`providerName · name（×1.5）`，`misc.js:193`）。
+ *
+ * `provider`/`name` 缺哪个就省哪个（用 `·` 连接非空部分），倍率为空时不带括号——
+ * 空括号 `（）` 比不显示更难看，也更容易被误读成"倍率是空值"。
+ */
+internal fun routingMemberChipLabel(providerName: String, name: String, creditRate: Double): String {
+    val parts = listOf(providerName.trim(), name.trim()).filter { it.isNotEmpty() }
+    val base = parts.joinToString(" · ")
+    if (base.isEmpty()) {
+        // 连名字都没有的 chip 只剩一个「（×2）」，读不出是什么——这种就不显示。
+        return ""
+    }
+    val credit = memberCreditLabel(creditRate)
+    return if (credit.isEmpty()) base else "$base（$credit）"
+}
+
+/**
+ * 组卡上要展示的成员 chip：按 `members` 里的顺序（与桌面 `memberInfo` 的顺序一致，
+ * 因为服务端就是按 members 展开的），最多 [limit] 个（桌面 `members.slice(0, 12)`）。
+ *
+ * 名字优先用 `memberInfo`（含 provider 显示名）；没有 memberInfo 的成员退化成裸 id，
+ * 不猜它属于哪个渠道。空 id 直接跳过。
+ */
+internal fun routingMemberChips(group: RoutingGroup, limit: Int = 12): List<String> {
+    val safeLimit = limit.coerceAtLeast(0)
+    if (safeLimit == 0) {
+        return emptyList()
+    }
+    val infoById = group.memberInfo.associateBy { it.id }
+    return routingGroupMembers(group)
+        .filter { it.isNotBlank() }
+        .map { id ->
+            val info = infoById[id]
+            if (info == null) {
+                routingMemberChipLabel("", id, 0.0)
+            } else {
+                routingMemberChipLabel(info.providerName, info.name.ifBlank { id }, info.creditRate)
+            }
+        }
+        .take(safeLimit)
+}
+
+/** 成员数超过 chip 上限时的尾巴（`+3`）；没超过返回空串。 */
+internal fun routingMemberOverflowLabel(group: RoutingGroup, limit: Int = 12): String {
+    val total = routingGroupMembers(group).count { it.isNotBlank() }
+    val rest = total - limit.coerceAtLeast(0)
+    return if (rest > 0) "+$rest" else ""
+}
+
 @Composable
 private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabled: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -349,7 +425,6 @@ private fun RoutingGroupCard(
     onClick: () -> Unit,
 ) {
     val tally = routingGroupMemberTally(group)
-    val names = routingMemberNamesText(group)
     DeepCard(
         modifier = Modifier
             .clip(McaShape.Sheet)
@@ -412,15 +487,31 @@ private fun RoutingGroupCard(
                 MaterialTheme.colorScheme.onSurface
             },
         )
-        if (names.isNotEmpty()) {
+        // 成员 chip：`provider · name（×1.5）`（桌面 `misc.js:193` 同款形态）。
+        // 单行横滚——成员多时往右滚，1.0×/1.3× 都不会挤成竖排单字，也不吃第二行高度。
+        val chips = routingMemberChips(group)
+        if (chips.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))
-            Text(
-                text = names,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                chips.forEach { label ->
+                    RoutingMemberChip(label)
+                }
+                val overflow = routingMemberOverflowLabel(group)
+                if (overflow.isNotEmpty()) {
+                    Text(
+                        text = overflow,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -507,6 +598,27 @@ private fun RoutingBadge(text: String, error: Boolean) {
         style = MaterialTheme.typography.labelSmall,
         color = color,
     )
+}
+
+/**
+ * 成员 chip。单行不换行（`maxLines = 1`）——外层是横滚容器，长名字往右滚，
+ * 绝不会折成"每行一个字"的竖排；倍率作为同一段文字的后缀（`（×1.5）`），基线天然对齐。
+ */
+@Composable
+private fun RoutingMemberChip(text: String) {
+    Surface(
+        shape = McaShape.Badge,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = McaHairline.stroke(),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+    }
 }
 
 @Composable

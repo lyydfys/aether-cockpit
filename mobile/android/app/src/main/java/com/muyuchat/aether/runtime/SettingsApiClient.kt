@@ -72,6 +72,8 @@ data class SettingsSummary(
     val otlp: OtlpConfig = OtlpConfig(),
     /** `tools`：网络搜索 / 图像 / 音频 / 视频 / 实时语音（密钥只回「是否已保存」）。 */
     val tools: ToolsConfig = ToolsConfig(),
+    /** `dir`：网关数据目录（服务端 settingsView 下发；只读展示）。 */
+    val dataDir: String = "",
 )
 
 /** 请求管线钩子（桌面 `settings.js:468-485` 四项 + 服务端第五项 `guard_accounts`）。 */
@@ -684,6 +686,7 @@ internal fun parseSettings(body: String): SettingsSummary {
         hooks = parsePipelineHooks(root.optJSONObject("hooks")),
         otlp = parseOtlpConfig(root.optJSONObject("otlp")),
         tools = parseToolsConfig(root.optJSONObject("tools")),
+        dataDir = root.optString("dir").trim(),
     )
 }
 
