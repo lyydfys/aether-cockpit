@@ -540,6 +540,24 @@ func New(cfg Config) *Gateway {
 	// 无样本时返回 ok=false，策略把该渠道排在已知样本之后（fail-open）。
 	g.models.SetLatencyLookup(g.pool.LatencyFor)
 
+	// 渠道权重：取该渠道下**账号权重之和**。
+	//
+	// 为什么求和而不是取最大：账号权重（accounts.json 的 weight）本来就是
+	// "这个号能承担多少请求"的相对份额，一个渠道有两个权重 1 的号，它整体
+	// 就该拿到两份份额。没有账号时返回 0，weight 策略按 1 处理。
+	g.models.SetWeightLookup(func(providerID string) int {
+		total := 0
+		for _, env := range g.pool.All() {
+			if env.ProviderID != providerID {
+				continue
+			}
+			if w := env.Weight(); w > 0 {
+				total += w
+			}
+		}
+		return total
+	})
+
 	// 意图路由分类器：smart 策略的"大脑"。未配置 IntentClassifyModel 时
 	// classify 恒返回 0，smart 自动退化为 priority——不配置就零开销。
 	// 分类请求经网关自身 loopback HTTP 走完整链路（路由/渠道/用量/日志），
@@ -2421,6 +2439,14 @@ func (g *Gateway) penalizeModel(env *provider.AccountEnv, err *ir.APIError, mode
 		}
 	case ir.ErrCodeNoAccount:
 		// 不是账号本身的问题，不计惩罚。
+		return
+	case ir.ErrCodeBadRequest:
+		// 请求构造 / 模型名不对：换账号也一样失败，罚账号只会把好号
+		// 一个个撞进熔断。只记模型级休息（模型名可能确实在这个号上不存在）。
+		if strings.TrimSpace(model) != "" {
+			env.MarkModelCoolingDown(model, provider.ModelRestBackoff(1), err.Message)
+		}
+		eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())
 		return
 	default:
 		env.MarkFailure(5)

@@ -272,7 +272,9 @@ func (e *AccountEnv) MarkFailure(threshold int) {
 	e.consecutiveFailures++
 	e.lastUsed = time.Now()
 	if threshold > 0 && e.consecutiveFailures >= threshold && e.state == StateReady {
-		d := failureBackoff(e.consecutiveFailures)
+		// 加抖动：多台机器/多个账号同时熔断时，若冷却时长完全一致，
+		// 它们会在同一秒一起恢复、再一起撞回上游（惊群）。
+		d := jitter(failureBackoff(e.consecutiveFailures))
 		e.state = StateCoolingDown
 		e.stateAt = time.Now()
 		e.resetAt = time.Now().Add(d)

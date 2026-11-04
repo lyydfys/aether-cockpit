@@ -456,8 +456,11 @@ func cleanGroupRules(rules []GroupRule, members []string) ([]GroupRule, error) {
 			}
 			r.Time = &w
 		}
-		if r.Effort == "" && r.Intent == "" && r.Time == nil {
-			return nil, fmt.Errorf("规则 %d：至少要有一个条件（effort / intent / time）", n)
+		// 条件判定必须与运行时完全一致：运行时 hasCondition 还支持
+		// tokens / images / agents / folders，这里只认三类就会把
+		// "只写了 tokens 的规则"拒之门外——能力写了却用不了。
+		if !r.hasCondition() {
+			return nil, fmt.Errorf("规则 %d：至少要有一个条件（effort / intent / time / tokens / images / agents / folders）", n)
 		}
 		out = append(out, r)
 	}

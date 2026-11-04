@@ -55,6 +55,13 @@ type ModelRouter struct {
 	// latencyLookup 渠道时延查询函数（由网关把账号池接进来，见 SetLatencyLookup）。
 	// nil = 无时延样本，fast 策略保持原序。
 	latencyLookup atomic.Pointer[LatencyLookup]
+	// weightLookup 渠道权重查询函数（weight 策略用）。
+	// nil = 未配置权重，weight 策略保持原序。
+	weightLookup atomic.Pointer[WeightLookup]
+	// wrrMu 保护 wrrCurrent；与路由读锁分开，避免在读锁里再去抢写锁。
+	wrrMu sync.Mutex
+	// wrrCurrent 是平滑加权轮询的当前值，key = 组名 → 渠道 id → 当前值。
+	wrrCurrent map[string]map[string]int64
 	// enabledFilter 由网关注入：返回 false 的渠道不参与解析（渠道页的开关）。
 	enabledFilter atomic.Pointer[func(string) bool]
 	// fallbackModels 无任何匹配时，用于宽松兜底的渠道（仍用原模型名请求上游）
@@ -108,6 +115,11 @@ type RouteContext struct {
 	Intent IntentClassifyFunc
 	// Latency 渠道时延查询（仅 fast 策略使用）。nil = 无样本。
 	Latency LatencyLookup
+	// Weight 返回某渠道的调度权重（>0；未配置返回 0，按 1 处理）。
+	// 仅 weight 策略使用。权重是"相对份额"：{a:2,b:1} 表示 a 拿 2/3 的请求。
+	Weight func(providerID string) int
+	// Wrr 返回某组的平滑加权轮询状态（策略自身保持纯函数，状态由框架持有）。
+	Wrr func(group string, providerIDs []string, weights []int) int
 	// EffortIn 是请求显式要求的 reasoning effort（已归一化，空 = 未要求）。
 	// 组规则的 effort 条件读它；策略不读。
 	EffortIn string
@@ -148,6 +160,57 @@ type RouteOutcome struct {
 // LatencyLookup 返回渠道的时延估计（首字节毫秒 + 吞吐 token/s）。
 type LatencyLookup func(providerID string) (ttftMS, tps float64, ok bool)
 
+// WeightLookup 返回某渠道的调度权重（weight 策略用）。<=0 表示未配置。
+type WeightLookup func(providerID string) int
+
+// wrrNext 推进一次平滑加权轮询，返回本次应优先的候选下标。
+//
+// 算法（nginx smooth WRR）：每次请求给每个候选 current += weight，取
+// current 最大者，再让它 current -= 总权重。得到的序列是 a,b,a,a 而不是
+// a,a,a,b——权重份额相同，但短期分布更均匀。
+func (r *ModelRouter) wrrNext(group string, ids []string, weights []int) int {
+	if len(ids) == 0 || len(ids) != len(weights) {
+		return 0
+	}
+	r.wrrMu.Lock()
+	defer r.wrrMu.Unlock()
+	if r.wrrCurrent == nil {
+		r.wrrCurrent = make(map[string]map[string]int64, 8)
+	}
+	cur := r.wrrCurrent[group]
+	if cur == nil {
+		cur = make(map[string]int64, len(ids))
+		r.wrrCurrent[group] = cur
+	}
+	total := int64(0)
+	best := 0
+	var bestVal int64
+	for i, id := range ids {
+		w := int64(weights[i])
+		if w <= 0 {
+			w = 1
+		}
+		total += w
+		cur[id] += w
+		if i == 0 || cur[id] > bestVal {
+			best, bestVal = i, cur[id]
+		}
+	}
+	if total > 0 {
+		cur[ids[best]] -= total
+	}
+	return best
+}
+
+// SetWeightLookup 注入渠道权重来源；nil 表示关闭 weight 策略的排序依据。
+func (r *ModelRouter) SetWeightLookup(fn WeightLookup) {
+	if fn == nil {
+		r.weightLookup.Store(nil)
+		return
+	}
+	r.weightLookup.Store(&fn)
+}
+
 // 虚拟组支持的策略。命名对齐同类网关的惯例：
 // priority = 固定优先级链（等价于别处的 order）；rotate = 轮转均摊；
 // pace = 按"距重置每小时可消耗额度"降序，优先消耗临期积分；
@@ -163,6 +226,9 @@ const (
 	GroupStrategySmart = "smart"
 	// GroupStrategyFast 按实测时延排序：TTFT 升序，并列看吞吐。
 	GroupStrategyFast = "fast"
+	// GroupStrategyWeight 按权重做平滑加权轮询（smooth WRR）：权重高的渠道
+	// 拿到更多请求，同时短期分布仍然均匀，不会出现"连续 3 次都打同一个"。
+	GroupStrategyWeight = "weight"
 )
 
 // routeStrategies 策略注册表。init 阶段静态注册；测试可用
@@ -187,6 +253,7 @@ func init() {
 	registerRouteStrategy(GroupStrategyUsage, strategyUsage)
 	registerRouteStrategy(GroupStrategySmart, strategySmart)
 	registerRouteStrategy(GroupStrategyFast, strategyFast)
+	registerRouteStrategy(GroupStrategyWeight, strategyWeight)
 }
 
 // NewModelRouter 创建路由表。
@@ -750,6 +817,11 @@ func (r *ModelRouter) groupRouteContextLocked(group, text, sessionKey string, al
 	if lookup := r.latencyLookup.Load(); lookup != nil && *lookup != nil {
 		ctx.Latency = *lookup
 	}
+	// weight 策略需要权重来源 + 平滑轮询状态；两者都注入才启用。
+	if lookup := r.weightLookup.Load(); lookup != nil && *lookup != nil {
+		ctx.Weight = *lookup
+		ctx.Wrr = r.wrrNext
+	}
 	// 意图分类：smart 策略要用；带 intent 条件的组规则也要用。两者都只在
 	// "下游真实请求 + 有文本"的路径上注入，否则防递归就失效了。
 	if allowIntent && (r.virtualStrategy[group] == GroupStrategySmart || rulesNeedIntent(r.virtualRules[group])) {
@@ -968,6 +1040,43 @@ func paceBand(rate float64) int {
 //
 // Intent 未注入（未配置 / 防递归）或返回 0 / 负数 / 越界下标时维持原序，
 // smart 就地退化为 priority。
+// strategyWeight 按权重做**平滑**加权轮询（smooth WRR）。
+//
+// 朴素实现是"按权重拼长表再轮询"（a,a,a,b），短期分布不均：权重 3:1 时
+// 前三次连续命中 a。平滑版每次请求给每个候选各加一次权重、取当前值最大的
+// 那个，再把它减掉总权重——分布是 a,b,a,a 这种。
+//
+// 状态（current 数组）由框架持有并通过 ctx.Wrr 传入，策略本身保持纯函数。
+func strategyWeight(ctx *RouteContext, seats []modelBinding) []modelBinding {
+	if len(seats) < 2 {
+		return seats
+	}
+	// 没有权重来源时保持原序，而不是自己造一个顺序。
+	if ctx == nil || ctx.Weight == nil || ctx.Wrr == nil {
+		return seats
+	}
+	ids := make([]string, len(seats))
+	weights := make([]int, len(seats))
+	for i, b := range seats {
+		ids[i] = b.ProviderID
+		w := ctx.Weight(b.ProviderID)
+		if w <= 0 {
+			w = 1 // 未配置按 1 处理：权重 0 不该等于"永不命中"
+		}
+		weights[i] = w
+	}
+	idx := ctx.Wrr(ctx.Group, ids, weights)
+	if idx <= 0 || idx >= len(seats) {
+		return seats
+	}
+	// 选中的提到最前，其余保持原序：策略结果必须是输入的排列。
+	out := make([]modelBinding, 0, len(seats))
+	out = append(out, seats[idx])
+	out = append(out, seats[:idx]...)
+	out = append(out, seats[idx+1:]...)
+	return out
+}
+
 func strategySmart(ctx *RouteContext, seats []modelBinding) []modelBinding {
 	if ctx == nil || ctx.Intent == nil {
 		return seats
