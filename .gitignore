@@ -80,3 +80,9 @@ docs/**/*aether*-analysis*.md
 sync-state.json
 sync-state.json.lock
 conflicts-*.json
+
+# 隔离构建目录与本地证据图（不入库）
+mobile/android/build-verify/
+
+# 隔离构建目录与本地证据图（不入库）
+docs/assets/

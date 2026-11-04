@@ -7,10 +7,11 @@
   而 MCA 的图标恰好也是蓝色气泡 + 星芒；所以这里**保留右下角的 channel-route 徽标**，
   它是与 MCA 区分开的关键。4 个青点在 32dp 下是脏点，按光学尺寸规则省略。
 
-  徽标比例：整组用 <group scale=1.7 pivot=(77,75)> 放大 1.7 倍（用户规格 1.6–1.8×）。
-  - 放大后徽标直径 = 22 × 1.7 ≈ 37.4 单位 → 32dp 图标里约 11dp，看得出是圆形徽记；
-  - 描边、连线、节点圆同步放大（1.7 → 2.9、2.2 → 3.7、2.1/2.5 → 3.6/4.25）；
-  - 位置不变，仍贴右下（右缘 ≈ 97、下缘 ≈ 95，不出 108 画布）。
+  徽标比例：整组用 <group scale=1.4 pivot=(77,75)> 放大 1.4 倍（定稿档位）。
+  - 放大后徽标直径 = 22 × 1.4 = 30.8 单位 → 32dp 图标里约 9.1dp：
+    1.0×（6.5dp）是糊点、1.7×（11.1dp）占图标 35% 会抢气泡主体，9dp 是"看得出圆形徽记、又不喧宾夺主"的档位；
+  - 描边、连线、节点圆同步放大（1.7 → 2.38、2.2 → 3.08、2.1/2.5 → 2.94/3.5）；
+  - 位置不变，仍贴右下（右缘 ≈ 92.4、下缘 ≈ 90.4，不出 108 画布）。
   保留徽标原始 pathData（未改坐标），放大只由 <group> 承担，便于和源 SVG 对照。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -29,21 +30,21 @@
         android:fillColor="#FFFFFFFF"
         android:pathData="M54,34 L57,47 L70,50 L57,53 L54,66 L51,53 L38,50 L51,47 Z" />
 
-    <!-- 右下角 channel-route 徽标：整体放大 1.7×，贴右下 -->
+    <!-- 右下角 channel-route 徽标：整体放大 1.4×，贴右下 -->
     <group
         android:pivotX="77"
         android:pivotY="75"
-        android:scaleX="1.7"
-        android:scaleY="1.7">
+        android:scaleX="1.4"
+        android:scaleY="1.4">
 
-        <!-- 徽标底圆（源 r=11，stroke 1.7 → 放大后 ≈ 18.7 / 2.9） -->
+        <!-- 徽标底圆（源 r=11，stroke 1.7 → 放大后 ≈ 15.4 / 2.38） -->
         <path
             android:fillColor="#FFFFFFFF"
             android:strokeColor="#FF13A99B"
             android:strokeWidth="1.7"
             android:pathData="M66,75 A11,11 0,1 1,88,75 A11,11 0,1 1,66,75 Z" />
 
-        <!-- 连线（源 2.2 → 放大后 ≈ 3.7） -->
+        <!-- 连线（源 2.2 → 放大后 ≈ 3.08） -->
         <path
             android:fillColor="@android:color/transparent"
             android:strokeColor="#FF1A73E8"
@@ -51,17 +52,17 @@
             android:strokeLineCap="round"
             android:pathData="M72.5,75 H81.5" />
 
-        <!-- 左节点（源 r=2.1） -->
+        <!-- 左节点（源 r=2.1 → 放大后 ≈ 2.94） -->
         <path
             android:fillColor="#FF13A99B"
             android:pathData="M70.4,75 A2.1,2.1 0,1 1,74.6,75 A2.1,2.1 0,1 1,70.4,75 Z" />
 
-        <!-- 中节点（源 r=2.5） -->
+        <!-- 中节点（源 r=2.5 → 放大后 3.5） -->
         <path
             android:fillColor="#FF1A73E8"
             android:pathData="M74.5,75 A2.5,2.5 0,1 1,79.5,75 A2.5,2.5 0,1 1,74.5,75 Z" />
 
-        <!-- 右节点（源 r=2.1） -->
+        <!-- 右节点（源 r=2.1 → 放大后 ≈ 2.94） -->
         <path
             android:fillColor="#FF13A99B"
             android:pathData="M79.4,75 A2.1,2.1 0,1 1,83.6,75 A2.1,2.1 0,1 1,79.4,75 Z" />
