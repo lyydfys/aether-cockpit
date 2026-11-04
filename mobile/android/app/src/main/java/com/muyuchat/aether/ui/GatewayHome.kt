@@ -460,6 +460,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val wakeViewModel: WakeViewModel = viewModel()
                 val wakeState by wakeViewModel.state.collectAsStateWithLifecycle()
                 val wakeTriggering by wakeViewModel.triggering.collectAsStateWithLifecycle()
+                val wakeEnabledUpdating by wakeViewModel.enabledUpdating.collectAsStateWithLifecycle()
                 val wakeNotice by wakeViewModel.notice.collectAsStateWithLifecycle()
                 val wakeActionError by wakeViewModel.actionError.collectAsStateWithLifecycle()
                 val wakeScheduler by wakeViewModel.scheduler.collectAsStateWithLifecycle()
@@ -492,6 +493,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onCreateWake = wakeViewModel::createWake,
                     onClearCreateProblems = wakeViewModel::clearCreateProblems,
                     onDeleteWake = wakeViewModel::deleteWake,
+                    enabledUpdating = wakeEnabledUpdating,
+                    onSetEnabled = wakeViewModel::setEnabled,
                     onRefreshAccounts = wakeViewModel::refreshAccountsAndSummary,
                     onBack = { showWake = false },
                     onOpenOverview = {

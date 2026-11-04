@@ -174,6 +174,39 @@ class WakeViewModel(application: Application) : AndroidViewModel(application) {
         _createProblems.value = null
     }
 
+    // —— 启停开关（桌面 scheduler.js:405-412）：局部更新，只发 enabled ——
+    private val _enabledUpdating = MutableStateFlow<String?>(null)
+
+    /** 正在改启停的任务 id（页面据此禁用开关，避免连点覆盖）。 */
+    val enabledUpdating: StateFlow<String?> = _enabledUpdating.asStateFlow()
+
+    fun setEnabled(task: WakeTask, enabled: Boolean) {
+        val status = repository.status.value
+        if (!status.running || task.id.isBlank()) {
+            return
+        }
+        if (_enabledUpdating.value != null) {
+            return
+        }
+        _enabledUpdating.value = task.id
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { writeClient.setEnabled(status, task.id, enabled) }
+                // 桌面文案逐字（scheduler.js:405-412）
+                _notice.value = if (enabled) "已启用唤醒任务" else "已停用唤醒任务"
+                refresh()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _actionError.value = "更新失败：${e.message}"
+            } catch (_: Exception) {
+                _actionError.value = "更新失败，请重试"
+            } finally {
+                _enabledUpdating.value = null
+            }
+        }
+    }
+
     // —— 签到调度：与唤醒任务分开的端点、分开的失败态 ——
     private val schedulerClient = SchedulerApiClient()
     private val _scheduler = MutableStateFlow<SchedulerUiState>(SchedulerUiState.Idle)
@@ -288,17 +321,19 @@ class WakeViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val started = withContext(Dispatchers.IO) { client.runTask(status, id) }
                 _notice.value = if (started) {
-                    "已提交唤醒请求：服务端异步执行，结果会在下次刷新时显示"
+                    // 桌面原话「已触发唤醒」+「正在请求上游…」，括号注明异步（scheduler.js:413-426）
+                    "已触发唤醒（服务端异步执行，正在请求上游…，结果在下次刷新显示）"
                 } else {
-                    "服务端没有接受这次触发（返回 started=false）"
+                    "唤醒失败：服务端没有接受这次触发（started=false）"
                 }
                 refresh()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                _actionError.value = e.message
+                // 桌面文案：「唤醒失败：<原文>」（scheduler.js:413-426）
+                _actionError.value = "唤醒失败：${e.message}"
             } catch (_: Exception) {
-                _actionError.value = "触发唤醒失败，请重试"
+                _actionError.value = "唤醒失败：请重试"
             } finally {
                 _triggering.value = null
             }

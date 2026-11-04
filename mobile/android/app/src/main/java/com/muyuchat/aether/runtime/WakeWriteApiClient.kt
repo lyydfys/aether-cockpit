@@ -6,6 +6,7 @@ import java.io.IOException
 import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 /** 唤醒任务草稿。服务端按 `account_id` 从账号池取账号，**不需要传凭据**。 */
 data class WakeDraft(
@@ -197,6 +198,16 @@ class WakeWriteApiClient(
         request(status, "DELETE", "/api/wake/$id", null)
     }
 
+    /**
+     * 只改启停：`POST /api/wake/{id}`，请求体 `{"enabled":true|false}`
+     * （`internal/core/gateway/wake.go:408-415`——四个字段都是 `*T`，缺省=不修改）。
+     *
+     * ⚠ 请求体**只能有 `enabled`**：顺手带上 `model` / `every_minutes` 会把它们一起覆盖掉。
+     */
+    fun setEnabled(status: GatewayStatus, id: String, enabled: Boolean) {
+        request(status, "POST", wakeUpdatePath(id), buildWakeUpdateJson(enabled))
+    }
+
     fun fetchCheckinSummary(status: GatewayStatus): CheckinSummary =
         parseCheckinSummary(request(status, "GET", "/api/scheduler/checkin-summary", null))
 
@@ -250,8 +261,21 @@ class WakeWriteApiClient(
     }
 }
 
-/** 写接口回 `{"ok":true}`；没有 ok 字段时视为成功（服务端只回任务体）。 */
-internal fun parseWakeWriteOk(body: String): Boolean {
+/**
+ * 启停更新的**唯一**请求体：`{"enabled":true}` / `{"enabled":false}`。
+ *
+ * 服务端 `handleWakeUpdate`（`wake.go:408-415`）的四个字段都是指针，缺省即"不修改"；
+ * 所以这里**只放 enabled 一个键**——多放 `model`/`every_minutes` 就会把排期与模型一起覆盖。
+ * 单测直接断言输出字符串里没有 `model` / `every_minutes`。
+ */
+internal fun buildWakeUpdateJson(enabled: Boolean): String =
+    JSONObject().put("enabled", enabled).toString()
+
+/** 任务 id 进路径要编码（id 可能含 `/` 等字符）。 */
+internal fun wakeUpdatePath(id: String): String =
+    "/api/wake/" + URLEncoder.encode(id, Charsets.UTF_8.name())
+
+/** 写接口回 `{"ok":true}`；没有 ok 字段时视为成功（服务端只回任务体）。 */internal fun parseWakeWriteOk(body: String): Boolean {
     if (body.isBlank()) {
         return true
     }

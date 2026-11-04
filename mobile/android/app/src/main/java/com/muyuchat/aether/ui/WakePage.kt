@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,8 +45,10 @@ import com.muyuchat.aether.runtime.wakeLastRunLabel
 import com.muyuchat.aether.runtime.wakeNextRunLabel
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
+import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
+import com.muyuchat.core.designsystem.McaSwitch
 
 /**
  * 唤醒队列页（自动化里的那一小块）。
@@ -79,11 +82,17 @@ internal fun WakePage(
     onClearCreateProblems: () -> Unit = {},
     onDeleteWake: (String) -> Unit = {},
     onRefreshAccounts: () -> Unit = {},
+    /** 正在改启停的任务 id（来自 VM.enabledUpdating）；为 null 时开关可点。 */
+    enabledUpdating: String? = null,
+    /** 启停开关（桌面 scheduler.js:405-412）；GatewayHome 接线后生效，未接线时不渲染开关。 */
+    onSetEnabled: ((WakeTask, Boolean) -> Unit)? = null,
     onBack: () -> Unit,
     onOpenOverview: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showCreate by remember { mutableStateOf(false) }
+    // 删除二次确认：先存整个任务，确认后才真的删（桌面 scheduler.js:427-435）。
+    var pendingDelete by remember { mutableStateOf<WakeTask?>(null) }
     LaunchedEffect(Unit) {
         onRefresh()
         onRefreshScheduler()
@@ -227,12 +236,15 @@ internal fun WakePage(
                     }
                 } else {
                     items(state.tasks.size) { index ->
+                        val task = state.tasks[index]
                         WakeTaskCard(
-                            task = state.tasks[index],
+                            task = task,
                             now = state.serverNow,
-                            triggering = triggering == state.tasks[index].id,
-                            onRun = { onRun(state.tasks[index].id) },
-                            onDelete = { onDeleteWake(state.tasks[index].id) },
+                            triggering = triggering == task.id,
+                            onRun = { onRun(task.id) },
+                            onDelete = { pendingDelete = task },
+                            enabledUpdating = enabledUpdating == task.id,
+                            onSetEnabled = onSetEnabled?.let { set -> { enabled -> set(task, enabled) } },
                         )
                     }
                 }
@@ -247,6 +259,47 @@ internal fun WakePage(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+
+    // 删除二次确认（桌面 scheduler.js:427-435）：文案逐字来自桌面。
+    pendingDelete?.let { task ->
+        val confirm = wakeDeleteConfirmText()
+        McaDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(text = confirm.title, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text(
+                        text = confirm.body,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = task.label.ifBlank { task.accountId.ifBlank { task.id } },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        val id = task.id
+                        pendingDelete = null
+                        onDeleteWake(id)
+                    },
+                    style = McaButtonStyle.Destructive,
+                ) { Text(confirm.confirmLabel) }
+            },
+            dismissButton = {
+                McaButton(onClick = { pendingDelete = null }, style = McaButtonStyle.Outlined) {
+                    Text("取消")
+                }
+            },
+        )
     }
 
     if (showCreate) {
@@ -430,6 +483,9 @@ private fun WakeTaskCard(
     triggering: Boolean,
     onRun: () -> Unit,
     onDelete: () -> Unit = {},
+    enabledUpdating: Boolean = false,
+    /** 为 null 表示调用方没有接线：不渲染开关（避免点了没反应的死控件）。 */
+    onSetEnabled: ((Boolean) -> Unit)? = null,
 ) {
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -453,15 +509,44 @@ private fun WakeTaskCard(
                 }
             }
             Spacer(Modifier.width(8.dp))
+            // 状态 chip（桌面 scheduler.js:391-394 的优先级：running > last_ok > last_result > 未执行）
+            val chip = wakeStatusChip(task)
             Text(
-                text = wakeEnabledLabel(task.enabled),
+                text = chip.label,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (task.enabled) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                color = when (chip.tone) {
+                    WakeChipTone.RUNNING -> MaterialTheme.colorScheme.tertiary
+                    WakeChipTone.OK -> MaterialTheme.colorScheme.primary
+                    WakeChipTone.FAILED -> MaterialTheme.colorScheme.error
+                    WakeChipTone.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
+        }
+        // 启停开关与状态 chip 是两条独立信息（桌面也是分开的）：1.3× 字号下开关单独一行。
+        if (onSetEnabled != null) {
+            Spacer(Modifier.height(8.dp))
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val narrow = maxWidth < 340.dp
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (task.enabled) "已启用" else "已停用",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = if (narrow) Modifier else Modifier.weight(1f),
+                    )
+                    if (narrow) Spacer(Modifier.weight(1f))
+                    McaSwitch(
+                        checked = task.enabled,
+                        onCheckedChange = onSetEnabled,
+                        enabled = !enabledUpdating,
+                        contentDescription = if (task.enabled) "停用唤醒任务" else "启用唤醒任务",
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(12.dp))
         Text(
@@ -480,6 +565,7 @@ private fun WakeTaskCard(
             },
         )
         Spacer(Modifier.height(12.dp))
+        // 动作行：可用宽度 <340dp（1.3× 字号常见）时只保留这一行按钮、允许横滚，不换行不挤压。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -490,7 +576,7 @@ private fun WakeTaskCard(
                 onClick = onRun,
                 style = McaButtonStyle.Primary,
                 enabled = !triggering && !task.running,
-            ) { Text(if (triggering) "提交中…" else "立即唤醒") }
+            ) { Text(if (triggering || task.running) "运行中…" else "立即唤醒") }
             McaButton(
                 onClick = onDelete,
                 style = McaButtonStyle.Outlined,
@@ -500,3 +586,34 @@ private fun WakeTaskCard(
         }
     }
 }
+
+/**
+ * 状态 chip 的优先级（桌面 `scheduler.js:391-394`）：
+ * `running` →「执行中」(amber) ＞ `last_ok` →「上次成功」(green) ＞ `last_result` 非空 →「上次失败」(red)
+ * ＞ 否则「未执行」。
+ *
+ * 注意：这是**与启停开关相互独立**的一条信息——停用的任务也可能显示「上次成功」。
+ */
+internal enum class WakeChipTone { RUNNING, OK, FAILED, IDLE }
+
+internal data class WakeStatusChip(val label: String, val tone: WakeChipTone)
+
+internal fun wakeStatusChip(task: WakeTask): WakeStatusChip = when {
+    task.running -> WakeStatusChip("执行中", WakeChipTone.RUNNING)
+    task.lastOk -> WakeStatusChip("上次成功", WakeChipTone.OK)
+    task.lastResult.isNotBlank() -> WakeStatusChip("上次失败", WakeChipTone.FAILED)
+    else -> WakeStatusChip("未执行", WakeChipTone.IDLE)
+}
+
+/** 删除二次确认的三段文案（桌面 `scheduler.js:427-435`，逐字）。 */
+internal data class WakeDeleteConfirm(
+    val title: String,
+    val body: String,
+    val confirmLabel: String,
+)
+
+internal fun wakeDeleteConfirmText(): WakeDeleteConfirm = WakeDeleteConfirm(
+    title = "删除这条唤醒任务？",
+    body = "只删除定时计划，不影响账号。",
+    confirmLabel = "删除",
+)
