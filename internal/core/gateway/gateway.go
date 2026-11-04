@@ -462,6 +462,8 @@ func New(cfg Config) *Gateway {
 	g.syncRedactPrefs()
 	// 请求管线插件钩子：与脱敏一样是设置驱动的，启动时装载一次。
 	g.syncHooks()
+	// 渠道网络档位与边缘固定表：启动时从设置装载。
+	g.syncChannelNet()
 	// 链路优化：DoH 解析 + 多 IP 竞速。跨境渠道的不同边缘 IP 质量差异明显
 	// （实测同一域名两个 Cloudflare 边缘差 100ms+），竞速能稳定挑到当前最优
 	// 的那个；DoH 保证拿到的是真实地址而不是被污染的答案。
@@ -1173,6 +1175,7 @@ func (g *Gateway) routes() {
 	m.HandleFunc("GET /api/pipeline-hooks", g.handlePipelineHooks)
 	// 渠道网络档位与在途数（慢链路优化的可观测入口）。
 	m.HandleFunc("GET /api/channels/net", g.handleChannelNet)
+	m.HandleFunc("POST /api/channels/net", g.handleChannelNetSave)
 	// 网络诊断：把"卡在哪一环"摊开（DNS / TCP / TLS / 首字节）。
 	m.HandleFunc("GET /api/network/diag", g.handleNetDiag)
 	// 边缘优选：扫描候选 IP、测机房与延迟，可钉到该渠道（不写 hosts）。

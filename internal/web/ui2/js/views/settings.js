@@ -1,7 +1,7 @@
 /* 设置（自有实现）：外观、常规、网络、隐私、备份、关于。写回 /api/settings 的字段与后端一致。 */
 import { h, clear } from '../dom.js';
 import * as api from '../api.js';
-import { card, btn, chip, toggle, select, input, field, toast, confirmDialog, fmtDate, drawer, skeleton, textarea, copyText, empty, iconBtn, trapFocus } from '../components.js';
+import { card, btn, chip, toggle, select, input, field, toast, confirmDialog, fmtDate, drawer, skeleton, textarea, copyText, empty, iconBtn, trapFocus, errorBox } from '../components.js';
 import { icon, brandMark } from '../icons.js';
 import { openInBrowser } from '../links.js';
 
@@ -221,7 +221,158 @@ export default {
           line('CORS 来源', '留空表示任意网页来源；填写后仅允许这些来源', listControl(s, 'cors_origins', 'https://example.com, https://app.example.com')),
           line('允许的 IP', '非本机请求只能来自这些 IP / CIDR；留空不限', listControl(s, 'allow_ips', '192.168.1.0/24, 10.0.0.5')),
         ]),
+        channelNetSection(),
+        edgePinSection(),
       ];
+    }
+
+    // channelNetSection 是「慢链路优化」：连接预热与在途上限，按渠道生效。
+    function channelNetSection() {
+      const box = h('div', { class: 'settings-section' });
+      box.append(h('div', { class: 'settings-section-h' }, h('b', null, '慢链路优化'),
+        h('span', { class: 'meta' }, '跨境 / 中转渠道的连接保活与并发上限')));
+      const list = h('div', { class: 'list' });
+      box.append(list);
+      const hint = h('div', { class: 'meta', style: 'padding:6px 2px' });
+      box.append(hint);
+      load();
+
+      async function load() {
+        clear(list);
+        clear(hint);
+        try {
+          const r = await api.get('channels/net');
+          const rows = r.channels || [];
+          if (!rows.length) {
+            list.append(empty('还没有渠道开启优化', '跨境渠道默认会开启；本地渠道保持原样。'));
+            return;
+          }
+          for (const row of rows) {
+            const pre = input({ type: 'number', value: row.prewarm_sec ? String(row.prewarm_sec) : '', placeholder: '45', style: 'width:80px' });
+            const inflight = input({ type: 'number', value: row.max_inflight ? String(row.max_inflight) : '', placeholder: '4', style: 'width:80px' });
+            list.append(h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px' },
+              h('span', { class: 'name' }, row.provider_name || row.provider_id),
+              h('span', { class: 'mono meta', style: 'max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, row.base_url || row.provider_id),
+              chip('在途 ' + (row.inflight ?? 0), (row.inflight ?? 0) > 0 ? 'green' : 'plain'),
+              h('span', { class: 'grow' }),
+              h('span', { class: 'meta' }, '预热(秒)'), pre,
+              h('span', { class: 'meta' }, '在途上限'), inflight,
+              btn('保存', { ghost: true, onClick: async () => {
+                try {
+                  await api.post('channels/net', {
+                    provider_id: row.provider_id,
+                    prewarm_sec: Number(pre.value) || 0,
+                    max_inflight: Number(inflight.value) || 0,
+                  });
+                  toast('已保存');
+                  await load();
+                } catch (e) { toast('保存失败：' + (e.message || e)); }
+              } }),
+              btn('恢复默认', { ghost: true, onClick: async () => {
+                try {
+                  await api.post('channels/net', { provider_id: row.provider_id, prewarm_sec: 0, max_inflight: 0 });
+                  toast('已恢复默认');
+                  await load();
+                } catch (e) { toast('恢复失败：' + (e.message || e)); }
+              } })));
+          }
+          hint.textContent = '预热 = 每隔 N 秒打一次 /models（不消耗 token）把 TCP+TLS 保持热态；在途上限 = 同时最多几条流，防止并发把彼此拖慢。两者都设为 0 即恢复默认。';
+        } catch (e) {
+          list.append(errorBox('读取失败：' + (e.message || e), load));
+        }
+      }
+      return box;
+    }
+
+    // edgePinSection 是「边缘优选」：扫 Cloudflare 边缘，挑离你最近的钉住。
+    function edgePinSection() {
+      const box = h('div', { class: 'settings-section' });
+      box.append(h('div', { class: 'settings-section-h' }, h('b', null, '边缘优选'),
+        h('span', { class: 'meta' }, '同一个域名在不同线路上会被分到不同机房')));
+      const hostInput = input({ value: 'amr-link.open-design.ai', placeholder: 'amr-link.open-design.ai' });
+      const out = h('div');
+      const pins = h('div', { class: 'list' });
+      box.append(
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+          h('span', { class: 'name' }, '上游域名'), hostInput,
+          btn('测一下', { ghost: true, onClick: () => diagnose(hostInput.value.trim(), out) }),
+          btn('扫描并钉住', { primary: true, onClick: () => scan(hostInput.value.trim(), out) })),
+        out,
+        h('div', { class: 'meta', style: 'padding:6px 2px' },
+          '只作用于网关内部，不修改系统 hosts；不解压、不需要管理员权限，随时可清除。'),
+        pins,
+      );
+      loadPins();
+
+      async function loadPins() {
+        clear(pins);
+        try {
+          const r = await api.get('network/edge-pins');
+          const entries = Object.entries(r.pins || {});
+          if (!entries.length) return;
+          for (const [host, ips] of entries) {
+            pins.append(h('div', { class: 'row' },
+              h('span', { class: 'name' }, host),
+              h('span', { class: 'mono meta' }, (ips || []).join(', ')),
+              h('span', { class: 'grow' }),
+              btn('清除', { ghost: true, onClick: async () => {
+                try {
+                  await api.post('network/edge-pin', { host, ips: [] });
+                  toast('已清除');
+                  await loadPins();
+                } catch (e) { toast('清除失败：' + (e.message || e)); }
+              } })));
+          }
+        } catch { /* 固定表读不到不影响其它设置 */ }
+      }
+
+      async function diagnose(host, target) {
+        clear(target);
+        if (!host) { toast('先填域名'); return; }
+        target.append(h('div', { class: 'meta' }, '正在测…'));
+        try {
+          const r = await api.get('network/diag?host=' + encodeURIComponent(host));
+          clear(target);
+          target.append(h('div', { class: 'meta', style: 'padding:4px 0' }, r.summary || ''));
+          for (const ip of r.ips || []) {
+            target.append(h('div', { class: 'row' },
+              h('span', { class: 'mono' }, ip.ip),
+              chip(ip.colo || '?', 'plain'),
+              h('span', { class: 'meta' }, 'TCP ' + (ip.tcp_ms || 0) + 'ms · TLS ' + (ip.tls_ms || 0) + 'ms · 首字节 ' + (ip.ttfb_ms || 0) + 'ms'),
+              h('span', { class: 'grow' }),
+              chip(ip.ok ? '可用' : (ip.error || '不可用'), ip.ok ? 'green' : 'red')));
+          }
+        } catch (e) {
+          clear(target);
+          target.append(errorBox('探测失败：' + (e.message || e), () => diagnose(host, target)));
+        }
+      }
+
+      async function scan(host, target) {
+        clear(target);
+        if (!host) { toast('先填域名'); return; }
+        target.append(h('div', { class: 'meta' }, '正在扫描候选边缘（约 5–20 秒）…'));
+        try {
+          const r = await api.get('network/edge-scan?host=' + encodeURIComponent(host) + '&apply=1');
+          clear(target);
+          const applied = (r.applied || []).join(', ');
+          target.append(h('div', { class: 'meta', style: 'padding:4px 0' },
+            '可用 ' + (r.usable || 0) + ' / 扫描 ' + (r.scanned || 0) + ' 个，用时 ' + (r.elapsed_ms || 0) + 'ms'
+            + (applied ? '；已钉住：' + applied : '')));
+          for (const ip of r.best || []) {
+            target.append(h('div', { class: 'row' },
+              h('span', { class: 'mono' }, ip.ip),
+              chip(ip.colo || '?', 'plain'),
+              h('span', { class: 'meta' }, 'TCP ' + (ip.tcp_ms || 0) + 'ms · TLS ' + (ip.tls_ms || 0) + 'ms · 首字节 ' + (ip.ttfb_ms || 0) + 'ms')));
+          }
+          await loadPins();
+        } catch (e) {
+          clear(target);
+          target.append(errorBox('扫描失败：' + (e.message || e), () => scan(host, target)));
+        }
+      }
+
+      return box;
     }
 
     function proxyControl(s) {

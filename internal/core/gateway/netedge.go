@@ -295,6 +295,14 @@ func (g *Gateway) handleEdgeScan(w http.ResponseWriter, r *http.Request) {
 			ips = append(ips, b.IP)
 		}
 		g.hostPins().Set(host, ips)
+		// 与 edge-pin 一致：写进设置，跨重启保留。
+		g.settingsMu.Lock()
+		if g.settings.EdgePins == nil {
+			g.settings.EdgePins = map[string][]string{}
+		}
+		g.settings.EdgePins[host] = ips
+		g.settingsMu.Unlock()
+		_ = g.saveSettings()
 		out["applied"] = ips
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -316,6 +324,18 @@ func (g *Gateway) handleEdgePin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.hostPins().Set(host, body.IPs)
+	// 落盘：固定表要跨重启保留，否则用户每次启动都得重扫。
+	g.settingsMu.Lock()
+	if g.settings.EdgePins == nil {
+		g.settings.EdgePins = map[string][]string{}
+	}
+	if ips := g.hostPins().Get(host); len(ips) > 0 {
+		g.settings.EdgePins[host] = ips
+	} else {
+		delete(g.settings.EdgePins, host)
+	}
+	g.settingsMu.Unlock()
+	_ = g.saveSettings()
 	writeJSON(w, http.StatusOK, map[string]any{"host": host, "ips": g.hostPins().Get(host)})
 }
 

@@ -72,6 +72,19 @@ func (s *channelNetStore) Set(pid string, p ChannelNetProfile) {
 	s.profiles[pid] = p
 }
 
+// replaceAll 用给定集合整体替换（设置同步用）。
+func (s *channelNetStore) replaceAll(profiles map[string]ChannelNetProfile) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.profiles = make(map[string]ChannelNetProfile, len(profiles))
+	for k, v := range profiles {
+		s.profiles[k] = v
+	}
+}
+
 // Get 返回某渠道的档位。
 func (s *channelNetStore) Get(pid string) ChannelNetProfile {
 	if s == nil {
@@ -171,6 +184,89 @@ func (g *Gateway) channelNet() *channelNetStore {
 		}
 	})
 	return g.netProfiles
+}
+
+// syncChannelNet 把设置里的档位与边缘固定表装进运行时。
+//
+// 设置是唯一真相源：启动时装载一次，保存设置后再同步。内置默认只在
+// 设置里没有该渠道条目时生效（用户可以显式覆盖，或置零恢复默认）。
+func (g *Gateway) syncChannelNet() {
+	g.settingsMu.Lock()
+	overrides := make(map[string]ChannelNetProfile, len(g.settings.ChannelNet))
+	for k, v := range g.settings.ChannelNet {
+		overrides[k] = v
+	}
+	pins := make(map[string][]string, len(g.settings.EdgePins))
+	for k, v := range g.settings.EdgePins {
+		pins[k] = append([]string(nil), v...)
+	}
+	g.settingsMu.Unlock()
+
+	// 先铺内置默认，再盖用户覆盖：删掉某条覆盖就能回到默认，
+	// 而不是留下上一次的值。
+	merged := newChannelNetStore().Snapshot()
+	for k, v := range overrides {
+		merged[k] = v
+	}
+	g.channelNet().replaceAll(merged)
+
+	pinStore := g.hostPins()
+	for host, ips := range pins {
+		pinStore.Set(host, ips)
+	}
+}
+
+// channelNetSnapshot 返回当前生效的档位（诊断/页面用）。
+func (g *Gateway) channelNetSnapshot() map[string]ChannelNetProfile {
+	return g.channelNet().Snapshot()
+}
+
+// handleChannelNetSave POST /api/channels/net {provider_id, prewarm_sec, max_inflight}
+//
+// 落盘并立即生效；两者都给 0 表示恢复默认（删除覆盖）。
+func (g *Gateway) handleChannelNetSave(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ProviderID  string `json:"provider_id"`
+		PrewarmSec  int    `json:"prewarm_sec"`
+		MaxInflight int    `json:"max_inflight"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体解析失败: " + err.Error()})
+		return
+	}
+	pid := strings.TrimSpace(body.ProviderID)
+	if pid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "缺少 provider_id"})
+		return
+	}
+	if body.PrewarmSec < 0 || body.PrewarmSec > 3600 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prewarm_sec 需在 0–3600"})
+		return
+	}
+	if body.MaxInflight < 0 || body.MaxInflight > 64 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "max_inflight 需在 0–64"})
+		return
+	}
+	g.settingsMu.Lock()
+	if g.settings.ChannelNet == nil {
+		g.settings.ChannelNet = map[string]ChannelNetProfile{}
+	}
+	if body.PrewarmSec == 0 && body.MaxInflight == 0 {
+		delete(g.settings.ChannelNet, pid)
+	} else {
+		g.settings.ChannelNet[pid] = ChannelNetProfile{
+			PrewarmSec:     body.PrewarmSec,
+			MaxInflight:    body.MaxInflight,
+			StallTimeoutMS: 0,
+		}
+	}
+	g.settingsMu.Unlock()
+	if err := g.saveSettings(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	g.syncChannelNet()
+	writeJSON(w, http.StatusOK, map[string]any{"channels": g.channelNetSnapshot()})
 }
 
 // channelGate 返回在途闸门（惰性创建）。

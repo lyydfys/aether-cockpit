@@ -160,6 +160,12 @@ type runtimeSettings struct {
 	// QuotaAlerts 是额度提醒的去重状态（每个告警键记录上次的类型与时间）。
 	// 落盘是为了重启后不把已经报过的提醒再刷一遍。
 	QuotaAlerts map[string]quotaAlertState `json:"quota_alerts,omitempty"`
+	// ChannelNet 是按渠道的慢链路优化档位（连接预热 / 在途上限）。
+	// 未配置的渠道走内置默认（目前只有跨境/中转渠道默认开）。
+	ChannelNet map[string]ChannelNetProfile `json:"channel_net,omitempty"`
+	// EdgePins 是按域名固定的上游 IP（Cloudflare 边缘优选的结果）。
+	// 只作用于网关内部，不修改系统 hosts。
+	EdgePins map[string][]string `json:"edge_pins,omitempty"`
 	// ProviderOrder 是渠道页的展示/优先级顺序。
 	ProviderOrder []string `json:"provider_order,omitempty"`
 	// ProviderBalances 是渠道自定义余额接口（aether 的 balanceURL / balancePath）。
@@ -640,6 +646,8 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	g.syncRedactPrefs()
 	// 插件钩子同样是"设置驱动"的：保存后立刻重建，不用重启。
 	g.syncHooks()
+	// 渠道网络档位与边缘固定表同样跟着设置走。
+	g.syncChannelNet()
 	if body.Proxy != nil {
 		if _, err := g.applyGlobalProxy(*body.Proxy); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
