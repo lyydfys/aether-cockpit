@@ -14,8 +14,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -63,13 +65,14 @@ internal fun BundlePreviewSection(
     onDismiss: () -> Unit,
 ) {
     Surface(
-        shape = McaShape.Card,
+        shape = McaShape.Sheet,
         color = McaTonal.fill(),
+        border = McaHairline.stroke(),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(18.dp),
+                .padding(16.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
@@ -87,12 +90,12 @@ internal fun BundlePreviewSection(
                         )
                     }
                 }
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(8.dp))
                 Column {
                     Text(
                         text = "账号包预览与导入",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
@@ -134,7 +137,7 @@ private fun WorkingBody() {
             strokeWidth = 2.dp,
             color = MaterialTheme.colorScheme.primary,
         )
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(8.dp))
         Text(
             text = "正在本地解密账号包…",
             style = MaterialTheme.typography.bodyMedium,
@@ -153,12 +156,12 @@ private fun ReadyBody(
     Text(
         text = "${preview.accounts.size} 个账号 · ${preview.providerCount} 个渠道",
         style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurface,
     )
     val exportedAt = formatExportedAt(preview.exportedAtSec)
     if (exportedAt.isNotEmpty()) {
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(4.dp))
         Text(
             text = "导出时间 $exportedAt",
             style = MaterialTheme.typography.bodySmall,
@@ -168,7 +171,7 @@ private fun ReadyBody(
     if (preview.accounts.isEmpty()) {
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "账号包里没有账号。",
+            text = bundlePreviewEmptyDetail(),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -183,7 +186,7 @@ private fun ReadyBody(
             )
         }
     }
-    Spacer(Modifier.height(10.dp))
+    Spacer(Modifier.height(12.dp))
     when (importState) {
         BundleImportUiState.Idle -> {
             Text(
@@ -207,7 +210,7 @@ private fun ReadyBody(
                 strokeWidth = 2.dp,
                 color = MaterialTheme.colorScheme.primary,
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = "正在写入本机账号池…",
                 style = MaterialTheme.typography.bodyMedium,
@@ -222,7 +225,7 @@ private fun ReadyBody(
                     "已导入 ${importState.result.imported.size} 个账号"
                 },
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = if (importState.result.imported.isEmpty()) {
                     MaterialTheme.colorScheme.error
                 } else {
@@ -230,7 +233,7 @@ private fun ReadyBody(
                 },
             )
             if (importState.result.skipped > 0) {
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(
                     text = "跳过 ${importState.result.skipped} 个重复账号",
                     style = MaterialTheme.typography.bodySmall,
@@ -239,13 +242,31 @@ private fun ReadyBody(
             }
             val firstFailure = importState.result.failed.firstOrNull()
             if (firstFailure != null) {
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
+                // 只给状态词「失败 N 个」染 error；错误原文保持正文色。
                 Text(
-                    text = "失败 ${importState.result.failed.size} 个：${firstFailure.label.ifBlank { "未命名账号" }} — ${firstFailure.error}",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = "失败 ${importState.result.failed.size} 个",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    text = "${firstFailure.label.ifBlank { "未命名账号" }} — ${firstFailure.error}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (importState.result.imported.isEmpty() &&
+                importState.result.skipped == 0 &&
+                importState.result.failed.isEmpty()
+            ) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "这次没有写入任何账号：账号包可能为空，或内容都被跳过了。" +
+                        "关闭预览后重新选择包含账号的包。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Spacer(Modifier.height(12.dp))
@@ -257,10 +278,10 @@ private fun ReadyBody(
             Text(
                 text = "导入失败",
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.error,
             )
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 text = importState.message,
                 style = MaterialTheme.typography.bodySmall,
@@ -289,7 +310,7 @@ private fun FailedBody(code: String, message: String, onPick: () -> Unit, onDism
     Text(
         text = "无法预览账号包",
         style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.error,
     )
     Spacer(Modifier.height(4.dp))
@@ -298,7 +319,7 @@ private fun FailedBody(code: String, message: String, onPick: () -> Unit, onDism
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface,
     )
-    Spacer(Modifier.height(2.dp))
+    Spacer(Modifier.height(4.dp))
     Text(
         text = "错误码：$code",
         style = MaterialTheme.typography.labelSmall,
@@ -325,7 +346,7 @@ private fun AccountPreviewRow(account: BundleAccountPreview) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp),
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -382,12 +403,16 @@ internal fun BundlePassphraseDialog(
         title = {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
         },
         text = {
-            Column {
+            Column(
+                Modifier
+                    .heightIn(max = DialogContentMaxHeight)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 Text(
                     text = detail,
                     style = MaterialTheme.typography.bodySmall,
@@ -430,7 +455,7 @@ private fun PassphraseField(value: String, onValueChange: (String) -> Unit) {
                 // 靠 heightIn 自己撑到 48dp；垂直 padding 放在它之后会把点按区压回一行字。
                 .heightIn(min = 48.dp)
                 .wrapContentHeight(Alignment.CenterVertically)
-                .padding(horizontal = 14.dp)
+                .padding(horizontal = 12.dp)
                 .semantics { contentDescription = "账号包口令" },
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyMedium.copy(
@@ -458,7 +483,15 @@ private fun PassphraseField(value: String, onValueChange: (String) -> Unit) {
     }
 }
 
-private fun formatExportedAt(seconds: Long): String {
+/**
+ * 账号包为空时的空态：先说清"为什么可能为空"，再给下一步。
+ * 用户要知道是包的问题，还是导出时漏选了账号。
+ */
+internal fun bundlePreviewEmptyDetail(): String =
+    "账号包里没有账号：可能是导出时没有勾选账号，或这个包只含渠道设置。" +
+        "请回桌面端重新导出包含账号的包。"
+
+internal fun formatExportedAt(seconds: Long): String {
     if (seconds <= 0L) {
         return ""
     }

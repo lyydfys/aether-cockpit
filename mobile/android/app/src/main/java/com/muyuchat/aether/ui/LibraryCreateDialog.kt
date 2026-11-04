@@ -63,10 +63,16 @@ internal fun LibraryCreateDialog(
 
     McaDialog(
         onDismissRequest = { if (!saving) onDismiss() },
-        title = { Text("新增资源", fontWeight = FontWeight.Bold) },
+        title = {
+            Text(
+                text = "新增资源",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        },
         text = {
             Column(
-                Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                Modifier.heightIn(max = DialogContentMaxHeight).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
@@ -165,7 +171,7 @@ private fun LibraryField(
                     .fillMaxWidth()
                     .heightIn(min = minHeight)
                     .wrapContentHeight(Alignment.CenterVertically)
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
                     .semantics { contentDescription = label },
             )
         }

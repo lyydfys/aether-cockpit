@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -16,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
@@ -38,11 +37,8 @@ import com.muyuchat.aether.runtime.LibraryKind
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
-import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 
 /**
  * 资源库页：列出沙盒库里的条目，并能删除。
@@ -81,7 +77,7 @@ internal fun LibraryPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
         item {
@@ -127,88 +123,38 @@ internal fun LibraryPage(
                 }
             }
         }
+        item { DeepSectionTitle("手机端能做什么") }
         item {
-            Surface(
-                shape = McaShape.Card,
-                color = McaTonal.fill(),
-                border = McaHairline.stroke(),
-            ) {
-                Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                    Text(
-                        text = "手机端可查看 / 新增 / 删除",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "「发现」要以桌面用户目录为根扫描，「下发给 Agent」会写桌面端的配置文件，" +
-                            "两者在手机上都不做。这里可以列出、新增和删除本机网关沙盒里的条目。" +
-                            "MCP 的完整配置（可能包含密钥）不会显示在页面上，也不允许在手机上编辑。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            DeepCard {
+                DeepCardBody(
+                    "「发现」要以桌面用户目录为根扫描，「下发给 Agent」会写桌面端的配置文件，" +
+                        "两者在手机上都不做。这里可以列出、新增和删除本机网关沙盒里的条目。" +
+                        "MCP 的完整配置（可能包含密钥）不会显示在页面上，也不允许在手机上编辑。",
+                )
             }
         }
         notice?.let { message ->
-            item {
-                Column(Modifier.fillMaxWidth()) {
-                    Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(6.dp))
-                    McaButton(onClick = onDismissNotice, style = McaButtonStyle.Outlined) { Text("知道了") }
-                }
-            }
+            item { DeepNotice(message, onDismiss = onDismissNotice) }
         }
         actionError?.let { message ->
-            item {
-                Column(Modifier.fillMaxWidth()) {
-                    Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    Spacer(Modifier.height(6.dp))
-                    McaButton(onClick = onDismissActionError, style = McaButtonStyle.Outlined) { Text("知道了") }
-                }
-            }
+            item { DeepNotice(message, isError = true, onDismiss = onDismissActionError) }
         }
         when (state) {
             LibraryUiState.Idle, LibraryUiState.Loading -> item {
-                Text(
-                    text = "正在读取资源库…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                DeepCardBody("正在读取资源库…")
             }
             is LibraryUiState.Failed -> item {
-                Surface(
-                    shape = McaShape.Card,
-                    color = McaTonal.fill(),
-                    border = McaHairline.stroke(),
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                        Text(
-                            text = if (state.code == "gateway_not_running") "网关未启动" else "读取失败",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = if (state.code == "gateway_not_running") {
-                                "启动本地网关后即可读取资源库。"
-                            } else {
-                                "${state.message}（错误码：${state.code}）"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        McaButton(
-                            onClick = if (state.code == "gateway_not_running") onOpenOverview else onRefresh,
-                            style = McaButtonStyle.Primary,
-                        ) {
-                            Text(if (state.code == "gateway_not_running") "前往概览" else "重试")
-                        }
-                    }
-                }
+                DeepStateCard(
+                    title = if (state.code == "gateway_not_running") "网关未启动" else "读取失败",
+                    detail = if (state.code == "gateway_not_running") {
+                        "启动本地网关后即可读取资源库。"
+                    } else {
+                        "${state.message}（错误码：${state.code}）"
+                    },
+                    tone = if (state.code == "gateway_not_running") DeepTone.Info else DeepTone.Danger,
+                    actionLabel = if (state.code == "gateway_not_running") "前往概览" else "重试",
+                    onAction = if (state.code == "gateway_not_running") onOpenOverview else onRefresh,
+                )
             }
             is LibraryUiState.Ready -> {
                 val visible = state.entries.filter { kindFilter == null || it.kind == kindFilter }
@@ -230,23 +176,27 @@ internal fun LibraryPage(
                     }
                 }
                 if (visible.isEmpty()) {
+                    val copy = libraryEmptyCopy(
+                        hasAnyEntry = state.entries.isNotEmpty(),
+                        kindLabel = kindFilter?.label,
+                    )
                     item {
-                        Text(
-                            text = if (state.entries.isEmpty()) {
-                                "本机资源库里还没有条目。可以点右上「新增」创建一条；从桌面发现/导入仍在桌面端。"
+                        DeepStateCard(
+                            title = copy.title,
+                            detail = copy.detail,
+                            actionLabel = copy.action,
+                            onAction = if (state.entries.isEmpty()) {
+                                { if (status.running) showCreate = true }
                             } else {
-                                "该分类下没有条目。"
+                                { onKindFilter(null) }
                             },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 } else {
                     item {
-                        Text(
-                            text = "共 ${visible.size} 条",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        DeepSectionTitle(
+                            text = "本机条目",
+                            trailing = libraryCountLabel(visible.size),
                         )
                     }
                     items(visible.size) { index ->
@@ -311,34 +261,52 @@ internal fun LibraryPage(
     }
 }
 
+/** 列表计数文案。 */
+internal fun libraryCountLabel(count: Int): String = "$count 条"
+
+/** 空态文案：标题说清是哪一种空，正文说下一步能做什么。 */
+internal data class LibraryEmptyCopy(val title: String, val detail: String, val action: String)
+
+internal fun libraryEmptyCopy(hasAnyEntry: Boolean, kindLabel: String?): LibraryEmptyCopy {
+    if (hasAnyEntry && !kindLabel.isNullOrBlank()) {
+        return LibraryEmptyCopy(
+            title = "「$kindLabel」下没有条目",
+            detail = "其它分类里还有条目。切回「全部」可以看到完整列表。",
+            action = "显示全部",
+        )
+    }
+    return LibraryEmptyCopy(
+        title = "资源库里还没有条目",
+        detail = "可以点右上「新增」创建一条；从桌面 Agent 配置里「发现 / 导入」仍在桌面端做。",
+        action = "新增条目",
+    )
+}
+
 @Composable
 private fun LibraryRow(entry: LibraryEntry, deleting: Boolean, onDelete: () -> Unit) {
-    Surface(
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = entry.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = entry.kind.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                McaButton(
-                    onClick = onDelete,
-                    style = McaButtonStyle.Outlined,
-                    enabled = !deleting,
-                ) { Text(if (deleting) "删除中…" else "删除") }
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = entry.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = entry.kind.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
+            Spacer(Modifier.width(8.dp))
+            McaButton(
+                onClick = onDelete,
+                style = McaButtonStyle.Outlined,
+                enabled = !deleting,
+            ) { Text(if (deleting) "删除中…" else "删除") }
         }
     }
 }

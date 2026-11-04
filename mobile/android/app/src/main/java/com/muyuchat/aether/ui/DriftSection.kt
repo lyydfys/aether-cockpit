@@ -6,14 +6,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -28,9 +27,6 @@ import com.muyuchat.aether.runtime.driftKindLabel
 import com.muyuchat.aether.runtime.driftSummaryLine
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
-import com.muyuchat.core.designsystem.McaHairline
-import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -88,63 +84,59 @@ internal fun DriftSection(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    Surface(shape = McaShape.Card, color = McaTonal.fill(), border = McaHairline.stroke(), modifier = modifier) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Text(
-                text = "配置漂移",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "对比桌面客户端配置文件与网关期望值：地址被改回官方、文件被删、模型被改都算漂移。" +
-                    "手机端只看「哪个客户端、哪一类」；逐行差异与修复都在桌面端。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            McaButton(
-                onClick = viewModel::refresh,
-                style = McaButtonStyle.Outlined,
-                enabled = status.running && state !is DriftUiState.Loading,
-            ) { Text(if (state is DriftUiState.Loading) "检查中…" else "检查配置漂移") }
-            when (val current = state) {
-                DriftUiState.Idle, DriftUiState.Loading -> Unit
-                is DriftUiState.Failed -> {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = if (current.code == "gateway_not_running") {
-                            "网关未启动：启动后才能检查配置漂移。"
-                        } else {
-                            "${current.message}（错误码：${current.code}）"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                is DriftUiState.Ready -> {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = driftSummaryLine(current.report),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    current.report.entries.forEach { entry ->
-                        Spacer(Modifier.height(6.dp))
-                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            Text(
-                                text = "· ${entry.agentId}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                            Text(
-                                text = driftKindLabel(entry.kind),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+    DeepCard(modifier = modifier) {
+        DeepCardTitle("配置漂移")
+        Spacer(Modifier.height(4.dp))
+        DeepCardBody(
+            "对比桌面客户端配置文件与网关期望值：地址被改回官方、文件被删、模型被改都算漂移。" +
+                "手机端只看「哪个客户端、哪一类」；逐行差异与修复都在桌面端。",
+        )
+        Spacer(Modifier.height(12.dp))
+        McaButton(
+            onClick = viewModel::refresh,
+            style = McaButtonStyle.Outlined,
+            enabled = status.running && state !is DriftUiState.Loading,
+        ) { Text(if (state is DriftUiState.Loading) "检查中…" else "检查配置漂移") }
+        when (val current = state) {
+            DriftUiState.Idle, DriftUiState.Loading -> Unit
+            is DriftUiState.Failed -> {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = if (current.code == "gateway_not_running") {
+                        "网关未启动：启动后才能检查配置漂移。"
+                    } else {
+                        "${current.message}（错误码：${current.code}）"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            is DriftUiState.Ready -> {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = driftSummaryLine(current.report),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                current.report.entries.forEach { entry ->
+                    Spacer(Modifier.height(12.dp))
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        // 漂移条目本身就是"需要处理"的信号，所以客户端名保留 error 色；
+                        // 类别是中性描述，不上色。
+                        Text(
+                            text = entry.agentId,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = driftKindLabel(entry.kind),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

@@ -2,7 +2,6 @@ package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +25,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.runtime.AccountSummary
 import com.muyuchat.aether.runtime.WakeDraft
@@ -36,6 +36,14 @@ import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaShape
+
+/**
+ * 所有表单/确认对话框的内容限高。
+ *
+ * 320dp 是「软键盘弹起后仍给确认按钮留出可点区域」的上限：再高的内容由
+ * `verticalScroll` 吸收，不让 AlertDialog 的按钮行被顶出窗口。
+ */
+internal val DialogContentMaxHeight: Dp = 320.dp
 
 /**
  * 新建唤醒任务。
@@ -63,10 +71,16 @@ internal fun WakeCreateDialog(
 
     McaDialog(
         onDismissRequest = { if (!creating) onDismiss() },
-        title = { Text("新建唤醒任务", fontWeight = FontWeight.Bold) },
+        title = {
+            Text(
+                text = "新建唤醒任务",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        },
         text = {
             Column(
-                Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                Modifier.heightIn(max = DialogContentMaxHeight).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
@@ -78,7 +92,7 @@ internal fun WakeCreateDialog(
                     Text(
                         text = "本机还没有可用账号：先到「渠道」页添加或导入账号。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
                     Text(

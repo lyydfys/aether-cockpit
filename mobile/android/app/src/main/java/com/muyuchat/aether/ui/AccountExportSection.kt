@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -57,15 +59,15 @@ internal fun AccountExportSection(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = McaShape.Card,
+        shape = McaShape.Sheet,
         color = McaTonal.fill(),
         border = McaHairline.stroke(),
     ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(
                 text = "导出账号包",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(4.dp))
@@ -75,7 +77,15 @@ internal fun AccountExportSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(10.dp))
+            importExportGatewayHint(status.running, "导出账号包")?.let { hint ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 McaButton(
                     onClick = {
@@ -83,14 +93,14 @@ internal fun AccountExportSection(
                         validation = null
                         showPassphrase = true
                     },
-                    style = McaButtonStyle.Outlined,
+                    style = McaButtonStyle.Primary,
                     enabled = status.running && state !is AccountExportUiState.Exporting,
                 ) { Text(if (state is AccountExportUiState.Exporting) "生成中…" else "导出账号包…") }
             }
             when (val current = state) {
                 AccountExportUiState.Idle, AccountExportUiState.Exporting -> Unit
                 is AccountExportUiState.Ready -> {
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(12.dp))
                     Text(
                         text = "已生成：${current.fileName}",
                         style = MaterialTheme.typography.titleSmall,
@@ -118,15 +128,20 @@ internal fun AccountExportSection(
                     }
                 }
                 is AccountExportUiState.Failed -> {
-                    Spacer(Modifier.height(10.dp))
+                    val failure = accountExportFailureCopy(current.code, current.message)
+                    Spacer(Modifier.height(12.dp))
+                    // 只给状态词染 error；错误原文保持正文色。
                     Text(
-                        text = when (current.code) {
-                            "gateway_not_running" -> "网关未启动：先回「概览」启动网关"
-                            "weak_passphrase" -> "口令不符合要求：${current.message}"
-                            else -> "导出失败：${current.message}（错误码：${current.code}）"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
+                        text = failure.status,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = failure.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(Modifier.height(8.dp))
                     McaButton(onClick = viewModel::reset, style = McaButtonStyle.Outlined) { Text("知道了") }
@@ -138,9 +153,19 @@ internal fun AccountExportSection(
     if (showPassphrase) {
         McaDialog(
             onDismissRequest = { showPassphrase = false },
-            title = { Text("设置账号包口令", fontWeight = FontWeight.Bold) },
+            title = {
+                Text(
+                    text = "设置账号包口令",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
             text = {
-                Column {
+                Column(
+                    Modifier
+                        .heightIn(max = DialogContentMaxHeight)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     Text(
                         text = "口令至少 8 位。桌面端导入时要输入同一个口令；口令不会保存在手机里。",
                         style = MaterialTheme.typography.bodySmall,
@@ -175,6 +200,32 @@ internal fun AccountExportSection(
             },
         )
     }
+}
+
+/** 导入/导出区块统一的失败呈现：状态词与错误原文分开，页面只给状态词染 error。 */
+internal data class ImportExportFailureCopy(val status: String, val detail: String)
+
+/** 网关未启动时的下一步提示；运行中返回 null，由区块自己决定要不要显示。 */
+internal fun importExportGatewayHint(running: Boolean, action: String): String? =
+    if (running) {
+        null
+    } else {
+        "网关未启动：先在「概览」启动本地网关，再${action.ifBlank { "继续" }}。"
+    }
+
+internal fun accountExportFailureCopy(code: String, message: String): ImportExportFailureCopy = when (code) {
+    "gateway_not_running" -> ImportExportFailureCopy(
+        status = "网关未启动",
+        detail = "先在「概览」启动本地网关，再回来导出账号包。",
+    )
+    "weak_passphrase" -> ImportExportFailureCopy(
+        status = "口令不符合要求",
+        detail = message.ifBlank { "口令至少 8 位。" },
+    )
+    else -> ImportExportFailureCopy(
+        status = "导出失败",
+        detail = "${message.ifBlank { "服务端没有返回原因" }}（错误码：${code.ifBlank { "unknown" }}）",
+    )
 }
 
 /** 口令输入框：与其它页面一致，BasicTextField 自己撑到 48dp，密码态显示。 */

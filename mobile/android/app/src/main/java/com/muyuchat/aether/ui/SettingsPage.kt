@@ -52,7 +52,6 @@ import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 
 @Composable
 internal fun SettingsPage(
@@ -110,7 +109,7 @@ internal fun SettingsPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
         item {
@@ -317,7 +316,7 @@ private fun RedactDetailDialog(
                                     color = MaterialTheme.colorScheme.primary,
                                 )
                             }
-                            Spacer(Modifier.height(6.dp))
+                            Spacer(Modifier.height(8.dp))
                             state.detail.rules.forEach { rule ->
                                 Row(
                                     modifier = Modifier
@@ -350,7 +349,7 @@ private fun RedactDetailDialog(
                                     ) { Text("切换") }
                                 }
                             }
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(8.dp))
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
@@ -420,7 +419,7 @@ private fun RedactDetailDialog(
                     }
                 }
                 if (error != null) {
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         text = error,
                         style = MaterialTheme.typography.bodySmall,
@@ -593,92 +592,93 @@ private fun CallerKeysSection(
     var deleting by remember { mutableStateOf<CallerKeySummary?>(null) }
     var confirmName by remember { mutableStateOf("") }
     Column {
-        Text(
+        DeepSectionTitle(
             text = "调用方密钥",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground,
+            trailing = when (state) {
+                is CallerKeysUiState.Ready -> countLabel(state.keys.size)
+                else -> null
+            },
         )
-        Spacer(Modifier.height(6.dp))
-        Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-            ) {
+        Spacer(Modifier.height(8.dp))
+        // 空态不塞进「密钥卡」里再套一层卡：整块换成 DeepStateCard（一层 Sheet）。
+        val isEmptyReady = state is CallerKeysUiState.Ready && state.keys.isEmpty()
+        if (isEmptyReady) {
+            DeepStateCard(
+                title = "还没有调用方密钥",
+                detail = "局域网共享需要一个启用的密钥；手机上可新建，明文只在创建时展示一次。",
+                actionLabel = "新建密钥",
+                onAction = { creating = true },
+            )
+        } else {
+            DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
                 when (state) {
-                    CallerKeysUiState.Idle, CallerKeysUiState.Loading -> Text(
-                        text = "正在读取调用方密钥…",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    is CallerKeysUiState.Failed -> Text(
-                        text = state.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    is CallerKeysUiState.Ready -> {
-                        if (state.keys.isEmpty()) {
-                            Text(
-                                text = "还没有调用方密钥；局域网共享需要一个启用的密钥。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            state.keys.forEach { key ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            text = key.name.ifBlank { key.id },
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                        )
-                                        Text(
-                                            text = "${key.masked} · ${if (key.off) "已停用" else "启用"} · ${key.usedTokens} tokens · $${"%.4f".format(java.util.Locale.US, key.usedCost)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    Spacer(Modifier.width(8.dp))
-                                    McaButton(
-                                        onClick = { onToggle(key) },
-                                        style = McaButtonStyle.Outlined,
-                                    ) { Text(if (key.off) "启用" else "停用") }
-                                    Spacer(Modifier.width(6.dp))
-                                    McaButton(
-                                        onClick = {
-                                            confirmName = ""
-                                            deleting = key
-                                        },
-                                        style = McaButtonStyle.Outlined,
-                                    ) { Text("删除") }
-                                }
+                    CallerKeysUiState.Idle, CallerKeysUiState.Loading -> Column(
+                        Modifier.fillMaxWidth().padding(vertical = DeepRowVertical),
+                    ) { DeepCardBody("正在读取调用方密钥…") }
+                    is CallerKeysUiState.Failed -> Column(
+                        Modifier.fillMaxWidth().padding(vertical = DeepRowVertical),
+                    ) {
+                        Text(
+                            text = state.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    is CallerKeysUiState.Ready -> state.keys.forEach { key ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = DeepRowVertical),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = key.name.ifBlank { key.id },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = callerKeyMetaLine(key),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
+                            Spacer(Modifier.width(8.dp))
+                            McaButton(
+                                onClick = { onToggle(key) },
+                                style = McaButtonStyle.Outlined,
+                            ) { Text(if (key.off) "启用" else "停用") }
+                            Spacer(Modifier.width(8.dp))
+                            McaButton(
+                                onClick = {
+                                    confirmName = ""
+                                    deleting = key
+                                },
+                                style = McaButtonStyle.Outlined,
+                                // 删除是危险动作：只染动作文字，容器与其余行不动。
+                                contentColor = MaterialTheme.colorScheme.error,
+                            ) { Text("删除") }
                         }
                     }
                 }
-                if (error != null) {
+            if (error != null) {
+                Column(Modifier.fillMaxWidth().padding(vertical = DeepRowVertical)) {
                     Text(
                         text = error,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                Spacer(Modifier.height(6.dp))
+            }
+            Column(
+                Modifier.fillMaxWidth().padding(vertical = DeepRowVertical),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 McaButton(onClick = { creating = true }, style = McaButtonStyle.Primary) {
                     Text("新建密钥")
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "明文只在创建时展示一次，不写日志/截图/剪贴板；本机仅保存加密密文。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                DeepCardBody("明文只在创建时展示一次，不写日志/截图/剪贴板；本机仅保存加密密文。")
+            }
             }
         }
     }
@@ -699,7 +699,7 @@ private fun CallerKeysSection(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(8.dp))
                     Surface(shape = McaShape.CardAction, color = MaterialTheme.colorScheme.surface, border = McaHairline.stroke()) {
                         BasicTextField(
                             value = confirmName,
@@ -723,7 +723,8 @@ private fun CallerKeysSection(
                         deleting = null
                         onRemove(id)
                     },
-                    style = McaButtonStyle.Primary,
+                    style = McaButtonStyle.Outlined,
+                    contentColor = MaterialTheme.colorScheme.error,
                     enabled = callerKeyDeleteConfirmed(confirmName, target.name, target.id),
                 ) { Text("删除") }
             },
@@ -743,7 +744,7 @@ private fun CallerKeysSection(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(8.dp))
                     Surface(shape = McaShape.CardAction, color = MaterialTheme.colorScheme.surface, border = McaHairline.stroke()) {
                         BasicTextField(
                             value = name,
@@ -789,7 +790,7 @@ private fun CallerSecretDialog(secret: String, onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 Surface(shape = McaShape.CardAction, color = MaterialTheme.colorScheme.surface, border = McaHairline.stroke()) {
                     Text(
                         text = secret,
@@ -867,7 +868,7 @@ private fun AccessListRow(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 3.dp),
+                                .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
@@ -960,7 +961,7 @@ private fun PreferredPortRow(
     var draft by remember(preferredPort) {
         mutableStateOf(if (preferredPort > 0) preferredPort.toString() else "")
     }
-    Column(Modifier.padding(vertical = 5.dp)) {
+    Column(Modifier.padding(vertical = DeepRowVertical)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "首选端口",
@@ -968,20 +969,20 @@ private fun PreferredPortRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = if (preferredPort > 0) preferredPort.toString() else "系统分配",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             McaButton(
                 onClick = { editing = !editing },
                 style = McaButtonStyle.Outlined,
             ) { Text(if (editing) "收起" else "设置") }
         }
         if (editing) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
             Surface(
                 shape = McaShape.CardAction,
                 color = MaterialTheme.colorScheme.surface,
@@ -1144,7 +1145,7 @@ private fun SettingsSections(
                         },
                     )
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     McaButton(
                         onClick = { onSaveProxy(proxyDraft) },
@@ -1246,24 +1247,28 @@ private fun SettingsSections(
 
 private fun countLabel(count: Int): String = if (count == 0) "未配置" else "$count 项"
 
+/**
+ * 调用方密钥行副标题：掩码 · 状态 · 用量。
+ * 纯函数，便于单测；缺字段时也要能拼出可读文案，不抛异常。
+ */
+internal fun callerKeyMetaLine(key: CallerKeySummary): String = buildString {
+    append(key.masked.ifBlank { "掩码缺失" })
+    append(" · ")
+    append(if (key.off) "已停用" else "启用")
+    append(" · ")
+    append(key.usedTokens)
+    append(" tokens · $")
+    append("%.4f".format(java.util.Locale.US, key.usedCost))
+}
+
 @Composable
 private fun SettingsSection(title: String, content: @Composable () -> Unit) {
     Column {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-        Spacer(Modifier.height(6.dp))
-        Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-            ) {
-                content()
-            }
+        // 分组标题与条目之间拉开：标题上内距 12（配列表 12 凑出区块间 24），下内距 8。
+        DeepSectionTitle(title)
+        Spacer(Modifier.height(8.dp))
+        DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+            content()
         }
     }
 }
@@ -1279,7 +1284,7 @@ private fun SettingsToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp),
+            .padding(vertical = DeepRowVertical),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -1288,13 +1293,13 @@ private fun SettingsToggleRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(8.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
         )
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(8.dp))
         McaButton(
             onClick = onAction,
             style = McaButtonStyle.Outlined,
@@ -1308,7 +1313,7 @@ private fun SettingsRow(label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp),
+            .padding(vertical = DeepRowVertical),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -1317,7 +1322,7 @@ private fun SettingsRow(label: String, value: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(8.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
@@ -1333,75 +1338,37 @@ private fun SettingsStateCard(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Surface(shape = McaShape.Sheet, color = MaterialTheme.colorScheme.primaryContainer) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f),
-            )
-            if (actionLabel != null && onAction != null) {
-                Spacer(Modifier.height(14.dp))
-                McaButton(onClick = onAction, style = McaButtonStyle.Primary) { Text(actionLabel) }
-            }
-        }
-    }
+    DeepStateCard(
+        title = title,
+        detail = detail,
+        tone = DeepTone.Info,
+        actionLabel = actionLabel,
+        onAction = onAction,
+    )
 }
 
 @Composable
 private fun SettingsLoadingCard() {
-    Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(
                 modifier = Modifier.size(22.dp),
                 strokeWidth = 2.dp,
                 color = MaterialTheme.colorScheme.primary,
             )
             Spacer(Modifier.width(12.dp))
-            Text(
-                text = "正在读取本机设置…",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            DeepCardBody("正在读取本机设置…")
         }
     }
 }
 
 @Composable
 private fun SettingsErrorCard(code: String, message: String, onRetry: () -> Unit) {
-    Surface(shape = McaShape.Sheet, color = MaterialTheme.colorScheme.errorContainer) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                text = "读取设置失败",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
-            )
-            Text(
-                text = "错误码：$code",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.75f),
-            )
-            Spacer(Modifier.height(14.dp))
-            McaButton(onClick = onRetry, style = McaButtonStyle.Outlined) { Text("重试") }
-        }
-    }
+    DeepStateCard(
+        title = "读取设置失败",
+        detail = "$message（错误码：$code）",
+        tone = DeepTone.Danger,
+        actionLabel = "重试",
+        onAction = onRetry,
+    )
 }

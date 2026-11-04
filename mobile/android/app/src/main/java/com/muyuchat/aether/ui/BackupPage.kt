@@ -97,15 +97,15 @@ internal fun BackupPage(
         }
         item {
             Surface(
-                shape = McaShape.Card,
+                shape = McaShape.Sheet,
                 color = McaTonal.fill(),
                 border = McaHairline.stroke(),
             ) {
-                Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
                     Text(
                         text = "这份备份包含账号与设置",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(Modifier.height(4.dp))
@@ -179,15 +179,15 @@ internal fun BackupPage(
             BackupUiState.Idle, BackupUiState.Exporting -> Unit
             is BackupUiState.Ready -> item {
                 Surface(
-                    shape = McaShape.Card,
+                    shape = McaShape.Sheet,
                     color = McaTonal.fill(),
                     border = McaHairline.stroke(),
                 ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         Text(
                             text = "已生成：${current.fileName}",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Spacer(Modifier.height(4.dp))
@@ -197,40 +197,34 @@ internal fun BackupPage(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(12.dp))
                         ShareButton(current, onShare)
                     }
                 }
             }
             is BackupUiState.Failed -> item {
+                val failure = backupExportFailureCopy(current.code, current.message)
                 Surface(
-                    shape = McaShape.Card,
+                    shape = McaShape.Sheet,
                     color = McaTonal.fill(),
                     border = McaHairline.stroke(),
                 ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        // 只给状态词染 error；错误原文保持正文色。
                         Text(
-                            text = when (current.code) {
-                                "gateway_not_running" -> "网关未启动"
-                                "weak_passphrase" -> "口令不符合要求"
-                                else -> "生成失败"
-                            },
+                            text = failure.status,
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error,
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = if (current.code == "gateway_not_running") {
-                                "启动本地网关后即可生成备份。"
-                            } else {
-                                "${current.message}（错误码：${current.code}）"
-                            },
+                            text = failure.detail,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
-                        if (current.code == "gateway_not_running") {
-                            Spacer(Modifier.height(10.dp))
+                        if (failure.offerOverview) {
+                            Spacer(Modifier.height(12.dp))
                             McaButton(onClick = onOpenOverview, style = McaButtonStyle.Primary) {
                                 Text("前往概览")
                             }
@@ -261,4 +255,29 @@ private fun ShareButton(ready: BackupUiState.Ready, onShare: (BackupUiState.Read
     McaButton(onClick = { onShare(ready) }, style = McaButtonStyle.Primary) {
         Text("分享 / 保存")
     }
+}
+
+/** 导出失败的三段式文案；只有"网关未启动"才提供前往概览的下一步。 */
+internal data class BackupExportFailureCopy(
+    val status: String,
+    val detail: String,
+    val offerOverview: Boolean,
+)
+
+internal fun backupExportFailureCopy(code: String, message: String): BackupExportFailureCopy = when (code) {
+    "gateway_not_running" -> BackupExportFailureCopy(
+        status = "网关未启动",
+        detail = "启动本地网关后即可生成备份。",
+        offerOverview = true,
+    )
+    "weak_passphrase" -> BackupExportFailureCopy(
+        status = "口令不符合要求",
+        detail = message.ifBlank { "口令至少 8 位。" },
+        offerOverview = false,
+    )
+    else -> BackupExportFailureCopy(
+        status = "生成失败",
+        detail = "${message.ifBlank { "服务端没有返回原因" }}（错误码：${code.ifBlank { "unknown" }}）",
+        offerOverview = false,
+    )
 }

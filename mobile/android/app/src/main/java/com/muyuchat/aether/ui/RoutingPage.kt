@@ -1,9 +1,6 @@
 package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,6 +15,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +30,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -40,11 +42,12 @@ import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.RoutingCatalogModel
-import com.muyuchat.aether.runtime.routingTemplateLine
 import com.muyuchat.aether.runtime.RoutingGroup
+import com.muyuchat.aether.runtime.RoutingTemplate
 import com.muyuchat.aether.runtime.routingChainProviders
 import com.muyuchat.aether.runtime.routingGroupMembers
 import com.muyuchat.aether.runtime.routingStrategyLabel
+import com.muyuchat.aether.runtime.routingTemplateLine
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
@@ -53,7 +56,28 @@ import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
+
+/*
+ * 路由页。
+ *
+ * 版面（UI_REFRESH_SPEC §1）：页头 → 路由组（一组一张卡）→ 组模板（**一张**卡里排行）
+ * → 模型重定向（隔壁文件，只负责给区块间距）→ 口径说明。
+ *
+ * 三处对齐：
+ *  1. 组模板卡里的模板行与路由组卡里的内容左缘都由卡片的 16dp 内边距决定，严格同一条竖线；
+ *  2. 组卡内的「成员」计数用左标签 + 右数值，数值右缘对齐；
+ *  3. 成员编辑器里的「草稿 / 已保存」同样右对齐。
+ */
+
+/** 目录预览行数：超过就问用户缩小范围，而不是把 200 个模型全画出来。 */
+private const val RoutingCatalogPreview: Int = 8
+
+/** 路由组内成员计数：`online` 只按服务端的 `providerOff` 判定，不猜账号健康度。 */
+internal data class RoutingMemberTally(
+    val total: Int,
+    val online: Int,
+    val unresolved: Int,
+)
 
 @Composable
 internal fun RoutingPage(
@@ -85,75 +109,55 @@ internal fun RoutingPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
-        item { MobileHeader(status) }
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "路由",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "模型路由组 · 可改组名与成员",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                McaIconButton(
-                    contentDescription = "刷新路由",
-                    onClick = onRefresh,
-                    enabled = state is RoutingUiState.Ready || state is RoutingUiState.Failed,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_refresh),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
+                MobileHeader(status)
+                PageHeadline(
+                    onBack = onBack,
+                    onRefresh = onRefresh,
+                    refreshEnabled = state is RoutingUiState.Ready || state is RoutingUiState.Failed,
+                )
             }
         }
         when (state) {
             RoutingUiState.Idle -> item {
-                RoutingStateCard(
+                DeepStateCard(
                     title = "网关未启动",
-                    detail = "启动本地网关后可读取本机路由组。",
+                    detail = "路由组来自本机 /api/groups；网关没起来时这个端点没有服务可应答。" +
+                        "先启动网关，再回本页读取路由组。",
                     actionLabel = "前往概览",
                     onAction = onOpenOverview,
                 )
             }
             RoutingUiState.Loading -> item { RoutingLoadingCard() }
             is RoutingUiState.Failed -> item {
-                RoutingErrorCard(state.code, state.message, onRefresh)
+                DeepStateCard(
+                    title = "读取路由失败",
+                    detail = "${state.message}（错误码：${state.code}）。这次没有拿到路由组，" +
+                        "所以下面不显示上一次的旧数据。",
+                    tone = DeepTone.Danger,
+                    actionLabel = "重试",
+                    onAction = onRefresh,
+                )
             }
             is RoutingUiState.Ready -> {
                 val overview = state.overview
                 if (overview.groups.isEmpty()) {
                     item {
-                        RoutingStateCard(
+                        DeepStateCard(
                             title = "还没有路由组",
-                            detail = "在 Windows 端创建模型路由组后，这里会显示路由组列表。",
+                            detail = routingGroupsEmptyDetail(),
+                            actionLabel = "重新读取",
+                            onAction = onRefresh,
                         )
                     }
                 } else {
                     item {
-                        Text(
-                            text = "${overview.groups.size} 个路由组 · ${overview.modelCount} 个可选模型",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        DeepSectionTitle(
+                            text = "路由组",
+                            trailing = "${overview.groups.size} 组 · ${overview.modelCount} 个可选模型",
                         )
                     }
                     items(overview.groups.size) { index ->
@@ -161,38 +165,25 @@ internal fun RoutingPage(
                         RoutingGroupCard(group, onClick = { onSelect(group) })
                     }
                 }
-            }
-        }
-        // 组模板（只读）：服务端给的"怎么组一套路由"的现成方案。
-        // 套用模板要写配置，留在桌面端；这里只说明每个模板是否具备条件。
-        if (state is RoutingUiState.Ready && state.overview.templates.isNotEmpty()) {
-            item {
-                Text(
-                    text = "组模板",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            items(state.overview.templates.size) { index ->
-                val template = state.overview.templates[index]
-                Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                        Text(
-                            text = routingTemplateLine(template),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            text = "模板只读：套用与调整请到桌面端。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // 组模板（只读）：服务端给的"怎么组一套路由"的现成方案。
+                // 套用模板要写配置，留在桌面端；这里只说明每个模板是否具备条件。
+                if (overview.templates.isNotEmpty()) {
+                    item {
+                        DeepSectionTitle(
+                            text = "组模板",
+                            trailing = "${overview.templates.size} 个",
                         )
                     }
+                    item { TemplatesCard(overview.templates) }
                 }
             }
         }
-        item { ModelRedirectSection(running = state is RoutingUiState.Ready) }
+        item {
+            ModelRedirectSection(
+                running = state is RoutingUiState.Ready,
+                modifier = Modifier.padding(top = DeepBlockGap - DeepCardGap),
+            )
+        }
         item {
             Text(
                 text = "点击路由组可查看解析链、修改组名与成员；保存以组 id 为 from 基准，失败原因由服务端返回。",
@@ -224,82 +215,208 @@ internal fun RoutingPage(
     }
 }
 
+/** 空态：为什么空（手机端不能新建组）+ 下一步（桌面端建组 → 回本页重新读取）。 */
+internal fun routingGroupsEmptyDetail(): String =
+    "网关这次返回的路由组列表是空的。路由组是桌面端建好的模型回退链，手机端只读，" +
+        "不会替你新建一条。" +
+        "去桌面端建一个组，再回本页点「重新读取」。"
+
+/** 组内成员的在线计数：`memberInfo` 缺条目算「未解析」，不猜成离线。 */
+internal fun routingGroupMemberTally(group: RoutingGroup): RoutingMemberTally {
+    val ids = routingGroupMembers(group)
+    val infoById = group.memberInfo.associateBy { it.id }
+    var online = 0
+    var unresolved = 0
+    ids.forEach { id ->
+        val info = infoById[id]
+        when {
+            info == null -> unresolved++
+            !info.providerOff -> online++
+        }
+    }
+    return RoutingMemberTally(total = ids.size, online = online, unresolved = unresolved)
+}
+
+/** 右对齐的成员计数文案。 */
+internal fun routingMemberTallyText(tally: RoutingMemberTally): String = when {
+    tally.total == 0 -> "未配置"
+    tally.unresolved > 0 -> "${tally.online}/${tally.total} 在线 · ${tally.unresolved} 个未解析"
+    else -> "${tally.online}/${tally.total} 在线"
+}
+
+/** 成员名字摘要（计数已经在右侧单独给出，这里不再重复「成员 N」）。 */
+internal fun routingMemberNamesText(group: RoutingGroup): String {
+    val ids = routingGroupMembers(group)
+    if (ids.isEmpty()) {
+        return ""
+    }
+    val shown = ids.take(3).map { id -> routingMemberLabel(id, emptyList(), group) }
+    val rest = ids.size - 3
+    return if (rest > 0) {
+        shown.joinToString("、") + " 等 $rest 个"
+    } else {
+        shown.joinToString("、")
+    }
+}
+
+@Composable
+private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabled: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        McaIconButton(contentDescription = "返回", onClick = onBack) {
+            Icon(
+                painter = painterResource(R.drawable.ic_back),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(McaIconSize.Optical.Action),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "路由",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                text = "模型路由组 · 可改组名与成员",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        McaIconButton(
+            contentDescription = "刷新路由",
+            onClick = onRefresh,
+            enabled = refreshEnabled,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_refresh),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(McaIconSize.Optical.Action),
+            )
+        }
+    }
+}
+
+/**
+ * 一张路由组卡：标题行（组名 + 状态徽标）→ id/策略 → 「成员」计数（右对齐）→ 成员名 → 警告。
+ *
+ * `clip(McaShape.Sheet)` 在 `clickable` 之前，波纹被裁在圆角里；整卡可点，包括 16dp 内边距。
+ */
 @Composable
 private fun RoutingGroupCard(group: RoutingGroup, onClick: () -> Unit) {
-    Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(role = Role.Button, onClick = onClick)
-                .padding(14.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = group.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                RoutingBadge(
-                    text = if (group.ready) "可路由" else "未就绪",
-                    error = !group.ready,
-                )
-                if (group.auto) {
-                    Spacer(Modifier.width(6.dp))
-                    RoutingBadge(text = "自动", error = false)
-                }
-                if (group.disabled) {
-                    Spacer(Modifier.width(6.dp))
-                    RoutingBadge(text = "已停用", error = true)
-                }
-            }
-            Spacer(Modifier.height(4.dp))
+    val tally = routingGroupMemberTally(group)
+    val names = routingMemberNamesText(group)
+    DeepCard(
+        modifier = Modifier
+            .clip(McaShape.Sheet)
+            .clickable(role = Role.Button, onClick = onClick),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "${group.id} · ${routingStrategyLabel(group.routingEffective)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = group.name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.width(8.dp))
+            RoutingBadge(
+                text = if (group.ready) "可路由" else "未就绪",
+                error = !group.ready,
+            )
+            if (group.auto) {
+                Spacer(Modifier.width(6.dp))
+                RoutingBadge(text = "自动", error = false)
+            }
+            if (group.disabled) {
+                Spacer(Modifier.width(6.dp))
+                RoutingBadge(text = "已停用", error = true)
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "${group.id} · ${routingStrategyLabel(group.routingEffective)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(12.dp))
+        CountRow(
+            label = "成员",
+            value = routingMemberTallyText(tally),
+            valueColor = if (tally.total > 0 && tally.online == 0) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
+        if (names.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
             Text(
-                text = memberSummary(group),
+                text = names,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            group.warnings.forEach { warning ->
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "! $warning",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+        }
+        group.warnings.forEach { warning ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "! $warning",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }
 
-private fun memberSummary(group: RoutingGroup): String {
-    val ids = routingGroupMembers(group)
-    if (ids.isEmpty()) {
-        return "未配置成员"
+/** 左标签 + 右数值：同一张卡里所有计数/状态都用这一种收边，右缘因此严格对齐。 */
+@Composable
+private fun CountRow(
+    label: String,
+    value: String,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = valueColor,
+        )
     }
-    val names = ids.take(3).joinToString("、") { id ->
-        val info = group.memberInfo.firstOrNull { it.id == id }
-        if (info == null) {
-            id
-        } else {
-            val provider = info.providerName.ifBlank { id.substringBefore("/") }
-            "$provider/${info.name}"
+}
+
+/** 组模板卡：一张卡里排行，和路由组卡共用 16dp 内容内边距，左缘因此对齐。 */
+@Composable
+private fun TemplatesCard(templates: List<RoutingTemplate>) {
+    DeepCard {
+        DeepCardBody("套用模板要写网关配置，只能在桌面端做；这里只说明每个模板现在的成员够不够。")
+        templates.forEach { template ->
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = routingTemplateLine(template),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
-    val rest = ids.size - 3
-    return if (rest > 0) "成员 ${ids.size}：$names 等 $rest 个" else "成员 ${ids.size}：$names"
 }
 
 @Composable
@@ -313,43 +430,9 @@ private fun RoutingBadge(text: String, error: Boolean) {
 }
 
 @Composable
-private fun RoutingStateCard(
-    title: String,
-    detail: String,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null,
-) {
-    Surface(shape = McaShape.Sheet, color = MaterialTheme.colorScheme.primaryContainer) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f),
-            )
-            if (actionLabel != null && onAction != null) {
-                Spacer(Modifier.height(14.dp))
-                McaButton(onClick = onAction, style = McaButtonStyle.Primary) { Text(actionLabel) }
-            }
-        }
-    }
-}
-
-@Composable
 private fun RoutingLoadingCard() {
-    Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(
                 modifier = Modifier.size(22.dp),
                 strokeWidth = 2.dp,
@@ -361,33 +444,6 @@ private fun RoutingLoadingCard() {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-}
-
-@Composable
-private fun RoutingErrorCard(code: String, message: String, onRetry: () -> Unit) {
-    Surface(shape = McaShape.Sheet, color = MaterialTheme.colorScheme.errorContainer) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                text = "读取路由失败",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
-            )
-            Text(
-                text = "错误码：$code",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.75f),
-            )
-            Spacer(Modifier.height(14.dp))
-            McaButton(onClick = onRetry, style = McaButtonStyle.Outlined) { Text("重试") }
         }
     }
 }
@@ -472,8 +528,10 @@ private fun RoutePreviewDialog(
                     is RoutePreviewState.Ready -> {
                         val bindings = preview.preview.bindings
                         if (bindings.isEmpty()) {
+                            // 空态：说清为什么是空的 + 下一步该看哪里。
                             Text(
-                                text = "没有命中的渠道",
+                                text = "没有命中的渠道：这组的成员当前都解析不到可用渠道。" +
+                                    "先看下面成员行里的「渠道当前离线」提示，或到「额度」页确认渠道是启用状态。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -609,14 +667,14 @@ private fun RoutingMembersEditor(
         onValueChange = onDraftNameChange,
     )
     Spacer(Modifier.height(8.dp))
-    Text(
-        text = "成员（草稿 ${draftMembers.size} 个 · 已保存 ${savedMembers.size} 个）",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    CountRow(
+        label = "成员",
+        value = "草稿 ${draftMembers.size} / 已保存 ${savedMembers.size}",
     )
     if (draftMembers.isEmpty()) {
         Text(
-            text = "至少选择一个成员模型；成员为空时保存会由服务端返回 400。",
+            text = "成员是空的：保存会被服务端拒绝（400）。在下面「搜索可选模型」里挑一个，" +
+                "点该行的「加入」把它加进草稿。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )
@@ -646,10 +704,14 @@ private fun RoutingMembersEditor(
         value = memberQuery,
         onValueChange = onMemberQueryChange,
     )
-    val shown = filteredCatalog.take(ROUTING_CATALOG_PREVIEW)
+    val shown = filteredCatalog.take(RoutingCatalogPreview)
     if (shown.isEmpty()) {
         Text(
-            text = if (catalog.isEmpty()) "还没有可选模型，请先刷新。" else "没有匹配的模型。",
+            text = if (catalog.isEmpty()) {
+                "网关这次没有返回可选模型（models 为空）。刷新一次；仍为空就去「额度」页确认至少有一个渠道可用。"
+            } else {
+                "没有匹配「${memberQuery.trim()}」的模型。删掉几个字，或直接清空搜索框看全部可选模型。"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -848,9 +910,6 @@ private fun RoutingCatalogRow(
 }
 
 private val RoutingRowButtonPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-
-/** How many picker rows the dialog previews before asking for a narrower query. */
-private const val ROUTING_CATALOG_PREVIEW = 8
 
 private fun routingMemberLabel(
     id: String,

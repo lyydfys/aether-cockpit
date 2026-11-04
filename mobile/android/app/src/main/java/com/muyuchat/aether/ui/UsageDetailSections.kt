@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -26,7 +25,12 @@ import com.muyuchat.aether.runtime.formatMoney
 import com.muyuchat.aether.runtime.formatTokens
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
+
+// 与概览页/用量页同一套节奏：卡内 16dp、行间 8~12dp，不再出现 2/6/14dp 这类随手值。
+private val CardPadding = 16.dp
+private val RowGap = 12.dp
+private val TightGap = 8.dp
+private val CellPadding = 4.dp
 
 /**
  * 用量热力图：**文字格子**，不引入图表库。
@@ -38,18 +42,18 @@ import com.muyuchat.core.designsystem.McaTonal
 internal fun UsageHeatmapSection(days: List<StripDay>, error: String?) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
+        shape = McaShape.Sheet,
+        color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(CardPadding)) {
             Text(
                 text = "近 ${days.size} 天用量",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(TightGap))
             if (error != null) {
                 Text(
                     text = "读不到热力图：$error",
@@ -60,21 +64,20 @@ internal fun UsageHeatmapSection(days: List<StripDay>, error: String?) {
             }
             if (days.isEmpty()) {
                 Text(
-                    text = "暂无可显示的日用量",
+                    text = heatmapEmptyHint(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 return@Column
             }
             val peak = days.maxOf { it.calls }
-            Spacer(Modifier.height(6.dp))
             days.chunked(10).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
                     row.forEach { day ->
                         HeatmapCell(day = day, peak = peak)
                     }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(TightGap))
             }
             Text(
                 text = "深色=调用更多；空格=那天服务端没有记录（不是 0 次）。最近一天在最右。",
@@ -93,12 +96,12 @@ private fun HeatmapCell(day: StripDay, peak: Int) {
         else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f + 0.55f * intensity)
     }
     Surface(
-        modifier = Modifier.width(28.dp).height(34.dp).clip(RoundedCornerShape(6.dp)),
+        modifier = Modifier.width(28.dp).height(34.dp).clip(McaShape.Badge),
         color = background,
         border = McaHairline.stroke(),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = CellPadding),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -124,18 +127,18 @@ private fun HeatmapCell(day: StripDay, peak: Int) {
 internal fun UsageQuotaSection(accounts: List<QuotaHistoryAccount>, error: String?) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
+        shape = McaShape.Sheet,
+        color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(CardPadding)) {
             Text(
                 text = "配额历史",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(TightGap))
             when {
                 error != null -> Text(
                     text = "读不到配额历史：$error",
@@ -143,12 +146,12 @@ internal fun UsageQuotaSection(accounts: List<QuotaHistoryAccount>, error: Strin
                     color = MaterialTheme.colorScheme.error,
                 )
                 accounts.isEmpty() -> Text(
-                    text = "暂无可显示的配额记录（只有拿到过额度数据的账号才会出现在这里）",
+                    text = quotaHistoryEmptyHint(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 else -> accounts.forEach { account ->
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(RowGap))
                     Text(
                         text = if (account.user.isBlank()) account.provider else "${account.provider} · ${account.user}",
                         style = MaterialTheme.typography.labelMedium,
@@ -179,18 +182,18 @@ internal fun UsageQuotaSection(accounts: List<QuotaHistoryAccount>, error: Strin
 internal fun UsagePricingSection(pricing: PricingCatalog, error: String?) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
+        shape = McaShape.Sheet,
+        color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(CardPadding)) {
             Text(
                 text = "价格表（只读）",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(TightGap))
             if (error != null) {
                 Text(
                     text = "读不到价格表：$error",
@@ -202,7 +205,7 @@ internal fun UsagePricingSection(pricing: PricingCatalog, error: String?) {
             val total = pricing.defaults.size + pricing.overrides.size
             if (total == 0) {
                 Text(
-                    text = "暂无可显示的价格项",
+                    text = pricingEmptyHint(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -216,7 +219,7 @@ internal fun UsagePricingSection(pricing: PricingCatalog, error: String?) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(TightGap))
             pricing.overrides.forEach { row ->
                 PriceLine(row = row, currency = pricing.currency, overridden = true)
             }
@@ -250,7 +253,7 @@ private fun PriceLine(row: PriceRow, currency: String, overridden: Boolean) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (overridden) {
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(TightGap))
             Text(
                 text = "自定义",
                 style = MaterialTheme.typography.labelSmall,
@@ -272,3 +275,18 @@ internal fun shortStamp(iso: String): String {
 
 /** token 数展示复用 runtime 里的同一个格式化函数，避免两套小数位。 */
 internal fun heatmapTokensLabel(day: StripDay): String = formatTokens(day.tokens)
+
+/** 热力图空态：为什么空 + 下一步。"空"不是 0 次调用，这句必须说清。 */
+internal fun heatmapEmptyHint(): String =
+    "为什么空：服务端最近没有返回任何按天的记录——空不等于 0 次调用。" +
+        "下一步：发出一次请求后回来刷新，这一节会按天亮起来。"
+
+/** 配额历史空态：为什么空 + 下一步（页面上的动作最多一个，这里只指路）。 */
+internal fun quotaHistoryEmptyHint(): String =
+    "为什么空：只有服务端曾经返回过额度数据的账号才会出现在这里，其余账号不会写 0%。" +
+        "下一步：到「额度」页读一次额度（那一步会拉最新周期），再回来刷新这一节。"
+
+/** 价格表空态：为什么空 + 下一步。 */
+internal fun pricingEmptyHint(): String =
+    "为什么空：本机价格表里既没有内置项也没有自定义项，通常意味着价格接口还没读到。" +
+        "下一步：确认网关在运行后重新刷新这一页。"

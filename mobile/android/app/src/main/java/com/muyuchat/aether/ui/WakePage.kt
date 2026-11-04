@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -26,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.AccountSummary
@@ -42,11 +42,8 @@ import com.muyuchat.aether.runtime.wakeLastRunLabel
 import com.muyuchat.aether.runtime.wakeNextRunLabel
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
-import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 
 /**
  * 唤醒队列页（自动化里的那一小块）。
@@ -95,7 +92,7 @@ internal fun WakePage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
         item {
@@ -137,131 +134,67 @@ internal fun WakePage(
             }
         }
         // 这条说明是页面的核心口径，放在最上面而不是底部小字。
+        item { DeepSectionTitle("手机端只能尽力而为") }
         item {
-            Surface(
-                shape = McaShape.Card,
-                color = McaTonal.fill(),
-                border = McaHairline.stroke(),
-            ) {
-                Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                    Text(
-                        text = "手机端只能尽力而为",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "唤醒任务的定时器跑在网关进程里：应用退到后台、系统省电策略或进程被回收都会让它停下，" +
-                            "所以「已启用」不等于「一定按时执行」。需要准点执行请用桌面端；" +
-                            "这里可以查看当前状态，并对某条任务点一次「立即唤醒」。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            DeepCard {
+                DeepCardBody(
+                    "唤醒任务的定时器跑在网关进程里：应用退到后台、系统省电策略或进程被回收都会让它停下，" +
+                        "所以「已启用」不等于「一定按时执行」。需要准点执行请用桌面端；" +
+                        "这里可以查看当前状态，并对某条任务点一次「立即唤醒」。",
+                )
             }
         }
         notice?.let { message ->
-            item {
-                Column(Modifier.fillMaxWidth()) {
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    McaButton(onClick = onDismissNotice, style = McaButtonStyle.Outlined) { Text("知道了") }
-                }
-            }
+            item { DeepNotice(message, onDismiss = onDismissNotice) }
         }
         actionError?.let { message ->
-            item {
-                Column(Modifier.fillMaxWidth()) {
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    McaButton(onClick = onDismissActionError, style = McaButtonStyle.Outlined) { Text("知道了") }
-                }
-            }
+            item { DeepNotice(message, isError = true, onDismiss = onDismissActionError) }
+        }
+        item {
+            DeepSectionTitle(
+                text = "唤醒任务",
+                trailing = if (state is WakeUiState.Ready) wakeTaskCountLabel(state.tasks.size) else null,
+                action = {
+                    McaButton(
+                        onClick = { showCreate = true },
+                        style = McaButtonStyle.Outlined,
+                        enabled = status.running,
+                    ) { Text("新建") }
+                },
+            )
         }
         when (state) {
             WakeUiState.Idle, WakeUiState.Loading -> item {
-                Text(
-                    text = "正在读取唤醒队列…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                DeepCardBody("正在读取唤醒队列…")
             }
             is WakeUiState.Failed -> item {
-                Surface(
-                    shape = McaShape.Card,
-                    color = McaTonal.fill(),
-                    border = McaHairline.stroke(),
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                        Text(
-                            text = if (state.code == "gateway_not_running") "网关未启动" else "读取失败",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = if (state.code == "gateway_not_running") {
-                                "启动本地网关后即可查看唤醒队列。"
-                            } else {
-                                "${state.message}（错误码：${state.code}）"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        McaButton(
-                            onClick = if (state.code == "gateway_not_running") onOpenOverview else onRefresh,
-                            style = McaButtonStyle.Primary,
-                        ) {
-                            Text(if (state.code == "gateway_not_running") "前往概览" else "重试")
-                        }
-                    }
-                }
+                DeepStateCard(
+                    title = if (state.code == "gateway_not_running") "网关未启动" else "读取失败",
+                    detail = if (state.code == "gateway_not_running") {
+                        "启动本地网关后即可查看唤醒队列。"
+                    } else {
+                        "${state.message}（错误码：${state.code}）"
+                    },
+                    tone = if (state.code == "gateway_not_running") DeepTone.Info else DeepTone.Danger,
+                    actionLabel = if (state.code == "gateway_not_running") "前往概览" else "重试",
+                    onAction = if (state.code == "gateway_not_running") onOpenOverview else onRefresh,
+                )
             }
             is WakeUiState.Ready -> {
                 if (state.tasks.isEmpty()) {
                     item {
-                        Column {
-                            Text(
-                                text = "当前没有唤醒任务。可以点下面的「新建」选一个本机账号建一条；" +
-                                    "任务跑在网关进程里，手机端只是尽力而为。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            McaButton(
-                                onClick = { showCreate = true },
-                                style = McaButtonStyle.Outlined,
-                                enabled = status.running,
-                            ) { Text("新建") }
-                        }
+                        DeepStateCard(
+                            title = "还没有唤醒任务",
+                            detail = "选一个本机账号就能建一条；任务跑在网关进程里，手机端只是尽力而为。",
+                            actionLabel = "新建任务",
+                            onAction = {
+                                if (status.running) {
+                                    showCreate = true
+                                }
+                            },
+                        )
                     }
                 } else {
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "共 ${state.tasks.size} 条任务",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(1f),
-                            )
-                            McaButton(
-                                onClick = { showCreate = true },
-                                style = McaButtonStyle.Outlined,
-                                enabled = status.running,
-                            ) { Text("新建") }
-                        }
-                    }
                     items(state.tasks.size) { index ->
                         WakeTaskCard(
                             task = state.tasks[index],
@@ -276,7 +209,18 @@ internal fun WakePage(
         }
         // —— 签到调度：与唤醒任务分开的一节 ——
         // 放在同一页而不是新增第 18 个工作区入口：WorkspaceTest 锁着 17 条的批准设计。
-        item { SchedulerSection(scheduler, checkinRunning, checkinNote, checkinSummary, onRunCheckin, onDismissCheckinNote, onRefreshScheduler) }
+        item { DeepSectionTitle("签到调度") }
+        item {
+            SchedulerSection(
+                scheduler = scheduler,
+                checkinRunning = checkinRunning,
+                checkinNote = checkinNote,
+                checkinSummary = checkinSummary,
+                onRunCheckin = onRunCheckin,
+                onDismissCheckinNote = onDismissCheckinNote,
+                onRefresh = onRefreshScheduler,
+            )
+        }
     }
 
     if (showCreate) {
@@ -301,6 +245,25 @@ internal fun WakePage(
     }
 }
 
+/** 列表计数文案。 */
+internal fun wakeTaskCountLabel(count: Int): String = "$count 条任务"
+
+/**
+ * 任务副标题：间隔 · 下次执行 · 执行中 · 连续失败。
+ * 缺失字段（`every_minutes`/`next_run` 为 0）交给 runtime 的两个标签函数处理，不在这里编造。
+ */
+internal fun wakeTaskMetaLine(task: WakeTask, now: Long): String = buildString {
+    append(wakeIntervalLabel(task.everyMinutes))
+    append(" · ")
+    append(wakeNextRunLabel(task.nextRun, now))
+    if (task.running) {
+        append(" · 正在执行")
+    }
+    if (task.failures > 0) {
+        append(" · 连续失败 ${task.failures} 次")
+    }
+}
+
 /**
  * 签到调度区块。
  *
@@ -319,106 +282,81 @@ private fun SchedulerSection(
     onDismissCheckinNote: () -> Unit,
     onRefresh: () -> Unit,
 ) {
-    Surface(
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Text(
-                text = "签到调度",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(4.dp))
-            when (scheduler) {
-                SchedulerUiState.Idle -> Text(
-                    text = "正在读取签到状态…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                is SchedulerUiState.Failed -> Text(
-                    text = "${scheduler.message}（错误码：${scheduler.code}）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                is SchedulerUiState.Ready -> {
-                    Text(
-                        text = schedulerSummaryLine(scheduler.state),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (scheduler.state.enabled) {
-                        // 只列渠道与今日进度，不展示 cron/凭证之类的内部信息。
-                        scheduler.state.jobs.take(6).forEach { job ->
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = "· ${job.title}：今日 ${job.todayDone}/${job.todayTotal}" +
-                                    if (job.pending > 0) "（队列 ${job.pending}）" else "",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (scheduler.state.jobs.size > 6) {
-                            Text(
-                                text = "…另有 ${scheduler.state.jobs.size - 6} 条任务",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+    DeepCard {
+        when (scheduler) {
+            SchedulerUiState.Idle -> DeepCardBody("正在读取签到状态…")
+            is SchedulerUiState.Failed -> DeepCardBody("${scheduler.message}（错误码：${scheduler.code}）")
+            is SchedulerUiState.Ready -> {
+                DeepCardBody(schedulerSummaryLine(scheduler.state))
+                if (scheduler.state.enabled) {
+                    // 只列渠道与今日进度，不展示 cron/凭证之类的内部信息。
+                    scheduler.state.jobs.take(6).forEach { job ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "· ${job.title}：今日 ${job.todayDone}/${job.todayTotal}" +
+                                if (job.pending > 0) "（队列 ${job.pending}）" else "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (scheduler.state.jobs.size > 6) {
+                        Text(
+                            text = "…另有 ${scheduler.state.jobs.size - 6} 条任务",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                McaButton(
-                    onClick = onRunCheckin,
-                    style = McaButtonStyle.Primary,
-                    enabled = !checkinRunning && (scheduler as? SchedulerUiState.Ready)?.state?.enabled == true,
-                ) { Text(if (checkinRunning) "提交中…" else "立即签到") }
-                McaButton(onClick = onRefresh, style = McaButtonStyle.Outlined) { Text("刷新状态") }
-            }
-            checkinNote?.let { note ->
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = note,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(6.dp))
-                McaButton(onClick = onDismissCheckinNote, style = McaButtonStyle.Outlined) { Text("知道了") }
-            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            McaButton(
+                onClick = onRunCheckin,
+                style = McaButtonStyle.Primary,
+                enabled = !checkinRunning && (scheduler as? SchedulerUiState.Ready)?.state?.enabled == true,
+            ) { Text(if (checkinRunning) "提交中…" else "立即签到") }
+            McaButton(onClick = onRefresh, style = McaButtonStyle.Outlined) { Text("刷新状态") }
+        }
+        checkinNote?.let { note ->
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "签到任务已入队后按渠道串行执行，不会立即完成；手机端调度是尽力而为，" +
-                    "系统省电策略可能停掉网关进程，需要准点执行请用桌面端。",
+                text = note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            McaButton(onClick = onDismissCheckinNote, style = McaButtonStyle.Outlined) { Text("知道了") }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "签到任务已入队后按渠道串行执行，不会立即完成；手机端调度是尽力而为，" +
+                "系统省电策略可能停掉网关进程，需要准点执行请用桌面端。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // 汇总是"本次一键签到"的口径（since 到今天 0 点），不是"总计"。
+        checkinSummary?.let { summary ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "本次签到结果",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = checkinSummaryLine(summary),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            // 汇总是"本次一键签到"的口径（since 到今天 0 点），不是"总计"。
-            checkinSummary?.let { summary ->
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "本次签到结果",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = checkinSummaryLine(summary),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                summary.items.filter { it.failures.isNotEmpty() }.take(3).forEach { item ->
-                    item.failures.take(2).forEach { failure ->
-                        Text(
-                            text = "· ${item.providerName.ifBlank { item.providerId }} / ${failure.label.ifBlank { failure.accountId }}：" +
-                                failure.message.take(60),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
+            summary.items.filter { it.failures.isNotEmpty() }.take(3).forEach { item ->
+                item.failures.take(2).forEach { failure ->
+                    Text(
+                        text = "· ${item.providerName.ifBlank { item.providerId }} / ${failure.label.ifBlank { failure.accountId }}：" +
+                            failure.message.take(60),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
         }
@@ -433,79 +371,70 @@ private fun WakeTaskCard(
     onRun: () -> Unit,
     onDelete: () -> Unit = {},
 ) {
-    Surface(
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = task.label.ifBlank { task.accountId.ifBlank { task.id } },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    if (task.model.isNotBlank()) {
-                        Text(
-                            text = task.model,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    text = wakeEnabledLabel(task.enabled),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (task.enabled) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                    text = task.label.ifBlank { task.accountId.ifBlank { task.id } },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                if (task.model.isNotBlank()) {
+                    Text(
+                        text = task.model,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
-                text = buildString {
-                    append(wakeIntervalLabel(task.everyMinutes))
-                    append(" · ")
-                    append(wakeNextRunLabel(task.nextRun, now))
-                    if (task.running) {
-                        append(" · 正在执行")
-                    }
-                    if (task.failures > 0) {
-                        append(" · 连续失败 ${task.failures} 次")
-                    }
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = wakeLastRunLabel(task.lastRun, task.lastOk, task.lastResult),
+                text = wakeEnabledLabel(task.enabled),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (task.lastRun > 0L && !task.lastOk) {
-                    MaterialTheme.colorScheme.error
+                color = if (task.enabled) {
+                    MaterialTheme.colorScheme.primary
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
-            Spacer(Modifier.height(10.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                McaButton(
-                    onClick = onRun,
-                    style = McaButtonStyle.Primary,
-                    enabled = !triggering && !task.running,
-                ) { Text(if (triggering) "提交中…" else "立即唤醒") }
-                McaButton(
-                    onClick = onDelete,
-                    style = McaButtonStyle.Outlined,
-                ) { Text("删除") }
-            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = wakeTaskMetaLine(task, now),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = wakeLastRunLabel(task.lastRun, task.lastOk, task.lastResult),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (task.lastRun > 0L && !task.lastOk) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            McaButton(
+                onClick = onRun,
+                style = McaButtonStyle.Primary,
+                enabled = !triggering && !task.running,
+            ) { Text(if (triggering) "提交中…" else "立即唤醒") }
+            McaButton(
+                onClick = onDelete,
+                style = McaButtonStyle.Outlined,
+                // 危险动作只染文字，容器保持中性——整块染红会跟"运行中/失败"的状态色打架。
+                contentColor = MaterialTheme.colorScheme.error,
+            ) { Text("删除") }
         }
     }
 }

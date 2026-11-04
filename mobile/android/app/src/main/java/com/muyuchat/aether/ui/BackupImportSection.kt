@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -89,15 +91,15 @@ internal fun BackupImportSection(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = McaShape.Card,
+        shape = McaShape.Sheet,
         color = McaTonal.fill(),
         border = McaHairline.stroke(),
     ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(
                 text = "导入备份",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(4.dp))
@@ -107,11 +109,19 @@ internal fun BackupImportSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(10.dp))
+            importExportGatewayHint(status.running, "导入备份")?.let { hint ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 McaButton(
                     onClick = { picker.launch(arrayOf("*/*")) },
-                    style = McaButtonStyle.Outlined,
+                    style = McaButtonStyle.Primary,
                     enabled = status.running && state !is BackupImportUiState.Importing,
                 ) { Text(if (state is BackupImportUiState.Importing) "导入中…" else "选择备份文件…") }
                 if (state is BackupImportUiState.Done || state is BackupImportUiState.Failed) {
@@ -121,38 +131,47 @@ internal fun BackupImportSection(
             when (val current = state) {
                 BackupImportUiState.Idle, BackupImportUiState.Importing -> Unit
                 is BackupImportUiState.Done -> {
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(12.dp))
                     Text(
                         text = current.summary,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = if (current.rollbackFileName == null) {
-                            "注意：这次没能自动留底（导出当前配置失败），如需回退只能靠你自己手上的备份。"
-                        } else {
-                            "已自动留底：${current.rollbackFileName}（在应用缓存里，重启后可能被系统清理）"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (current.rollbackFileName == null) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
+                    if (current.rollbackFileName == null) {
+                        Text(
+                            text = "未能自动留底",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            text = "这次导出当前配置失败，如需回退只能靠你自己手上的备份。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Text(
+                            text = "已自动留底：${current.rollbackFileName}（在应用缓存里，重启后可能被系统清理）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 is BackupImportUiState.Failed -> {
-                    Spacer(Modifier.height(10.dp))
+                    val failure = backupImportFailureCopy(current.code, current.message)
+                    Spacer(Modifier.height(12.dp))
+                    // 只给状态词染 error；错误原文保持正文色。
                     Text(
-                        text = when (current.code) {
-                            "gateway_not_running" -> "网关未启动：先回「概览」启动网关"
-                            "weak_passphrase" -> "口令不符合要求：${current.message}"
-                            "no_data" -> "没有读到备份内容"
-                            else -> "导入失败：${current.message}（错误码：${current.code}）"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
+                        text = failure.status,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = failure.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
             }
@@ -165,9 +184,19 @@ internal fun BackupImportSection(
                 askPassphrase = false
                 pendingBytes = null
             },
-            title = { Text("输入备份口令", fontWeight = FontWeight.Bold) },
+            title = {
+                Text(
+                    text = "输入备份口令",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
             text = {
-                Column {
+                Column(
+                    Modifier
+                        .heightIn(max = DialogContentMaxHeight)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     Text(
                         text = "这是导出那份备份时用的口令。导入前会先用同一个口令把当前配置导出一份留底。",
                         style = MaterialTheme.typography.bodySmall,
@@ -217,7 +246,9 @@ internal fun BackupImportSection(
                             viewModel.importBackup(bytes, passphrase)
                         }
                     },
-                    style = McaButtonStyle.Primary,
+                    // 覆盖导入是危险动作：只染动作文字，容器保持中性 Outlined。
+                    style = McaButtonStyle.Outlined,
+                    contentColor = MaterialTheme.colorScheme.error,
                     enabled = state !is BackupImportUiState.Importing,
                 ) { Text("导入") }
             },
@@ -232,4 +263,27 @@ internal fun BackupImportSection(
             },
         )
     }
+}
+
+/**
+ * 导入失败的三段式文案：状态词与错误原文本分开，页面只给状态词染 error。
+ * 代码里只有这几个稳定错误码；未知码也要把原文与 code 显示出来，不能吞掉。
+ */
+internal fun backupImportFailureCopy(code: String, message: String): ImportExportFailureCopy = when (code) {
+    "gateway_not_running" -> ImportExportFailureCopy(
+        status = "网关未启动",
+        detail = "先在「概览」启动本地网关，再导入备份。",
+    )
+    "weak_passphrase" -> ImportExportFailureCopy(
+        status = "口令不符合要求",
+        detail = message.ifBlank { "口令至少 8 位。" },
+    )
+    "no_data" -> ImportExportFailureCopy(
+        status = "没有读到备份内容",
+        detail = "重新选择备份文件；若文件为空或被截断，请从原设备重新导出。",
+    )
+    else -> ImportExportFailureCopy(
+        status = "导入失败",
+        detail = "${message.ifBlank { "服务端没有返回原因" }}（错误码：${code.ifBlank { "unknown" }}）",
+    )
 }

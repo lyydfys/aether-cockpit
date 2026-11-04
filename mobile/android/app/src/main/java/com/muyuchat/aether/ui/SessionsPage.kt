@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,9 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
-import com.muyuchat.aether.runtime.AgentOption
 import com.muyuchat.aether.runtime.sessionContentSearchLine
 import com.muyuchat.aether.runtime.shortenSessionId
 import com.muyuchat.aether.runtime.sessionStatsLine
@@ -35,11 +34,8 @@ import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.SessionRow
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
-import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 
 /**
  * 会话页（只读）。
@@ -74,7 +70,7 @@ internal fun SessionsPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
         item {
@@ -115,113 +111,60 @@ internal fun SessionsPage(
                 }
             }
         }
-        // 会话统计：只有计数与 token 分布，不解析 top/shape 里的会话级明细。
+        // 空态解释排在统计之前：这是手机上最常见、也最容易被误读成故障的状态。
+        item { DeepSectionTitle("为什么这里通常是空的") }
         item {
-            Surface(shape = McaShape.Card, color = McaTonal.fill(), border = McaHairline.stroke()) {
-                Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                    Text(
-                        text = "本机会话统计",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    when (val current = stats) {
-                        SessionStatsUiState.Idle, SessionStatsUiState.Running -> Text(
-                            text = "正在读取…",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        is SessionStatsUiState.Failed -> Text(
-                            text = if (current.code == "gateway_not_running") {
-                                "网关未启动，读不到统计。"
-                            } else {
-                                "${current.message}（错误码：${current.code}）"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        is SessionStatsUiState.Ready -> {
-                            Text(
-                                text = sessionStatsLine(current.stats),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Text(
-                                text = sessionStatsTokensLine(current.stats),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
+            DeepCard {
+                DeepCardBody(
+                    "会话列表来自 Claude Code / Codex / Gemini 等 Agent 写在桌面用户目录里的文件。" +
+                        "Android 应用只能读自己的沙箱，也不会去扫描其它 App 的私有目录，所以这里是空的——" +
+                        "这不是故障，本页与 Windows 数据之间也没有任何同步通路。",
+                )
             }
         }
-        // 空态解释放在最上面：这是手机上最常见、也最容易被误读成故障的状态。
+        // 会话统计：只有计数与 token 分布，不解析 top/shape 里的会话级明细。
+        item { DeepSectionTitle("本机会话统计") }
         item {
-            Surface(
-                shape = McaShape.Card,
-                color = McaTonal.fill(),
-                border = McaHairline.stroke(),
-            ) {
-                Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                    Text(
-                        text = "手机上通常看不到会话",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "会话列表来自 Claude Code / Codex / Gemini 等 Agent 写在桌面用户目录里的文件。" +
-                            "Android 应用只能读自己的沙箱，也不会去扫描其它 App 的私有目录，所以这里是空的——" +
-                            "这不是故障，本页与 Windows 数据之间也没有任何同步通路。",
+            DeepCard {
+                when (val current = stats) {
+                    SessionStatsUiState.Idle, SessionStatsUiState.Running -> DeepCardBody("正在读取…")
+                    is SessionStatsUiState.Failed -> Text(
+                        text = if (current.code == "gateway_not_running") {
+                            "网关未启动，读不到统计。"
+                        } else {
+                            "${current.message}（错误码：${current.code}）"
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.error,
                     )
+                    is SessionStatsUiState.Ready -> {
+                        Text(
+                            text = sessionStatsLine(current.stats),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        DeepCardBody(sessionStatsTokensLine(current.stats))
+                    }
                 }
             }
         }
         when (state) {
             SessionsUiState.Idle, SessionsUiState.Loading -> item {
-                Text(
-                    text = "正在读取本机会话索引…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                DeepCardBody("正在读取本机会话索引…")
             }
             is SessionsUiState.Failed -> item {
-                Surface(
-                    shape = McaShape.Card,
-                    color = McaTonal.fill(),
-                    border = McaHairline.stroke(),
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                        Text(
-                            text = if (state.code == "gateway_not_running") "网关未启动" else "读取失败",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = if (state.code == "gateway_not_running") {
-                                "启动本地网关后即可读取会话索引。"
-                            } else {
-                                "${state.message}（错误码：${state.code}）"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        McaButton(
-                            onClick = if (state.code == "gateway_not_running") onOpenOverview else onRefresh,
-                            style = McaButtonStyle.Primary,
-                        ) {
-                            Text(if (state.code == "gateway_not_running") "前往概览" else "重试")
-                        }
-                    }
-                }
+                DeepStateCard(
+                    title = if (state.code == "gateway_not_running") "网关未启动" else "读取失败",
+                    detail = if (state.code == "gateway_not_running") {
+                        "启动本地网关后即可读取会话索引。"
+                    } else {
+                        "${state.message}（错误码：${state.code}）"
+                    },
+                    tone = if (state.code == "gateway_not_running") DeepTone.Info else DeepTone.Danger,
+                    actionLabel = if (state.code == "gateway_not_running") "前往概览" else "重试",
+                    onAction = if (state.code == "gateway_not_running") onOpenOverview else onRefresh,
+                )
             }
             is SessionsUiState.Ready -> {
                 item { SearchField(query, onQueryChange, placeholder = "搜索标题或目录") }
@@ -239,7 +182,7 @@ internal fun SessionsPage(
                         when (val current = contentSearch) {
                             SessionContentUiState.Idle, SessionContentUiState.Running -> Unit
                             is SessionContentUiState.Failed -> {
-                                Spacer(Modifier.height(6.dp))
+                                Spacer(Modifier.height(8.dp))
                                 Text(
                                     text = "${current.message}（错误码：${current.code}）",
                                     style = MaterialTheme.typography.labelSmall,
@@ -247,7 +190,7 @@ internal fun SessionsPage(
                                 )
                             }
                             is SessionContentUiState.Ready -> {
-                                Spacer(Modifier.height(6.dp))
+                                Spacer(Modifier.height(8.dp))
                                 Text(
                                     text = sessionContentSearchLine(current.result),
                                     style = MaterialTheme.typography.bodySmall,
@@ -304,22 +247,26 @@ internal fun SessionsPage(
                 }
                 if (state.sessions.isEmpty()) {
                     item {
-                        Text(
-                            text = if (query.isBlank()) {
-                                "本机索引里没有会话记录（手机上是正常状态）。"
+                        DeepStateCard(
+                            title = if (query.isBlank()) "本机索引里没有会话记录" else "没有匹配「$query」的会话",
+                            detail = if (query.isBlank()) {
+                                "手机上是正常状态：会话文件在桌面端的用户目录里，这里读不到。"
                             } else {
-                                "没有匹配「$query」的会话。"
+                                "换一个关键词，或切换上方的 Agent 筛选。"
                             },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            actionLabel = if (query.isBlank()) "重新扫描" else "清空搜索",
+                            onAction = if (query.isBlank()) {
+                                onRefresh
+                            } else {
+                                { onQueryChange("") }
+                            },
                         )
                     }
                 } else {
                     item {
-                        Text(
-                            text = "共 ${state.sessions.size} 条 · 只显示末级目录名",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        DeepSectionTitle(
+                            text = "会话列表",
+                            trailing = sessionCountLabel(state.sessions.size),
                         )
                     }
                     items(state.sessions.size) { index ->
@@ -331,40 +278,47 @@ internal fun SessionsPage(
     }
 }
 
+/** 列表计数文案：0 条时不写「共 0 条」，交给空态卡解释。 */
+internal fun sessionCountLabel(count: Int): String = "$count 条"
+
+/** 第一行副标题：Agent 名 + 末级目录（全路径里带用户名，不显示）。 */
+internal fun sessionMetaLine(row: SessionRow): String = buildString {
+    append(row.agentName.ifBlank { row.agent.ifBlank { "未知 Agent" } })
+    if (row.directory.isNotBlank()) {
+        append(" · ")
+        append(row.directory)
+    }
+}
+
+/** 第二行副标题：相对时间 + 请求数 + 消息数。 */
+internal fun sessionStatsMetaLine(row: SessionRow, nowMs: Long): String =
+    "${sessionAgeLabel(row.lastAt, nowMs)} · ${row.requests} 请求 · ${row.messages} 消息"
+
 @Composable
 private fun SessionRowCard(row: SessionRow) {
-    Surface(
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Text(
-                text = row.title.ifBlank { row.id.ifBlank { row.key } },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = buildString {
-                    append(row.agentName.ifBlank { row.agent })
-                    if (row.directory.isNotBlank()) {
-                        append(" · ")
-                        append(row.directory)
-                    }
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "${sessionAgeLabel(row.lastAt, System.currentTimeMillis())} · " +
-                    "${row.requests} 请求 · ${row.messages} 消息",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    DeepCard {
+        Text(
+            text = row.title.ifBlank { row.id.ifBlank { row.key } },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = sessionMetaLine(row),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = sessionStatsMetaLine(row, System.currentTimeMillis()),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

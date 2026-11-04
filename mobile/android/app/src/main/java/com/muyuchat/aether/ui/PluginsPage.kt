@@ -1,6 +1,7 @@
 package com.muyuchat.aether.ui
 
 import android.app.Application
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -44,11 +44,8 @@ import com.muyuchat.aether.runtime.pluginRuleSummary
 import com.muyuchat.aether.runtime.pluginsSummaryLine
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
-import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 import androidx.compose.ui.res.painterResource
 import com.muyuchat.aether.R
 import kotlinx.coroutines.CancellationException
@@ -114,7 +111,7 @@ internal fun PluginsPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
         item {
@@ -155,59 +152,48 @@ internal fun PluginsPage(
                 }
             }
         }
+        item { DeepSectionTitle("手机端只读") }
         item {
-            InfoCard(
-                title = "手机端只读",
-                body = "新增、编辑、删除插件规则都在桌面端完成：改写规则一旦改错，会让所有请求悄悄变形，" +
-                    "手机上不适合顺手改。供应商自定义图标也没有列表接口（只有上传与按名取图），" +
-                    "同样只能在桌面端管理。",
-            )
+            DeepCard {
+                DeepCardBody(
+                    "新增、编辑、删除插件规则都在桌面端完成：改写规则一旦改错，会让所有请求悄悄变形，" +
+                        "手机上不适合顺手改。供应商自定义图标也没有列表接口（只有上传与按名取图），" +
+                        "同样只能在桌面端管理。",
+                )
+            }
         }
         when (val current = state) {
             PluginsUiState.Idle, PluginsUiState.Loading -> item {
-                Text(
-                    text = "正在读取插件…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                DeepCardBody("正在读取插件…")
             }
             is PluginsUiState.Failed -> item {
-                Column {
-                    Text(
-                        text = if (current.code == "gateway_not_running") {
-                            "网关未启动：启动后才能读取本机插件。"
-                        } else {
-                            "读取失败：${current.message}（错误码：${current.code}）"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    McaButton(
-                        onClick = if (current.code == "gateway_not_running") {
-                            { onOpenOverview() }
-                        } else {
-                            { viewModel.refresh() }
-                        },
-                        style = McaButtonStyle.Outlined,
-                    ) { Text(if (current.code == "gateway_not_running") "前往概览" else "重试") }
-                }
+                DeepStateCard(
+                    title = if (current.code == "gateway_not_running") "网关未启动" else "读取失败",
+                    detail = if (current.code == "gateway_not_running") {
+                        "启动本地网关后才能读取本机插件。"
+                    } else {
+                        "${current.message}（错误码：${current.code}）"
+                    },
+                    tone = if (current.code == "gateway_not_running") DeepTone.Info else DeepTone.Danger,
+                    actionLabel = if (current.code == "gateway_not_running") "前往概览" else "重试",
+                    onAction = if (current.code == "gateway_not_running") onOpenOverview else viewModel::refresh,
+                )
             }
             is PluginsUiState.Ready -> {
                 val snapshot = current.snapshot
                 item {
-                    Text(
-                        text = pluginsSummaryLine(snapshot),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DeepSectionTitle(
+                        text = "自定义规则",
+                        trailing = if (snapshot.rules.isEmpty()) "未配置" else pluginRulesCountLabel(snapshot.rules.size),
                     )
                 }
                 if (snapshot.rules.isEmpty()) {
                     item {
-                        Text(
-                            text = "本机还没有自定义插件规则（内置插件见下方）。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        DeepStateCard(
+                            title = "还没有自定义规则",
+                            detail = "本机没有改写规则时所有请求原样转发。规则只能在桌面端新增或编辑。",
+                            actionLabel = "刷新",
+                            onAction = viewModel::refresh,
                         )
                     }
                 } else {
@@ -215,11 +201,9 @@ internal fun PluginsPage(
                 }
                 if (snapshot.builtins.isNotEmpty()) {
                     item {
-                        Text(
+                        DeepSectionTitle(
                             text = "内置插件",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            trailing = "${snapshot.builtins.size} 个",
                         )
                     }
                     items(snapshot.builtins) { builtin -> BuiltinPluginCard(builtin) }
@@ -229,115 +213,88 @@ internal fun PluginsPage(
     }
 }
 
-@Composable
-private fun InfoCard(title: String, body: String) {
-    Surface(
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
+/** 规则计数文案（与设置页 countLabel 同款口径：0 条写「未配置」，不写「0 项」）。 */
+internal fun pluginRulesCountLabel(count: Int): String = if (count == 0) "未配置" else "$count 条"
 
 @Composable
 private fun PluginRuleCard(rule: PluginRule) {
-    Surface(
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (rule.enabled) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                            },
-                        ),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = rule.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                if (rule.kind.isNotBlank()) {
-                    Text(
-                        text = rule.kind,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = pluginRuleSummary(rule),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (rule.enabled) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        },
+                    ),
             )
-            if (rule.note.isNotBlank()) {
-                Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = rule.name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (rule.kind.isNotBlank()) {
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    text = rule.note,
+                    text = rule.kind,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = pluginRuleSummary(rule),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (rule.note.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = rule.note,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 @Composable
 private fun BuiltinPluginCard(builtin: BuiltinPlugin) {
-    Surface(
-        shape = McaShape.CardAction,
-        color = MaterialTheme.colorScheme.surface,
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = builtin.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = if (builtin.on) "内置 · 开启" else "内置 · 关闭",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (builtin.desc.isNotBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = builtin.desc,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = builtin.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = if (builtin.on) "内置 · 开启" else "内置 · 关闭",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (builtin.desc.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = builtin.desc,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

@@ -4,13 +4,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -22,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
@@ -29,15 +27,29 @@ import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.UsageDayPoint
 import com.muyuchat.aether.runtime.UsageModelRow
 import com.muyuchat.aether.runtime.UsageSummary
+import com.muyuchat.aether.runtime.formatUsageCost
+import com.muyuchat.aether.runtime.formatUsageCount
 import com.muyuchat.core.designsystem.McaButton
+import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 import java.util.Locale
 
+// 间距节奏与概览页同一套：区块之间 24 / 卡片内与行之间 12 / 紧邻元素 8。
+private val BlockGap = 24.dp
+private val CardPadding = 16.dp
+private val RowGap = 12.dp
+private val TightGap = 8.dp
+
+/**
+ * 用量页：总量 → 按模型 → 近期趋势 → 细分（热力图 / 订阅 / 配额历史 / 价格表）。
+ *
+ * 每个区块都是一张自带 `titleMedium+Bold` 标题的卡；卡内 16dp、行间 12dp。
+ * 数字口径与概览页严格一致（Token = 输入 + 输出，不含缓存命中），否则同一台手机上两页会打架。
+ */
 @Composable
 internal fun UsagePage(
     status: GatewayStatus,
@@ -53,60 +65,25 @@ internal fun UsagePage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(BlockGap),
     ) {
-        item { MobileHeader(status) }
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "用量",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "本机账本 · 只读",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                McaIconButton(
-                    contentDescription = "刷新用量",
-                    onClick = onRefresh,
-                    enabled = state is UsageUiState.Ready || state is UsageUiState.Failed,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_refresh),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                UsagePeriod.entries.forEach { value ->
-                    McaButton(
-                        onClick = { onPeriod(value) },
-                        style = if (value == period) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                    ) {
-                        Text(value.label)
-                    }
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(RowGap)) {
+                MobileHeader(status)
+                UsageTitle(state, onRefresh)
+                PeriodRow(period, onPeriod)
             }
         }
         when (state) {
             UsageUiState.Idle -> item {
                 UsageStateCard(
                     title = "网关未启动",
-                    detail = "启动本地网关后可读取本机用量账本。",
+                    detail = "启动本地网关后才能读取本机账本；账本只记录这台手机自己处理过的请求。",
                     actionLabel = "前往概览",
                     onAction = onOpenOverview,
                 )
             }
-            UsageUiState.Loading -> item { UsageLoadingCard() }
+            UsageUiState.Loading -> item { UsageLoadingCard("正在读取本机用量…") }
             is UsageUiState.Failed -> item {
                 UsageErrorCard(code = state.code, message = state.message, onRetry = onRefresh)
             }
@@ -115,38 +92,33 @@ internal fun UsagePage(
                 if (summary.calls == 0L) {
                     item {
                         UsageStateCard(
-                            title = "还没有用量",
-                            detail = "通过本机 /v1 发起的请求会汇总到这里。",
+                            title = usageEmptyHeadline(),
+                            detail = usageEmptyDetail(),
+                            actionLabel = "前往概览",
+                            onAction = onOpenOverview,
                         )
                     }
                 } else {
-                    item { UsageTotalsCard(summary) }
-                    if (summary.models.isNotEmpty()) {
-                        item { SectionTitle("按模型") }
-                        item { UsageModelsCard(summary.models) }
-                    }
-                    val points = summary.series.takeLast(7).filter { it.calls > 0 }
-                    if (points.isNotEmpty()) {
-                        item { SectionTitle("近期趋势") }
-                        item { UsageSeriesCard(points) }
-                    }
+                    item { UsageTotalsCard(summary, period) }
+                    item { UsageModelsCard(summary.models) }
+                    item { UsageSeriesCard(summary.series.takeLast(7).filter { it.calls > 0 }) }
                 }
             }
         }
-        // 用量细分三节：各自独立，任何一节读不到都只在本节报错。
+        // 细分四块各自独立：任何一块读不到都只在自己那张卡里报错。
         when (detail) {
-            UsageDetailUiState.Idle, UsageDetailUiState.Loading -> Unit
+            UsageDetailUiState.Idle -> Unit
+            UsageDetailUiState.Loading -> item { UsageLoadingCard("正在读取用量细分…") }
             is UsageDetailUiState.Failed -> item {
                 UsageStateCard(
                     title = "用量细分读不到",
-                    detail = "错误码： · 原因：",
+                    detail = usageDetailErrorLine(detail.code, detail.message),
                     actionLabel = "重试",
                     onAction = onRefreshDetail,
                 )
             }
             is UsageDetailUiState.Ready -> {
                 val today = java.time.LocalDate.now().toString()
-                item { SectionTitle("近 30 天") }
                 item {
                     UsageHeatmapSection(
                         days = detail.heatmap.recentDays(30, today),
@@ -154,11 +126,9 @@ internal fun UsagePage(
                     )
                 }
                 item { QuotaPlanSection(running = status.running) }
-                item { SectionTitle("配额历史") }
                 item {
                     UsageQuotaSection(accounts = detail.quotaHistory, error = detail.errors["quota"])
                 }
-                item { SectionTitle("价格表") }
                 item {
                     UsagePricingSection(pricing = detail.pricing, error = detail.errors["pricing"])
                 }
@@ -175,133 +145,265 @@ internal fun UsagePage(
 }
 
 @Composable
-private fun UsageTotalsCard(summary: UsageSummary) {
-    Surface(shape = McaShape.Card, color = MaterialTheme.colorScheme.primaryContainer) {
+private fun UsageTitle(state: UsageUiState, onRefresh: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(TightGap),
         ) {
-            Row {
-                UsageStat("请求", formatCount(summary.calls), Modifier.weight(1f))
-                UsageStat("Token", formatCount(summary.inputTokens + summary.outputTokens), Modifier.weight(1f))
-            }
-            Row {
-                UsageStat("成本", formatCost(summary.cost), Modifier.weight(1f))
-                UsageStat("错误", formatCount(summary.errors), Modifier.weight(1f))
-            }
+            Text(
+                text = "用量",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                text = "本机账本 · 只读",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        McaIconButton(
+            contentDescription = "刷新用量",
+            onClick = onRefresh,
+            enabled = state is UsageUiState.Ready || state is UsageUiState.Failed,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_refresh),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(McaIconSize.Optical.Action),
+            )
         }
     }
 }
 
 @Composable
-private fun UsageStat(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier) {
-        Text(
-            text = value,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
+private fun PeriodRow(period: UsagePeriod, onPeriod: (UsagePeriod) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
+        UsagePeriod.entries.forEach { value ->
+            McaButton(
+                onClick = { onPeriod(value) },
+                style = if (value == period) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+            ) {
+                Text(value.label)
+            }
+        }
+    }
+}
+
+/** 唯一的一层卡片：Sheet + hairline + 16dp 内边距。 */
+@Composable
+private fun UsageCard(content: @Composable () -> Unit) {
+    Surface(
+        shape = McaShape.Sheet,
+        color = MaterialTheme.colorScheme.surface,
+        border = McaHairline.stroke(),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(CardPadding),
+            verticalArrangement = Arrangement.spacedBy(RowGap),
+        ) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun UsageCardTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+}
+
+@Composable
+private fun UsageTotalsCard(summary: UsageSummary, period: UsagePeriod) {
+    UsageCard {
+        UsageCardTitle(usagePeriodScopeLabel(period))
+        Row(horizontalArrangement = Arrangement.spacedBy(CardPadding)) {
+            UsageStatCell(
+                label = "请求",
+                value = formatUsageCount(summary.calls),
+                note = usageRequestsNoteText(summary),
+                modifier = Modifier.weight(1f),
+            )
+            UsageStatCell(
+                label = "Token",
+                value = formatUsageCount(summary.inputTokens + summary.outputTokens),
+                note = usageTokensNoteText(summary),
+                modifier = Modifier.weight(1f),
+            )
+            UsageStatCell(
+                label = "成本",
+                value = formatUsageCost(summary.cost),
+                note = "按本机价格表",
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/** 一格数字：说明 → 大数字（单位降级）→ 注解。三格在同一行，左缘按 weight 严格对齐。 */
+@Composable
+private fun UsageStatCell(label: String, value: String, note: String, modifier: Modifier = Modifier) {
+    val parts = statFocusParts(value)
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(TightGap),
+    ) {
         Text(
             text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        Row(verticalAlignment = Alignment.Bottom) {
+            if (parts.prefix.isNotEmpty()) {
+                Text(
+                    text = parts.prefix,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = parts.number,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (parts.suffix.isNotEmpty()) {
+                Text(
+                    text = parts.suffix,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            text = note,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
         )
     }
 }
 
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onBackground,
-    )
-}
-
-@Composable
 private fun UsageModelsCard(models: List<UsageModelRow>) {
-    Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-        ) {
-            models.take(8).forEach { model ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+    UsageCard {
+        UsageCardTitle("按模型")
+        if (models.isEmpty()) {
+            Text(
+                text = usageModelsEmptyHint(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@UsageCard
+        }
+        models.take(8).forEach { model ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(RowGap),
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = model.name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = "${formatCount(model.calls)} 次 · ${formatCount(model.inputTokens + model.outputTokens)} tokens",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
                     Text(
-                        text = formatCost(model.cost),
-                        style = MaterialTheme.typography.labelMedium,
+                        text = model.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "${formatUsageCount(model.calls)} 次 · " +
+                            "${formatUsageCount(model.inputTokens + model.outputTokens)} tokens",
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
+                Text(
+                    text = formatUsageCost(model.cost),
+                    modifier = Modifier.weight(UsageRightColumnWeight),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                )
             }
+        }
+        if (models.size > 8) {
+            Text(
+                text = "…另有 ${models.size - 8} 个模型，可在「请求」页按模型筛选查看。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 @Composable
 private fun UsageSeriesCard(points: List<UsageDayPoint>) {
-    Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-        ) {
-            points.forEach { point ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = point.label.ifBlank { "—" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = "${formatCount(point.calls)} 次",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = formatCost(point.cost),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+    UsageCard {
+        UsageCardTitle("近期趋势")
+        if (points.isEmpty()) {
+            Text(
+                text = usageSeriesEmptyHint(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@UsageCard
+        }
+        points.forEach { point ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(RowGap),
+            ) {
+                Text(
+                    text = point.label.ifBlank { "—" },
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+                Text(
+                    text = "${formatUsageCount(point.calls)} 次",
+                    modifier = Modifier.weight(UsageRightColumnWeight),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                )
+                Text(
+                    text = formatUsageCost(point.cost),
+                    modifier = Modifier.weight(UsageRightColumnWeight),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                )
             }
         }
     }
 }
 
+/**
+ * 状态卡：未启动 / 空账本 / 读不到。挂在 primaryContainer 或 errorContainer 上，
+ * 与内容卡（Sheet + surface）区分开，避免"一张白卡解决所有状态"。
+ */
 @Composable
 private fun UsageStateCard(
     title: String,
@@ -310,47 +412,52 @@ private fun UsageStateCard(
     onAction: (() -> Unit)? = null,
 ) {
     Surface(shape = McaShape.Sheet, color = MaterialTheme.colorScheme.primaryContainer) {
-        Column(Modifier.padding(18.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(CardPadding),
+            verticalArrangement = Arrangement.spacedBy(RowGap),
+        ) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
-            Spacer(Modifier.height(6.dp))
             Text(
                 text = detail,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f),
             )
             if (actionLabel != null && onAction != null) {
-                Spacer(Modifier.height(14.dp))
-                McaButton(onClick = onAction, style = McaButtonStyle.Primary) {
-                    Text(actionLabel)
-                }
+                McaButton(onClick = onAction, style = McaButtonStyle.Primary) { Text(actionLabel) }
             }
         }
     }
 }
 
 @Composable
-private fun UsageLoadingCard() {
-    Surface(shape = McaShape.Card, color = McaTonal.fill()) {
+private fun UsageLoadingCard(text: String) {
+    Surface(
+        shape = McaShape.Sheet,
+        color = MaterialTheme.colorScheme.surface,
+        border = McaHairline.stroke(),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(18.dp),
+                .padding(CardPadding),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(RowGap),
         ) {
             CircularProgressIndicator(
-                modifier = Modifier.size(22.dp),
+                modifier = Modifier.size(16.dp),
                 strokeWidth = 2.dp,
                 color = MaterialTheme.colorScheme.primary,
             )
-            Spacer(Modifier.width(12.dp))
             Text(
-                text = "正在读取本机用量…",
-                style = MaterialTheme.typography.bodyMedium,
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -360,14 +467,18 @@ private fun UsageLoadingCard() {
 @Composable
 private fun UsageErrorCard(code: String, message: String, onRetry: () -> Unit) {
     Surface(shape = McaShape.Sheet, color = MaterialTheme.colorScheme.errorContainer) {
-        Column(Modifier.padding(18.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(CardPadding),
+            verticalArrangement = Arrangement.spacedBy(RowGap),
+        ) {
             Text(
                 text = "读取用量失败",
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onErrorContainer,
             )
-            Spacer(Modifier.height(6.dp))
             Text(
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
@@ -378,19 +489,76 @@ private fun UsageErrorCard(code: String, message: String, onRetry: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.75f),
             )
-            Spacer(Modifier.height(14.dp))
-            McaButton(onClick = onRetry, style = McaButtonStyle.Outlined) {
-                Text("重试")
-            }
+            McaButton(onClick = onRetry, style = McaButtonStyle.Outlined) { Text("重试") }
         }
     }
 }
 
-private fun formatCount(value: Long): String = when {
-    value >= 1_000_000 -> String.format(Locale.US, "%.1fM", value / 1_000_000.0)
-    value >= 1_000 -> String.format(Locale.US, "%.1fK", value / 1_000.0)
-    else -> value.toString()
+/** 右侧数值列的权重：同一区块内所有行共用，保证右缘在同一条竖线上。 */
+private const val UsageRightColumnWeight = 0.6f
+
+/** 区块标题下的周期口径：与 [UsagePeriod] 一一对应，不写"当前"。 */
+internal fun usagePeriodScopeLabel(period: UsagePeriod): String = when (period) {
+    UsagePeriod.TODAY -> "今日"
+    UsagePeriod.WEEK -> "近 7 天"
 }
 
-private fun formatCost(value: Double): String =
-    if (value <= 0.0) "$0" else String.format(Locale.US, "$%.4f", value)
+/** 成功率 = (请求 - 失败) / 请求；没有请求时写"—"，不写 0%。 */
+internal fun usageSuccessRateText(summary: UsageSummary): String {
+    if (summary.calls <= 0L) {
+        return "—"
+    }
+    val rate = (summary.calls - summary.errors).toDouble() / summary.calls.toDouble() * 100.0
+    return String.format(Locale.US, "%.1f%%", rate.coerceIn(0.0, 100.0))
+}
+
+/** 请求格的注解行：失败次数 + 成功率。 */
+internal fun usageRequestsNoteText(summary: UsageSummary): String =
+    "失败 ${formatUsageCount(summary.errors)} · 成功率 ${usageSuccessRateText(summary)}"
+
+/** 缓存命中率 = 缓存读 / (输入 + 缓存读 + 缓存写)；分母为 0 时写"—"。 */
+internal fun usageCacheHitRateText(summary: UsageSummary): String {
+    val inputTotal = summary.inputTokens + summary.cacheReadTokens + summary.cacheWriteTokens
+    if (inputTotal <= 0L) {
+        return "—"
+    }
+    val rate = summary.cacheReadTokens.toDouble() / inputTotal.toDouble() * 100.0
+    return String.format(Locale.US, "%.1f%%", rate.coerceIn(0.0, 100.0))
+}
+
+/** Token 格的注解行：缓存 token 与命中率（桌面端同一口径）。 */
+internal fun usageTokensNoteText(summary: UsageSummary): String =
+    "缓存 ${formatUsageCount(summary.cacheReadTokens)} · 命中 ${usageCacheHitRateText(summary)}"
+
+/** 账本为空时的标题：说清"为什么空"，不写"暂无数据"。 */
+internal fun usageEmptyHeadline(): String = "还没有用量"
+
+/** 账本为空时的说明：为什么空 + 下一步做什么。 */
+internal fun usageEmptyDetail(): String =
+    "这台手机的网关还没处理过请求，所以账本是空的。" +
+        "下一步：用任意 OpenAI 兼容客户端向本机网关发一次请求，这里就会出现按模型汇总的条目。"
+
+/** 「按模型」为空：为什么空 + 去哪里看。 */
+internal fun usageModelsEmptyHint(): String =
+    "这个周期里没有按模型的记录：账本只统计真正走完的请求。" +
+        "下一步：先在概览页确认网关在运行，再发出一次请求。"
+
+/** 「近期趋势」为空：只有请求量 > 0 的日期才画，所以刚启动时是空的。 */
+internal fun usageSeriesEmptyHint(): String =
+    "这个周期里还没有按天的调用量，所以趋势是空的。" +
+        "下一步：发出请求后回来刷新，或把周期切成「今日 / 7 天」对比。"
+
+/** 用量细分读取失败：错误码与原因都要落地，不许留空标签。 */
+internal fun usageDetailErrorLine(code: String, message: String): String =
+    "原因：${message.ifBlank { "未返回原因" }}（错误码：$code）"
+
+/**
+ * 订阅 / 配额历史 / 模型重定向 / 最近异常四块共用的错误口径：
+ * 网关没起来时说清是"没启动"，其它错误带服务端原文与错误码。
+ */
+internal fun sectionErrorLine(code: String, message: String, subject: String): String =
+    if (code == "gateway_not_running") {
+        "网关未启动：启动后才能读取$subject。"
+    } else {
+        "读取$subject 失败：${message.ifBlank { "未返回原因" }}（错误码：$code）"
+    }

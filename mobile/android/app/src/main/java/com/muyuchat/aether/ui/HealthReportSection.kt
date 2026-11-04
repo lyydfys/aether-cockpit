@@ -2,7 +2,6 @@ package com.muyuchat.aether.ui
 
 import android.app.Application
 import android.content.Intent
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -93,7 +92,7 @@ class HealthReportViewModel(application: Application) : AndroidViewModel(applica
                 )
                 HealthReportUiState.Ready(text = text, uri = uri, fileName = name)
             } catch (_: Exception) {
-                HealthReportUiState.Failed("导出失败：无法写入本机缓存目录")
+                HealthReportUiState.Failed("无法写入本机缓存目录")
             }
         }
     }
@@ -127,12 +126,12 @@ internal fun HealthReportSection(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    Surface(shape = McaShape.Card, color = McaTonal.fill(), border = McaHairline.stroke(), modifier = modifier) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+    Surface(shape = McaShape.Sheet, color = McaTonal.fill(), border = McaHairline.stroke(), modifier = modifier) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(
                 text = "本机自检摘要",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(4.dp))
@@ -142,37 +141,50 @@ internal fun HealthReportSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             McaButton(
                 onClick = { viewModel.export(settings) },
-                style = McaButtonStyle.Outlined,
+                style = McaButtonStyle.Primary,
             ) { Text("生成摘要") }
             when (val current = state) {
                 HealthReportUiState.Idle -> Unit
                 is HealthReportUiState.Failed -> {
-                    Spacer(Modifier.height(10.dp))
+                    val failure = healthReportFailureCopy(current.message)
+                    Spacer(Modifier.height(12.dp))
+                    // 只给状态词染 error；错误原文保持正文色。
                     Text(
-                        text = current.message,
-                        style = MaterialTheme.typography.bodySmall,
+                        text = failure.status,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = failure.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
                 is HealthReportUiState.Ready -> {
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(12.dp))
                     Text(
                         text = current.text,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(10.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        McaButton(
-                            onClick = { onShare(viewModel.shareIntent(current)) },
-                            style = McaButtonStyle.Primary,
-                        ) { Text("分享 ${current.fileName}") }
-                    }
+                    Spacer(Modifier.height(12.dp))
+                    McaButton(
+                        onClick = { onShare(viewModel.shareIntent(current)) },
+                        style = McaButtonStyle.Primary,
+                    ) { Text("分享 ${current.fileName}") }
                 }
             }
         }
     }
 }
+
+internal fun healthReportFailureCopy(message: String): ImportExportFailureCopy =
+    ImportExportFailureCopy(
+        status = "导出失败",
+        detail = message.ifBlank { "无法写入本机缓存目录" },
+    )
