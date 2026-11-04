@@ -3,6 +3,7 @@ package com.muyuchat.aether.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,6 +26,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
@@ -33,6 +35,7 @@ import com.muyuchat.aether.runtime.RequestsPage as RequestsData
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
+import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
@@ -41,6 +44,13 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+
+/* 深层页面共享排版原语（DeepCard / DeepSectionTitle / DeepStateCard / DeepNotice …）
+ * 已迁到 DeepPageScaffold.kt —— 同包，调用点无需 import。
+ * 那里是全站唯一定义处，改签名请一次改完所有调用点。 */
+
+/* ========================================================================== */
 
 @Composable
 internal fun RequestsPage(
@@ -64,7 +74,7 @@ internal fun RequestsPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
         item {
@@ -121,32 +131,37 @@ internal fun RequestsPage(
         if (exportState !is RequestsExportUiState.Idle) {
             item {
                 when (exportState) {
-                    is RequestsExportUiState.Exporting -> RequestsStateCard(
+                    is RequestsExportUiState.Exporting -> DeepStateCard(
                         title = "正在导出",
                         detail = "服务端会按当前筛选生成 CSV；条数多时会慢一些。",
+                        tone = DeepTone.Info,
                     )
                     is RequestsExportUiState.Ready -> Column {
-                        RequestsStateCard(
+                        DeepStateCard(
                             title = "已生成 ${exportState.fileName}",
                             detail = "共 ${exportState.rows} 条记录、${exportState.bytes} 字节。" +
                                 "下一步选择保存位置或直接分享。" +
                                 "CSV 保留台账全部列（与桌面导出一致），请勿分享给他人。",
+                            tone = DeepTone.Info,
                             actionLabel = "分享 / 保存",
                             onAction = onShareCsv,
                         )
+                        Spacer(Modifier.height(8.dp))
                         McaButton(onClick = onDismissExport, style = McaButtonStyle.Outlined) { Text("关闭") }
                     }
                     is RequestsExportUiState.Failed -> Column {
-                        RequestsStateCard(
+                        DeepStateCard(
                             title = "导出失败",
                             detail = when (exportState.code) {
                                 "empty_csv" -> "没有可导出的记录（当前筛选下是空的）"
                                 "gateway_not_running" -> "网关未启动：先回「概览」启动网关"
                                 else -> "${exportState.message}（错误码：${exportState.code}）"
                             },
+                            tone = DeepTone.Danger,
                             actionLabel = "重试",
                             onAction = onExportCsv,
                         )
+                        Spacer(Modifier.height(8.dp))
                         McaButton(onClick = onDismissExport, style = McaButtonStyle.Outlined) { Text("关闭") }
                     }
                     RequestsExportUiState.Idle -> Unit
@@ -155,9 +170,10 @@ internal fun RequestsPage(
         }
         when (state) {
             RequestsUiState.Idle -> item {
-                RequestsStateCard(
+                DeepStateCard(
                     title = "网关未启动",
                     detail = "启动本地网关后可读取本机请求账本。",
+                    tone = DeepTone.Info,
                     actionLabel = "前往概览",
                     onAction = onOpenOverview,
                 )
@@ -170,9 +186,16 @@ internal fun RequestsPage(
                 val page = state.page
                 if (page.rows.isEmpty()) {
                     item {
-                        RequestsStateCard(
+                        // 与桌面 logs.js:202 同句：标题说清是哪一种空，正文说下一步。
+                        DeepStateCard(
                             title = if (failedOnly) "没有失败请求" else "还没有请求",
-                            detail = "通过本机 /v1 发起的请求会出现在这里。",
+                            detail = if (failedOnly) {
+                                "当前筛选只保留失败请求，这一页没有失败记录。换回「全部」查看其它请求。"
+                            } else {
+                                "接入客户端并发一次请求后，这里会出现审计记录。"
+                            },
+                            actionLabel = if (failedOnly) "显示全部" else "刷新",
+                            onAction = if (failedOnly) ({ onFailedOnly(false) }) else onRefresh,
                         )
                     }
                 } else {
@@ -209,6 +232,26 @@ internal fun requestDetailFields(row: RequestRow): List<RequestDetailField> = bu
 }
 
 /**
+ * 状态词。与桌面端 `logs.js:240` 同形状（「成功 200」/「失败 401」）：
+ * 列表里**只有这一个词染色**，时间、渠道、耗时、Token 一律中性色。
+ */
+internal fun requestStatusText(row: RequestRow): String = when {
+    row.status == 0 -> "—"
+    row.ok -> "成功 ${row.status}"
+    else -> "失败 ${row.status}"
+}
+
+/** 右列第二行：耗时 + 输入/输出 Token，作为一整串右对齐。 */
+internal fun requestLatencyTokensText(row: RequestRow): String {
+    val latency = if (row.ms > 0) "${row.ms} ms" else "—"
+    return "$latency · ${row.inputTokens}/${row.outputTokens} tok"
+}
+
+/** 行内渠道名：缺失时给明确文案，不留空（详情页另用「未记录渠道」）。 */
+internal fun requestProviderText(row: RequestRow): String =
+    row.providerName.ifBlank { "未知渠道" }
+
+/**
  * 只按 err_type 与状态码给解释，绝不回显上游原始错误正文——正文可能带请求片段。
  */
 internal fun requestErrorExplanation(row: RequestRow): String? {
@@ -236,13 +279,9 @@ private fun RequestDetailDialog(row: RequestRow, onDismiss: () -> Unit) {
             )
         },
         text = {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 requestDetailFields(row).forEach { field ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 3.dp),
-                    ) {
+                    Row(Modifier.fillMaxWidth()) {
                         Text(
                             text = field.label,
                             style = MaterialTheme.typography.bodySmall,
@@ -257,7 +296,7 @@ private fun RequestDetailDialog(row: RequestRow, onDismiss: () -> Unit) {
                         )
                     }
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(
                     text = "只读：不包含请求正文、会话 ID 或 caller key。",
                     style = MaterialTheme.typography.bodySmall,
@@ -295,15 +334,9 @@ private fun RequestsSummaryLine(page: RequestsData) {
 
 @Composable
 private fun RequestsList(page: RequestsData, onSelect: (RequestRow) -> Unit) {
-    Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 6.dp),
-        ) {
-            page.rows.forEach { row ->
-                RequestRowView(row, onClick = { onSelect(row) })
-            }
+    DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+        page.rows.forEach { row ->
+            RequestRowView(row, onClick = { onSelect(row) })
         }
     }
 }
@@ -314,27 +347,28 @@ private fun RequestRowView(row: RequestRow, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(role = Role.Button, onClick = onClick)
-            .padding(vertical = 8.dp),
+            .padding(vertical = DeepRowVertical),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = formatClock(row.timeMs),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(42.dp),
+            modifier = Modifier.width(44.dp),
         )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
+            // 长模型名放两行再省略，避免一行里被挤成「claude-sub/cla…」。
             Text(
                 text = row.model,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${row.providerName.ifBlank { "未知渠道" }} · ${row.inputTokens}/${row.outputTokens} tokens",
+                text = requestProviderText(row),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -344,13 +378,18 @@ private fun RequestRowView(row: RequestRow, onClick: () -> Unit) {
         Spacer(Modifier.width(8.dp))
         Column(horizontalAlignment = Alignment.End) {
             Text(
-                text = if (row.status == 0) "—" else row.status.toString(),
+                text = requestStatusText(row),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = if (row.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                // 只有状态词染色；其余一律中性。
+                color = when {
+                    row.status == 0 -> MaterialTheme.colorScheme.onSurfaceVariant
+                    row.ok -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.error
+                },
             )
             Text(
-                text = if (row.ms > 0) "${row.ms} ms" else "—",
+                text = requestLatencyTokensText(row),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -387,43 +426,9 @@ private fun RequestsPager(page: RequestsData, onPrev: () -> Unit, onNext: () -> 
 }
 
 @Composable
-private fun RequestsStateCard(
-    title: String,
-    detail: String,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null,
-) {
-    Surface(shape = McaShape.Sheet, color = MaterialTheme.colorScheme.primaryContainer) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f),
-            )
-            if (actionLabel != null && onAction != null) {
-                Spacer(Modifier.height(14.dp))
-                McaButton(onClick = onAction, style = McaButtonStyle.Primary) { Text(actionLabel) }
-            }
-        }
-    }
-}
-
-@Composable
 private fun RequestsLoadingCard() {
-    Surface(shape = McaShape.Card, color = McaTonal.fill()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(
                 modifier = Modifier.size(22.dp),
                 strokeWidth = 2.dp,
@@ -441,29 +446,13 @@ private fun RequestsLoadingCard() {
 
 @Composable
 private fun RequestsErrorCard(code: String, message: String, onRetry: () -> Unit) {
-    Surface(shape = McaShape.Sheet, color = MaterialTheme.colorScheme.errorContainer) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                text = "读取请求失败",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
-            )
-            Text(
-                text = "错误码：$code",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.75f),
-            )
-            Spacer(Modifier.height(14.dp))
-            McaButton(onClick = onRetry, style = McaButtonStyle.Outlined) { Text("重试") }
-        }
-    }
+    DeepStateCard(
+        title = "读取请求失败",
+        detail = "$message（错误码：$code）",
+        tone = DeepTone.Danger,
+        actionLabel = "重试",
+        onAction = onRetry,
+    )
 }
 
 private val requestClock: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.US)
