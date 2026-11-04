@@ -894,7 +894,8 @@ private fun BrandHeader(onSearch: (() -> Unit)?) {
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Image(
-                    painter = painterResource(R.drawable.ic_brand_avatar),
+                    // 24dp 用光学简化版（只有气泡+星芒）：完整版的徽标/青点在这个尺寸是脏点。
+                    painter = painterResource(R.drawable.ic_brand_mark),
                     contentDescription = null,
                     modifier = Modifier.size(24.dp),
                 )

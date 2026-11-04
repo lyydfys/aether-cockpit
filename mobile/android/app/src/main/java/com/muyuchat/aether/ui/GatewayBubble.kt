@@ -458,9 +458,10 @@ private fun GatewayOrb(running: Boolean) {
             accent = accent,
         ) {
             Image(
-                painter = painterResource(R.drawable.ic_brand_avatar),
+                // 悬浮球（48dp plate）内用光学简化版（气泡+星芒）；28→32dp 让球内占比更合理。
+                painter = painterResource(R.drawable.ic_brand_mark),
                 contentDescription = null,
-                modifier = Modifier.size(28.dp),
+                modifier = Modifier.size(32.dp),
             )
         }
     }
@@ -525,9 +526,10 @@ internal fun GatewaySystemOverlayBubble(
             contentAlignment = Alignment.Center,
         ) {
             Image(
-                painter = painterResource(R.drawable.ic_brand_avatar),
+                // 悬浮球（48dp plate）内用光学简化版（气泡+星芒）；28→32dp 让球内占比更合理。
+                painter = painterResource(R.drawable.ic_brand_mark),
                 contentDescription = null,
-                modifier = Modifier.size(28.dp),
+                modifier = Modifier.size(32.dp),
             )
         }
     }

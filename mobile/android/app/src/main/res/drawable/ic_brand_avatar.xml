@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  品牌头像 / 图标（含背景）：逐元素还原 internal/web/ui2/assets/aether-cockpit.svg
+  品牌头像 / 图标 · 完整版（含背景）：逐元素还原 internal/web/ui2/assets/aether-cockpit.svg
+  - **尺寸选择**：小尺寸（24–28dp，标题旁 / 悬浮球内）请用 ic_brand_mark.xml（光学简化版：
+    只有气泡 + 星芒）；**本文件用于 ≥40dp 的大图位**——徽标与 4 个青点只有在这个尺寸才看得清。
   - 108×108 viewport，与 SVG 的 viewBox 一一对应；
   - 先画 rx=20 的 #F8F9FA 圆角背景（等于 SVG 里的 <rect rx="20">），再画完整图案；
   - 图案包含：气泡 #1A73E8、星芒 #FFFFFF、4 个青点（#CCFFFF ×2、#80FFFF ×2）、

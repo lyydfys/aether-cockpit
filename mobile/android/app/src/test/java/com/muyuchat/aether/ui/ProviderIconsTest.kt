@@ -75,7 +75,10 @@ class ProviderIconsTest {
         // 自带上色底板的彩色标不 tint
         assertFalse(providerIcon("qoder-cn").mono)
         assertFalse(providerIcon("zai").mono)
-        assertFalse(providerIcon("gemini").mono)
+        // 桌面映射里没有裸 "gemini" 这个 id（只有 google / gemini-compat），所以用 google 验彩色标
+        assertFalse(providerIcon("google").mono)
+        // 而裸 "gemini" 不是桌面认的 provider_id，按未知 id 回落
+        assertEquals(FALLBACK_PROVIDER_ICON.res, providerIcon("gemini").res)
         // 回落图标默认也要 tint
         assertTrue(FALLBACK_PROVIDER_ICON.mono)
     }
