@@ -1,4 +1,4 @@
-﻿package com.muyuchat.aether.ui
+package com.muyuchat.aether.ui
 
 import android.app.Application
 import android.content.ContentResolver
@@ -60,6 +60,8 @@ sealed interface ChannelsUiState {
         val accounts: List<AccountQuotaRow> = emptyList(),
         val accountAction: AccountActionUiState = AccountActionUiState.Idle,
         val batch: BatchUiState = BatchUiState.Idle,
+        /** 每个账号"上一次读取额度"的瞬态结果；只有 `quotaReadAt == 0` 时页面才用得上。 */
+        val quotaReadOutcomes: Map<String, QuotaReadOutcome> = emptyMap(),
     ) : ChannelsUiState
 
     data class Failed(val code: String, val message: String) : ChannelsUiState
@@ -171,6 +173,23 @@ sealed interface ProviderModelsUiState {
     data class Failed(val code: String, val message: String) : ProviderModelsUiState
 }
 
+/**
+ * 上一次「读取额度」的结果（**瞬态**，只在内存里，不落盘）。
+ *
+ * 用途只有一个：`quota.read_at == 0` 时区分"从来没点过"与"点了但上游没给额度"——
+ * 真机上就出现过 `ok` + `readAt=无`（凭据续期 45s 后没读到），而界面上和"没点过"长得一样。
+ */
+enum class QuotaReadOutcome {
+    /** 这次真的读到了额度（回包里带 `read_at`）。 */
+    OK_WITH_QUOTA,
+
+    /** 请求成功回来，但没读到额度（`quota_read=false` / 回包没有 `read_at`）。 */
+    OK_WITHOUT_QUOTA,
+
+    /** 这次读取失败（网络/HTTP/上游错误），失败原因另有红字通道显示。 */
+    FAILED,
+}
+
 class ChannelsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = GatewayRuntimeRepository(application)
     private val client = ManagementApiClient()
@@ -192,31 +211,40 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     private val batch = MutableStateFlow<BatchUiState>(BatchUiState.Idle)
     private var batchJob: Job? = null
 
+    /**
+     * 每个账号"上一次读取额度"的结果（瞬态）。
+     *
+     * 只有 `quota.read_at == 0` 时才被页面用上：用来把"点了但没读到"与"从来没点过"分开。
+     * 不做时间戳推断、不落盘——重启或重进页面后自然消失，页面就退回"从未读过"。
+     */
+    private val quotaReadOutcomes = MutableStateFlow<Map<String, QuotaReadOutcome>>(emptyMap())
     private data class ChannelsInput(
         val status: GatewayStatus,
         val providers: List<ProviderSummary>?,
         val accounts: List<AccountQuotaRow>?,
         val action: AccountActionUiState,
         val batch: BatchUiState,
+        val readOutcomes: Map<String, QuotaReadOutcome>,
     )
 
-    /** 四个"就地状态"先合成一路：`combine` 的强类型重载最多 5 个 flow。 */
+    /** 五个"就地状态"先合成一路：`combine` 的强类型重载最多 5 个 flow。 */
     private data class CachedInputs(
         val providers: List<ProviderSummary>?,
         val accounts: List<AccountQuotaRow>?,
         val action: AccountActionUiState,
         val batch: BatchUiState,
+        val readOutcomes: Map<String, QuotaReadOutcome>,
     )
 
     private val cachedInputs: Flow<CachedInputs> =
-        combine(providerOverride, accountsOverride, accountAction, batch) { providers, accounts, action, batchState ->
-            CachedInputs(providers, accounts, action, batchState)
+        combine(providerOverride, accountsOverride, accountAction, batch, quotaReadOutcomes) { providers, accounts, action, batchState, outcomes ->
+            CachedInputs(providers, accounts, action, batchState, outcomes)
         }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val state: StateFlow<ChannelsUiState> =
         combine(repository.status, refresh, cachedInputs) { status, _, cached ->
-            ChannelsInput(status, cached.providers, cached.accounts, cached.action, cached.batch)
+            ChannelsInput(status, cached.providers, cached.accounts, cached.action, cached.batch, cached.readOutcomes)
         }
             .flatMapLatest { input ->
             flow {
@@ -228,7 +256,15 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 val cachedProviders = input.providers
                 val cachedAccounts = input.accounts
                 if (cachedProviders != null && cachedAccounts != null) {
-                    emit(ChannelsUiState.Ready(cachedProviders, cachedAccounts, input.action, input.batch))
+                    emit(
+                        ChannelsUiState.Ready(
+                            cachedProviders,
+                            cachedAccounts,
+                            input.action,
+                            input.batch,
+                            input.readOutcomes,
+                        ),
+                    )
                     return@flow
                 }
                 emit(ChannelsUiState.Loading)
@@ -238,7 +274,15 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                         val a = cachedAccounts ?: accountsClient.fetchAccounts(input.status)
                         p to a
                     }
-                    emit(ChannelsUiState.Ready(providers, accounts, input.action, input.batch))
+                    emit(
+                        ChannelsUiState.Ready(
+                            providers,
+                            accounts,
+                            input.action,
+                            input.batch,
+                            input.readOutcomes,
+                        ),
+                    )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: ManagementApiException) {
@@ -624,13 +668,20 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                     // 没有可比对的行（列表还没到）：让它去重拉，别丢掉读到的结果。
                     refetchAccounts()
                 }
+                // "这次到底读到没有"只认回包里的 read_at：服务端读到额度时一定会写它
+                //（`usage_quota_api.go:473-475` 在 ReadAt==0 时补 now），没有就是没读到。
+                val readAtSec = read.snapshot?.readAt ?: 0L
+                recordQuotaReadOutcome(
+                    accountId,
+                    if (readAtSec > 0L) QuotaReadOutcome.OK_WITH_QUOTA else QuotaReadOutcome.OK_WITHOUT_QUOTA,
+                )
                 Log.i(
                     QUOTA_READ_LOG_TAG,
                     quotaReadLogLine(
                         QuotaReadLog.Ok(
                             accountId = accountId,
                             elapsedMs = System.currentTimeMillis() - startedAtMs,
-                            hasReadAt = read.quotaRead,
+                            hasReadAt = readAtSec > 0L,
                         ),
                     ),
                 )
@@ -643,6 +694,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
+                recordQuotaReadOutcome(accountId, QuotaReadOutcome.FAILED)
                 Log.i(
                     QUOTA_READ_LOG_TAG,
                     quotaReadLogLine(
@@ -656,6 +708,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 )
                 accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message, AccountActionKind.QUOTA)
             } catch (e: Exception) {
+                recordQuotaReadOutcome(accountId, QuotaReadOutcome.FAILED)
                 Log.i(
                     QUOTA_READ_LOG_TAG,
                     quotaReadLogLine(
@@ -676,6 +729,11 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 )
             }
         }
+    }
+
+    /** 记下这个账号"上一次读取额度"的结果（瞬态，只在内存里，不落盘、不推断时间）。 */
+    private fun recordQuotaReadOutcome(accountId: String, outcome: QuotaReadOutcome) {
+        quotaReadOutcomes.value = quotaReadOutcomes.value + (accountId to outcome)
     }
 
     /** 当前已渲染的账号行（override 优先，其次最近一次 Ready 的快照）。 */

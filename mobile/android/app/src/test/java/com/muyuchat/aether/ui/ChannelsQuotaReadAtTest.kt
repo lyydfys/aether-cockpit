@@ -77,4 +77,45 @@ class ChannelsQuotaReadAtTest {
         assertNotEquals(QUOTA_READ_NEVER_COPY, quotaReadAtLabel(rows[2].quotaReadAt, now))
         assertTrue(quotaReadAtLabel(rows[2].quotaReadAt, now).isNotBlank())
     }
+
+    /**
+     * 点过「读取额度」、请求也回来了（`ok`），但这次没读到额度（服务端 `quota_read=false`）——
+     * 必须与"从来没点过"分成两句话，否则用户还是分不清。
+     */
+    @Test
+    fun clickedButNothingReadIsItsOwnSentence() {
+        val line = quotaReadAtLabel(
+            readAtSec = 0L,
+            nowMs = now,
+            lastAttempt = QuotaReadOutcome.OK_WITHOUT_QUOTA,
+        )
+        assertEquals(QUOTA_READ_EMPTY_COPY, line)
+        assertEquals("无（这次读取没返回额度）", line)
+        // 与"从未读过"绝不是同一句
+        assertNotEquals(QUOTA_READ_NEVER_COPY, line)
+        assertTrue(line != QUOTA_READ_NEVER_COPY)
+    }
+
+    /** 有真读数时永远显示相对时间：哪怕上一次尝试"没读到"也不该盖掉已有的读数。 */
+    @Test
+    fun readAtWinsOverTheLastAttempt() {
+        val readAtSec = (now - 5_000L) / 1000L
+        assertEquals(
+            "刚刚",
+            quotaReadAtLabel(readAtSec, now, QuotaReadOutcome.OK_WITHOUT_QUOTA),
+        )
+        assertNotEquals(
+            QUOTA_READ_EMPTY_COPY,
+            quotaReadAtLabel(readAtSec, now, QuotaReadOutcome.OK_WITHOUT_QUOTA),
+        )
+    }
+
+    /** 只有"成功但没读到"才换句子；没尝试过 / 上次失败 / 上次成功有读数 → 仍是「从未读过」。 */
+    @Test
+    fun onlyASuccessfulEmptyAttemptChangesTheSentence() {
+        assertEquals(QUOTA_READ_NEVER_COPY, quotaReadAtLabel(0L, now, lastAttempt = null))
+        assertEquals(QUOTA_READ_NEVER_COPY, quotaReadAtLabel(0L, now, QuotaReadOutcome.FAILED))
+        // 理论上不会出现（成功有读数时 readAt 一定 > 0），但退化成"从未读过"也比瞎猜安全
+        assertEquals(QUOTA_READ_NEVER_COPY, quotaReadAtLabel(0L, now, QuotaReadOutcome.OK_WITH_QUOTA))
+    }
 }

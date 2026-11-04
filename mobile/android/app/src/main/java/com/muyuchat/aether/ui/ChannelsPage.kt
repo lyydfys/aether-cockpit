@@ -78,6 +78,9 @@ private const val MAX_QUOTA_WINDOWS = 3
 /** 从未读过额度时的值；`read_at` 为 0 / 缺失 / 脏值都归到这一句，绝不编时间。 */
 internal const val QUOTA_READ_NEVER_COPY = "从未读过"
 
+/** 点过「读取额度」、请求也回来了，但这次没读到额度（服务端 quota_read=false）。 */
+internal const val QUOTA_READ_EMPTY_COPY = "无（这次读取没返回额度）"
+
 @Composable
 internal fun ChannelsPage(
     status: GatewayStatus,
@@ -258,6 +261,7 @@ internal fun ChannelsPage(
                                 probing = probing == row.providerId,
                                 toggling = toggling == row.providerId,
                                 modelsState = models[row.providerId],
+                                readOutcome = state.quotaReadOutcomes[row.accountId],
                                 selectionMode = selecting,
                                 selected = row.accountId in visibleSelected,
                                 onToggleSelected = {
@@ -627,6 +631,7 @@ private fun AccountQuotaCard(
     probing: Boolean,
     toggling: Boolean,
     modelsState: ProviderModelsUiState?,
+    readOutcome: QuotaReadOutcome? = null,
     selectionMode: Boolean = false,
     selected: Boolean = false,
     onToggleSelected: () -> Unit = {},
@@ -717,7 +722,7 @@ private fun AccountQuotaCard(
 
             // 额度
             Spacer(Modifier.height(12.dp))
-            QuotaBlock(row = row, nowMs = nowMs, actionFailure = failure)
+            QuotaBlock(row = row, nowMs = nowMs, actionFailure = failure, readOutcome = readOutcome)
 
             // 重置时间 / 最近使用
             Spacer(Modifier.height(8.dp))
@@ -874,7 +879,12 @@ private fun AccountQuotaCard(
 
 /** 额度区：有窗口画窗口条，有总量/已用画一条总条，都没有就说明原因（绝不画 0%）。 */
 @Composable
-private fun QuotaBlock(row: AccountQuotaRow, nowMs: Long, actionFailure: AccountActionUiState.Failed?) {
+private fun QuotaBlock(
+    row: AccountQuotaRow,
+    nowMs: Long,
+    actionFailure: AccountActionUiState.Failed?,
+    readOutcome: QuotaReadOutcome?,
+) {
     if (!row.quotaSupported) {
         Text(
             text = QUOTA_UNSUPPORTED_COPY,
@@ -907,7 +917,7 @@ private fun QuotaBlock(row: AccountQuotaRow, nowMs: Long, actionFailure: Account
     }
     // 最近读数：点过一次「读取额度」后这行会变，用户据此确认"这次真的读到了"。
     Text(
-        text = "最近读数 ${quotaReadAtLabel(row.quotaReadAt, nowMs)}",
+        text = "最近读数 ${quotaReadAtLabel(row.quotaReadAt, nowMs, readOutcome)}",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -1239,16 +1249,27 @@ internal fun quotaReadLabel(reading: Boolean): String = if (reading) "读取中�
 /**
  * 「最近读数」的值：`read_at` 是**Unix 秒**（`contract.go:249`，服务端用 `time.Now().Unix()` 写入）。
  *
- * - `<= 0`（缺字段/从未读过/脏值）→ [QUOTA_READ_NEVER_COPY]，**不编时间**；
- * - 有值 → 复用 [relativeTimeLabel]（刚刚 / N 分钟前 / N 小时前 / N 天前），不另写一套格式化。
+ * 三态（`read_at` 有值永远是第一态，因为那是服务端的真读数）：
+ * - `read_at > 0` → 复用 [relativeTimeLabel]（刚刚 / N 分钟前 / N 小时前 / N 天前）；
+ * - `read_at == 0` 且**上次读取成功但没读到额度**（[QuotaReadOutcome.OK_WITHOUT_QUOTA]）
+ *   → [QUOTA_READ_EMPTY_COPY]：与"从来没点过"分开；
+ * - 其余（没点过 / 上次失败 / 缺字段 / 脏值）→ [QUOTA_READ_NEVER_COPY]，**不编时间**。
  *
- * [nowMs] 由调用方传入，纯函数好测（不读系统时钟）。
+ * [nowMs] 与 [lastAttempt] 由调用方传入，纯函数好测（不读系统时钟、不猜时间戳）。
  */
-internal fun quotaReadAtLabel(readAtSec: Long, nowMs: Long): String {
-    if (readAtSec <= 0L) {
-        return QUOTA_READ_NEVER_COPY
+internal fun quotaReadAtLabel(
+    readAtSec: Long,
+    nowMs: Long,
+    lastAttempt: QuotaReadOutcome? = null,
+): String {
+    if (readAtSec > 0L) {
+        return relativeTimeLabel(nowMs, readAtSec * 1000L)
     }
-    return relativeTimeLabel(nowMs, readAtSec * 1000L)
+    return if (lastAttempt == QuotaReadOutcome.OK_WITHOUT_QUOTA) {
+        QUOTA_READ_EMPTY_COPY
+    } else {
+        QUOTA_READ_NEVER_COPY
+    }
 }
 
 /**
