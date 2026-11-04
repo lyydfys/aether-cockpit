@@ -413,7 +413,8 @@ internal fun libraryEmptyCopy(hasAnyEntry: Boolean, kindLabel: String?): Library
     }
     return LibraryEmptyCopy(
         title = "资源库里还没有条目",
-        detail = "可以点右上「新增」创建一条；从桌面 Agent 配置里「发现 / 导入」仍在桌面端做。",
+        // 头部「新增」已移除（避免 1.3× 挤掉标题）：引导到分区标题上的「新建」按钮。
+        detail = "可以点分区标题旁的「新建」创建一条；从桌面 Agent 配置里「发现 / 导入」仍在桌面端做。",
         action = "新增条目",
     )
 }
