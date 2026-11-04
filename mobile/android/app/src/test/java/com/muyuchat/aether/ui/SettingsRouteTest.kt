@@ -44,12 +44,13 @@ class SettingsRouteTest {
 
     @Test
     fun fullPageKeepsExistingOrder() {
-        // null = 整页；顺序与原 261-267 行一致（常规 → 定价 → 隐私 → 工具 → 预设 → 模型目录 → 可观测）。
+        // null = 整页；顺序与原 261-267 行一致（常规 → 定价 → 隐私 → 工具 → 预设 → 模型目录 → 可观测），
+        // 「10 关于」追加在最后：它也要在整页里出现，否则「更多」进得去、整页却找不到。
         assertEquals(
-            listOf("01", "05", "07", "03", "04", "06", "08"),
+            listOf("01", "05", "07", "03", "04", "06", "08", "10"),
             settingsBlocksFor(null).map { it.id },
         )
-        assertEquals(8, SETTINGS_PARTITION_BLOCKS.size)
+        assertEquals(9, SETTINGS_PARTITION_BLOCKS.size)
     }
 
     @Test

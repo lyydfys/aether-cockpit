@@ -90,7 +90,7 @@ internal fun SettingsPage(
     state: SettingsUiState,
     onRefresh: () -> Unit,
     onBack: () -> Unit = {},
-    /** 非空时只渲染该设置分组（01–08），并在顶部给「返回 + 组标题」。由 SettingsRoute 分发。 */
+    /** 非空时只渲染该设置分组（01–08 与 10 关于），并在顶部给「返回 + 组标题」。由 SettingsRoute 分发。 */
     initialGroup: String? = null,
     onOpenOverview: () -> Unit,
     onOpenBackup: () -> Unit,
@@ -179,7 +179,7 @@ internal fun SettingsPage(
                         item {
                             SettingsStateCard(
                                 title = "找不到设置分组",
-                                detail = "分组「$initialGroup」不是设置页里的分区（01–08）。",
+                                detail = "分组「$initialGroup」不是设置页里的分区（01–08 与 10 关于）。",
                                 actionLabel = "返回",
                                 onAction = onBack,
                             )
@@ -247,6 +247,7 @@ internal fun SettingsPage(
                                     "06" -> SettingsModelsSection(status = status)
                                     "07" -> SettingsPrivacySection(status = status)
                                     "08" -> SettingsObservabilitySection(status = status)
+                                    "10" -> SettingsAboutSection(status = status)
                                 }
                             }
                         }
@@ -381,6 +382,7 @@ internal fun SettingsPage(
                             "04" -> SettingsPresetsSection(status = status)
                             "06" -> SettingsModelsSection(status = status)
                             "08" -> SettingsObservabilitySection(status = status)
+                            "10" -> SettingsAboutSection(status = status)
                         }
                     }
                 }
@@ -1980,7 +1982,8 @@ private fun MaskingRecordRow(record: MaskingRecord) {
 internal data class SettingsBlockSpec(val id: String, val title: String)
 
 /**
- * 01–08 的分区块表（id 顺序 = 桌面 tab 顺序，不代表整页渲染顺序）。
+ * 分区块表（id 顺序 = 桌面 tab 顺序，不代表整页渲染顺序）。09「同步与备份」不在这里：
+ * 它由 `SettingsRoute.Backup` 直接跳 `BackupPage`；10「关于」在这里是因为它仍要在设置页内渲染。
  * 整页渲染顺序见 [settingsBlocksFor] 的 null 分支（保持现有屏幕顺序）。
  */
 internal val SETTINGS_PARTITION_BLOCKS: List<SettingsBlockSpec> = listOf(
@@ -1992,10 +1995,13 @@ internal val SETTINGS_PARTITION_BLOCKS: List<SettingsBlockSpec> = listOf(
     SettingsBlockSpec("06", "模型目录"),
     SettingsBlockSpec("07", "隐私"),
     SettingsBlockSpec("08", "可观测"),
+    // 「10 关于」不在这张分区表里也可达（`MorePage` 走 SettingsRoute.About 聚焦到 "10"），
+    // 但又必须能渲染，所以一并列出；它没有设置读写，只有只读信息。
+    SettingsBlockSpec("10", "关于"),
 )
 
-/** 整页渲染顺序（= 改造前 261-267 行的顺序，保持现状不变）。 */
-private val SETTINGS_FULL_PAGE_ORDER = listOf("01", "05", "07", "03", "04", "06", "08")
+/** 整页渲染顺序（= 改造前 261-267 行的顺序，保持现状不变；「10 关于」追加在最后）。 */
+private val SETTINGS_FULL_PAGE_ORDER = listOf("01", "05", "07", "03", "04", "06", "08", "10")
 
 /**
  * 块表过滤：null → 整页 7 个区块（原顺序）；非空 → 只保留该分组。
