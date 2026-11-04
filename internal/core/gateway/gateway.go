@@ -321,6 +321,10 @@ type Gateway struct {
 	gate        *inflightGate
 	gateOnce    sync.Once
 
+	// 边缘 IP 固定表（见 netedge.go）：只作用于网关内的渠道，不写系统 hosts。
+	hostPin     *hostPinStore
+	hostPinOnce sync.Once
+
 	// quota 额度卡片的后台补读去重（懒初始化）。
 	quotaOnce sync.Once
 	quota     *quotaRefreshState
@@ -465,6 +469,8 @@ func New(cfg Config) *Gateway {
 	// 只替换建连逻辑：TLS/SNI/证书校验仍按域名完成，走代理时对端是 IP 字面量、
 	// 优化器直接放行，不产生额外开销。
 	g.tr.Optimizer = transport.NewOptimizer(defaultDoHServer, true)
+	// 渠道边缘优选：用户扫描后钉住的 IP 优先于 DNS 结果。
+	g.tr.Optimizer.LookupPins = func(host string) []string { return g.hostPins().Get(host) }
 	g.callerKeys = newCallerKeyStore(filepath.Join(filepath.Dir(g.settingsPath), "caller-keys.json"))
 	// 渠道页的 on/off 参与模型解析（闭包读实时设置，无需重建）。
 	g.models.SetEnabledFilter(g.providerIsEnabled)
@@ -1169,6 +1175,10 @@ func (g *Gateway) routes() {
 	m.HandleFunc("GET /api/channels/net", g.handleChannelNet)
 	// 网络诊断：把"卡在哪一环"摊开（DNS / TCP / TLS / 首字节）。
 	m.HandleFunc("GET /api/network/diag", g.handleNetDiag)
+	// 边缘优选：扫描候选 IP、测机房与延迟，可钉到该渠道（不写 hosts）。
+	m.HandleFunc("GET /api/network/edge-scan", g.handleEdgeScan)
+	m.HandleFunc("POST /api/network/edge-pin", g.handleEdgePin)
+	m.HandleFunc("GET /api/network/edge-pins", g.handleEdgePins)
 	m.HandleFunc("GET /api/context", g.handleContextEmpty)
 	m.HandleFunc("GET /api/tune", g.handleTuneEmpty)
 	m.HandleFunc("POST /api/tune/{path...}", g.handleTuneAction)

@@ -47,6 +47,9 @@ type Optimizer struct {
 	pins  map[string]pinEntry
 	// dial 可注入，便于测试竞速逻辑（默认走 net.Dialer）。
 	dial func(ctx context.Context, network, addr string, timeout time.Duration) (net.Conn, error)
+	// LookupPins 返回某域名被"钉住"的 IP（渠道边缘优选的结果）。
+	// 非空时优先使用它们，不再走 DoH / 系统解析。
+	LookupPins func(host string) []string
 }
 
 // dialTimeout 用默认拨号器建连。
@@ -151,6 +154,14 @@ func (o *Optimizer) lookupDoH(ctx context.Context, host string) ([]string, error
 	return ips, nil
 }
 
+// lookupPins 取出某域名被钉住的 IP。
+func (o *Optimizer) lookupPins(host string) []string {
+	if o == nil || o.LookupPins == nil {
+		return nil
+	}
+	return o.LookupPins(host)
+}
+
 // pinned 返回仍在有效期内的固定 IP。
 func (o *Optimizer) pinned(host string) (string, bool) {
 	o.mu.Lock()
@@ -193,6 +204,12 @@ func (o *Optimizer) DialContext(ctx context.Context, network, addr string) (net.
 		o.mu.Unlock()
 	}
 	ips, err := o.Resolve(ctx, host)
+	// 渠道配置了"边缘优选"时以它为准：那是用户实测过更快的 IP，
+	// 优先于 DNS 给的结果（anycast 分配到的机房未必离用户最近）。
+	if pins := o.lookupPins(host); len(pins) > 0 {
+		ips = pins
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
