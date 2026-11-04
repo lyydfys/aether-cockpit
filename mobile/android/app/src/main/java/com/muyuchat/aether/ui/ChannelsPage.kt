@@ -916,9 +916,10 @@ private fun QuotaBlock(row: AccountQuotaRow, nowMs: Long) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    if (row.quotaError.isNotBlank()) {
+    // 读取失败：把服务端 quota_error 原文贴出来（只有这一行染 error 色，容器与其它行保持中性）。
+    quotaReadFailureLabel(row.quotaError)?.let { line ->
         Text(
-            text = "额度读取失败：${row.quotaError}",
+            text = line,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )
@@ -1248,6 +1249,18 @@ internal fun quotaReadAtLabel(readAtSec: Long, nowMs: Long): String {
  */
 internal fun quotaReadEnabled(quotaSupported: Boolean, anyBusy: Boolean): Boolean =
     quotaSupported && !anyBusy
+
+/**
+ * 额度区的「读取失败」一行：只有服务端真的给了 `quota_error` 原文才返回文案。
+ *
+ * `quota_error` 来源：`readQuotaFor` 读失败 → `noteQuotaFailure()`（`usage_quota_api.go:466`）
+ * → `handleTokenRefresh` 回包 `quota_error`（`auth_api.go:349-351`）与 `accountView.quota_error`
+ * （`admin.go:390`）。**没有原文就返回 null**，不编一句"读取失败"。
+ */
+internal fun quotaReadFailureLabel(quotaError: String): String? {
+    val text = quotaError.trim()
+    return if (text.isEmpty()) null else "读取失败：$text"
+}
 
 /**
  * 没有额度条可画时的说明文案；有条可画就返回 null（不再叠一句话）。
