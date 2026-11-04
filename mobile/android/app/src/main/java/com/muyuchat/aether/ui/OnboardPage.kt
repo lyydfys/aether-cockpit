@@ -318,6 +318,7 @@ internal fun OnboardPage(
                 viewModel.openForm()
             },
             onOpenUrl = onOpenQoderLogin,
+            onNudgeAuthPoll = viewModel.connect::nudgeAuthPoll,
             onDismiss = {
                 viewModel.connect.close()
                 onDismissQoderLogin()
@@ -870,10 +871,28 @@ private fun OnboardConnectDialog(
     onSubmitWindsurf: () -> Unit,
     onOpenCustomForm: () -> Unit,
     onOpenUrl: (String) -> Boolean,
+    onNudgeAuthPoll: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val blocked = state.methods.filter { !it.enabled }
+    // 应用内登录窗：只有 PKCE 的 authorize_url 走 WebView，其余（设备码 / 验证页）仍是系统浏览器。
+    var webLoginUrl by remember(state.providerId) { mutableStateOf<String?>(null) }
+    // 已经打开过一次应用内登录窗 → 按钮文案从「在应用内登录」变「重新打开登录页」。
+    var webLoginOpened by remember(state.providerId) { mutableStateOf(false) }
+    // 主提交动作统一放 footer（confirmButton）：内容区是滚动的，长表单会把按钮滚出屏幕，
+    // 用户就只看到「关闭」——这正是线上那个「找不到确定按钮」的问题。
+    val primary = onboardPrimaryAction(state)
+    val onPrimary: () -> Unit = when (primary.kind) {
+        OnboardPrimaryKind.StartAuth -> onStartAuth
+        OnboardPrimaryKind.CommitAuth -> onCommitAuth
+        OnboardPrimaryKind.SubmitCallback -> onSubmitCallback
+        OnboardPrimaryKind.StartDevice -> onStartDevice
+        OnboardPrimaryKind.SubmitTokenJson -> onSubmitTokenJson
+        OnboardPrimaryKind.SubmitManual -> onSubmitManual
+        OnboardPrimaryKind.SubmitWindsurf -> onSubmitWindsurf
+        OnboardPrimaryKind.None -> onDismiss
+    }
     McaDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -932,12 +951,23 @@ private fun OnboardConnectDialog(
                     state.active == "oauth_pkce" || state.active == "device_code" -> OnboardAuthMethodBody(
                         state = state,
                         onStart = onStartAuth,
-                        onOpenUrl = onOpenUrl,
+                        // 用户要求：浏览器授权不要跳到外部浏览器。PKCE 的 authorize_url 用应用内 WebView 打开；
+                        // 设备码的 verification_uri 仍是系统浏览器（那是给用户在别处登录确认的）。
+                        onOpenUrl = { target ->
+                            if (state.active == "oauth_pkce" && authUrlHost(target) != null) {
+                                webLoginUrl = target
+                                webLoginOpened = true
+                                true
+                            } else {
+                                onOpenUrl(target)
+                            }
+                        },
                         onCopy = { clipboard.setText(AnnotatedString(it)) },
                         onCallbackInput = onCallbackInput,
                         onSubmitCallback = onSubmitCallback,
                         onCancel = onCancelAuth,
                         onCommit = onCommitAuth,
+                        webLoginOpened = webLoginOpened,
                     )
                     state.active == "qoder_device" -> QoderLoginSection(
                         state = qoderLoginState,
@@ -1008,19 +1038,68 @@ private fun OnboardConnectDialog(
                     )
                     blocked.forEach { method ->
                         Spacer(Modifier.height(4.dp))
+                        // 会被桌面端拦下的登录方式：不再给"点了会失败"的按钮，直接写清只能桌面端做。
+                        val desktopOnly = method.blockedReason?.contains("桌面") == true
                         Text(
-                            text = "${method.label}：${method.blockedReason}",
+                            text = if (desktopOnly) {
+                                "${method.label}：${onboardAuthButtonLabel(OnboardAuthActionKind.DesktopOnly)}" +
+                                    "（${method.blockedReason}）"
+                            } else {
+                                "${method.label}：${method.blockedReason}"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
+                // 主按钮被置灰时，说清"还差什么"，别让用户以为按钮坏了。
+                primary.hint?.takeIf { it.isNotBlank() }?.let { hint ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = hint,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = {
+            // 主提交永远在 footer，不随内容滚动；没有主动作的阶段只留「关闭」。
+            if (primary.visible) {
+                McaButton(onClick = onPrimary, style = McaButtonStyle.Primary, enabled = primary.enabled) {
+                    Text(primary.label)
+                }
+            }
+        },
+        dismissButton = {
             McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
         },
     )
+
+    // 应用内 OAuth 登录窗（用户要求不跳外部浏览器）。白名单只放行授权域名与 127.0.0.1 回环。
+    val loginUrl = webLoginUrl
+    if (loginUrl != null) {
+        val authHost = authUrlHost(loginUrl)
+        OnboardWebLoginDialog(
+            url = loginUrl,
+            providerHosts = if (authHost == null) emptySet() else setOf(authHost),
+            onCancel = {
+                webLoginUrl = null
+                // 与「取消授权」同一语义：关窗 + 通知服务端取消会话。
+                onCancelAuth()
+            },
+            onCallbackReached = {
+                // WebView 已把回调请求打到本机网关：关窗，并立刻催一次轮询（不等下一个周期）。
+                webLoginUrl = null
+                onNudgeAuthPoll()
+            },
+            onFinish = {
+                // 兜底：回调页没自动跳回时，用户点「完成」也会催一次轮询。
+                webLoginUrl = null
+                onNudgeAuthPoll()
+            },
+        )
+    }
 }
 
 /** 浏览器授权 / 通用设备码：`/api/auth` 三段式（start → 轮询 → commit）。 */
@@ -1034,6 +1113,7 @@ private fun OnboardAuthMethodBody(
     onSubmitCallback: () -> Unit,
     onCancel: () -> Unit,
     onCommit: () -> Unit,
+    webLoginOpened: Boolean = false,
 ) {
     val auth = state.auth
     if (auth == null) {
@@ -1042,10 +1122,7 @@ private fun OnboardAuthMethodBody(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(8.dp))
-        McaButton(onClick = onStart, style = McaButtonStyle.Primary, enabled = !state.busy) {
-            Text("开始授权")
-        }
+        // 「开始授权」在弹窗 footer（`confirmButton`）。
         return
     }
     if (auth.isSuccess) {
@@ -1054,10 +1131,7 @@ private fun OnboardAuthMethodBody(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary,
         )
-        Spacer(Modifier.height(8.dp))
-        McaButton(onClick = onCommit, style = McaButtonStyle.Primary, enabled = !state.busy) {
-            Text(if (state.busy) "入库中…" else "完成接入")
-        }
+        // 「完成接入」在弹窗 footer（`confirmButton`）。
         return
     }
     if (auth.userCode.isNotBlank()) {
@@ -1081,20 +1155,33 @@ private fun OnboardAuthMethodBody(
                 size = McaButtonSize.CardAction,
             ) { Text("复制设备码") }
             if (auth.verificationUri.isNotBlank()) {
+                // 设备码确认页是第三方站点：只能外部浏览器，点之前先说明。
                 McaButton(
                     onClick = { onOpenUrl(auth.verificationUri) },
                     style = McaButtonStyle.Primary,
                     size = McaButtonSize.CardAction,
-                ) { Text("打开授权页面") }
+                ) { Text(onboardAuthButtonLabel(OnboardAuthActionKind.ExternalBrowser)) }
             }
+        }
+        onboardAuthButtonHint(OnboardAuthActionKind.ExternalBrowser)?.let { hint ->
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     } else if (auth.authorizeUrl.isNotBlank()) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // PKCE：真的在应用内 WebView 打开（不跳外部浏览器）。
+            val inAppKind = onboardAuthActionKind(
+                method = state.active,
+                reopened = webLoginOpened,
+            )
             McaButton(
                 onClick = { onOpenUrl(auth.authorizeUrl) },
                 style = McaButtonStyle.Primary,
                 size = McaButtonSize.CardAction,
-            ) { Text("打开授权页面") }
+            ) { Text(onboardAuthButtonLabel(inAppKind)) }
             McaButton(
                 onClick = { onCopy(auth.authorizeUrl) },
                 style = McaButtonStyle.Outlined,
@@ -1109,13 +1196,7 @@ private fun OnboardAuthMethodBody(
             state.callbackInput,
             "粘贴完整回调地址，或只贴 code",
         ) { onCallbackInput(it) }
-        Spacer(Modifier.height(6.dp))
-        McaButton(
-            onClick = onSubmitCallback,
-            style = McaButtonStyle.Outlined,
-            size = McaButtonSize.CardAction,
-            enabled = !state.busy,
-        ) { Text("我已授权，继续") }
+        // 「我已授权，继续」在弹窗 footer（`confirmButton`）。
     }
     Spacer(Modifier.height(8.dp))
     McaButton(onClick = onCancel, style = McaButtonStyle.Outlined, size = McaButtonSize.CardAction) {
@@ -1139,10 +1220,7 @@ private fun OnboardDeviceMethodBody(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(8.dp))
-        McaButton(onClick = onStart, style = McaButtonStyle.Primary, enabled = !state.busy) {
-            Text(if (state.busy) "创建中…" else "开始登录")
-        }
+        // 「开始登录」在弹窗 footer（`confirmButton`）。
         return
     }
     if (device.hasUserCode) {
@@ -1170,21 +1248,36 @@ private fun OnboardDeviceMethodBody(
                     onClick = { onOpenUrl(device.verificationUri) },
                     style = McaButtonStyle.Primary,
                     size = McaButtonSize.CardAction,
-                ) { Text("打开授权页面") }
+                ) { Text(onboardAuthButtonLabel(OnboardAuthActionKind.ExternalBrowser)) }
             }
+        }
+        onboardAuthButtonHint(OnboardAuthActionKind.ExternalBrowser)?.let { hint ->
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     } else if (device.loginUrl.isNotBlank()) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // 渠道私有登录页（trae / kiro / zed …）：第三方站点，只能外部浏览器。
             McaButton(
                 onClick = { onOpenUrl(device.loginUrl) },
                 style = McaButtonStyle.Primary,
                 size = McaButtonSize.CardAction,
-            ) { Text("打开登录页面") }
+            ) { Text(onboardAuthButtonLabel(OnboardAuthActionKind.ExternalBrowser)) }
             McaButton(
                 onClick = { onCopy(device.loginUrl) },
                 style = McaButtonStyle.Outlined,
                 size = McaButtonSize.CardAction,
             ) { Text("复制链接") }
+        }
+        onboardAuthButtonHint(OnboardAuthActionKind.ExternalBrowser)?.let { hint ->
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
     Spacer(Modifier.height(8.dp))
@@ -1212,10 +1305,7 @@ private fun OnboardTokenJsonBody(
         placeholder = "sk-… 或 {\"access_token\":\"…\"}",
         onValueChange = onTokenInput,
     )
-    Spacer(Modifier.height(8.dp))
-    McaButton(onClick = onSubmit, style = McaButtonStyle.Primary, enabled = !state.busy) {
-        Text(if (state.busy) "接入中…" else "导入并接入")
-    }
+    // 主按钮在弹窗 footer（`confirmButton`），这里不再放第二颗「导入并接入」。
 }
 
 /** 手动凭据：按渠道 `auth_form_schema` 生成表单（桌面 `onboard.js:297-354`）。 */
@@ -1242,10 +1332,8 @@ private fun OnboardManualBody(
         }
     }
     Spacer(Modifier.height(8.dp))
+    // 「接入」在 footer；这里只留次要动作（自定义渠道）。
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        McaButton(onClick = onSubmit, style = McaButtonStyle.Primary, enabled = !state.busy) {
-            Text(if (state.busy) "接入中…" else "接入")
-        }
         McaButton(onClick = onOpenCustomForm, style = McaButtonStyle.Outlined, size = McaButtonSize.CardAction) {
             Text("自定义渠道（Base URL）")
         }
@@ -1292,10 +1380,7 @@ private fun OnboardWindsurfBody(
             ) { Text(if (showPassword) "隐藏" else "显示") }
         },
     ) { onPassword(it) }
-    Spacer(Modifier.height(8.dp))
-    McaButton(onClick = onSubmit, style = McaButtonStyle.Primary, enabled = !state.busy) {
-        Text(if (state.busy) "登录中…" else "登录并接入")
-    }
+    // 「登录并接入」在弹窗 footer（`confirmButton`）。
 }
 
 /** 多行输入框（Token / JSON 用）；48dp 最小高、字号放大不裁字。 */

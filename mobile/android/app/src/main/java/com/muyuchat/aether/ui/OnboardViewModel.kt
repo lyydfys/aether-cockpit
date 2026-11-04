@@ -211,6 +211,178 @@ internal data class OnboardConnectState(
         get() = methods.firstOrNull { it.id == active }
 }
 
+/** 接入弹窗 footer 里的主按钮要触发的动作（决定点下去调哪个回调）。 */
+internal enum class OnboardPrimaryKind {
+    /** 当前阶段没有 footer 主按钮（例如设备码已弹出、等用户去授权）。 */
+    None,
+    StartAuth,
+    CommitAuth,
+    SubmitCallback,
+    StartDevice,
+    SubmitTokenJson,
+    SubmitManual,
+    SubmitWindsurf,
+}
+
+/**
+ * footer 主按钮的展示模型：文案 + 是否可点 + 置灰原因。
+ *
+ * 为什么要有 [hint]：必填项没填时按钮是**置灰**的，用户需要一个"为什么点不了"的说明，
+ * 否则会以为是坏了（这正是「找不到确定按钮」那类投诉的变种）。
+ */
+internal data class OnboardPrimaryAction(
+    val label: String = "",
+    val enabled: Boolean = false,
+    val hint: String? = null,
+    val kind: OnboardPrimaryKind = OnboardPrimaryKind.None,
+) {
+    /** 没有主按钮时 footer 只留「关闭」。 */
+    val visible: Boolean get() = kind != OnboardPrimaryKind.None
+}
+
+/** 当前接入方式在"该阶段"的主动作是谁；纯函数，供 footer 与单测共用。 */
+internal fun onboardPrimaryKind(state: OnboardConnectState): OnboardPrimaryKind = when {
+    state.active == "token_json" -> OnboardPrimaryKind.SubmitTokenJson
+    state.active == "manual_input" -> OnboardPrimaryKind.SubmitManual
+    state.active == "windsurf_login" -> OnboardPrimaryKind.SubmitWindsurf
+    // PKCE / 通用设备码走 /api/auth 三段式：start → 轮询 → commit
+    state.active == "oauth_pkce" || state.active == "device_code" -> {
+        val auth = state.auth
+        when {
+            auth == null -> OnboardPrimaryKind.StartAuth
+            auth.isSuccess -> OnboardPrimaryKind.CommitAuth
+            auth.authorizeUrl.isNotBlank() -> OnboardPrimaryKind.SubmitCallback
+            // 已经拿到设备码：正文里的「打开授权页面」才是主操作，footer 不再抢。
+            else -> OnboardPrimaryKind.None
+        }
+    }
+    // 渠道私有设备码（trae / kiro / zed …）：服务端轮询到状态就自己入库，无需 commit。
+    onboardDeviceKind(state.active) != null ->
+        if (state.device == null) OnboardPrimaryKind.StartDevice else OnboardPrimaryKind.None
+    else -> OnboardPrimaryKind.None
+}
+
+/**
+ * 计算 footer 主按钮：**必填缺失 → 置灰并给原因**，而不是让用户点了才报错。
+ *
+ * 规则（每种接入方式）：
+ * - `token_json`：Token/JSON 输入为空 → 置灰「先粘贴 Access Token 或完整 JSON」；
+ * - `manual_input`：`auth_form_schema` 里 `required` 的字段只要有空 → 置灰并列出还缺哪些；
+ * - `windsurf_login`：邮箱或密码为空 → 置灰「请填写邮箱与密码」；
+ * - 授权类（start / commit / 回调提交 / 开始登录）：只受 `busy` 影响；
+ * - `busy` 时一律置灰，文案换成进行中（提交中… / 登录中… / 处理中…）。
+ */
+internal fun onboardPrimaryAction(state: OnboardConnectState): OnboardPrimaryAction {
+    val kind = onboardPrimaryKind(state)
+    if (kind == OnboardPrimaryKind.None) {
+        return OnboardPrimaryAction()
+    }
+    val busyLabel = when (kind) {
+        OnboardPrimaryKind.SubmitTokenJson, OnboardPrimaryKind.SubmitManual -> "提交中…"
+        OnboardPrimaryKind.SubmitWindsurf -> "登录中…"
+        OnboardPrimaryKind.CommitAuth -> "入库中…"
+        else -> "处理中…"
+    }
+    if (state.busy) {
+        return OnboardPrimaryAction(label = busyLabel, enabled = false, kind = kind)
+    }
+    return when (kind) {
+        OnboardPrimaryKind.SubmitTokenJson -> {
+            val blank = state.tokenInput.isBlank()
+            OnboardPrimaryAction(
+                label = "导入并接入",
+                enabled = !blank,
+                hint = if (blank) "先粘贴 Access Token 或完整 JSON" else null,
+                kind = kind,
+            )
+        }
+        OnboardPrimaryKind.SubmitManual -> {
+            val missing = state.manualSchema.filter { it.required && state.manualValues[it.key].isNullOrBlank() }
+            OnboardPrimaryAction(
+                label = "接入",
+                enabled = missing.isEmpty(),
+                hint = if (missing.isEmpty()) null else "还需填写：" + missing.joinToString("、") { it.label },
+                kind = kind,
+            )
+        }
+        OnboardPrimaryKind.SubmitWindsurf -> {
+            val blank = state.windsurfEmail.isBlank() || state.windsurfPassword.isBlank()
+            OnboardPrimaryAction(
+                label = "登录并接入",
+                enabled = !blank,
+                hint = if (blank) "请填写邮箱与密码" else null,
+                kind = kind,
+            )
+        }
+        OnboardPrimaryKind.StartAuth -> OnboardPrimaryAction("开始授权", true, kind = kind)
+        OnboardPrimaryKind.CommitAuth -> OnboardPrimaryAction("完成接入", true, kind = kind)
+        OnboardPrimaryKind.SubmitCallback -> OnboardPrimaryAction("我已授权，继续", true, kind = kind)
+        OnboardPrimaryKind.StartDevice -> OnboardPrimaryAction("开始登录", true, kind = kind)
+        OnboardPrimaryKind.None -> OnboardPrimaryAction()
+    }
+}
+
+/* ==========================================================================
+ * 登录类按钮的文案（用户要求：文案要跟"是否在应用内"对齐，不能一个词打天下）
+ *
+ * 旧文案统一写「打开登录页面」，但 PKCE 现在在应用内 WebView 打开、设备码仍是外部浏览器，
+ * 同一句话会让用户以为会跳出去（或反过来）。所以按场景分四种，集中在这里定义。
+ * ========================================================================== */
+
+/** 登录按钮的场景。 */
+internal enum class OnboardAuthActionKind {
+    /** PKCE：第一次在应用内打开登录页。 */
+    InAppLogin,
+
+    /** PKCE：已经打开过一次，再打开。 */
+    InAppLoginReopen,
+
+    /** 设备码 / 私有设备码：确认页必须在外部浏览器打开。 */
+    ExternalBrowser,
+
+    /** 手机端做不了、只能桌面端完成（不给会失败的按钮）。 */
+    DesktopOnly,
+}
+
+/**
+ * 登录按钮文案。
+ *
+ * - 应用内：**「在应用内登录」/「重新打开登录页」**（不跳浏览器，用户不会误以为离开了 App）；
+ * - 外部浏览器：**「打开授权页面」**，配合 [onboardAuthButtonHint] 的「将在浏览器中打开」；
+ * - 桌面端：**「该渠道需在桌面端登录」**。
+ */
+internal fun onboardAuthButtonLabel(kind: OnboardAuthActionKind): String = when (kind) {
+    OnboardAuthActionKind.InAppLogin -> "在应用内登录"
+    OnboardAuthActionKind.InAppLoginReopen -> "重新打开登录页"
+    OnboardAuthActionKind.ExternalBrowser -> "打开授权页面"
+    OnboardAuthActionKind.DesktopOnly -> "该渠道需在桌面端登录"
+}
+
+/** 按钮下方的补充提示：只有"会跳到外部浏览器"与"只能桌面端"需要提醒。 */
+internal fun onboardAuthButtonHint(kind: OnboardAuthActionKind): String? = when (kind) {
+    OnboardAuthActionKind.ExternalBrowser -> "将在浏览器中打开"
+    OnboardAuthActionKind.DesktopOnly -> "手机端无法完成该登录，请改用 Token / JSON"
+    OnboardAuthActionKind.InAppLogin, OnboardAuthActionKind.InAppLoginReopen -> null
+}
+
+/**
+ * 把「接入方式 + 是否已打开过 + 被拦原因」归到上面四种场景。
+ *
+ * [blockedReason] 非空表示手机端做不了（`onboardMethodBlockedBy` 的返回值）→ 桌面端场景。
+ */
+internal fun onboardAuthActionKind(
+    method: String,
+    blockedReason: String? = null,
+    reopened: Boolean = false,
+): OnboardAuthActionKind = when {
+    blockedReason != null -> OnboardAuthActionKind.DesktopOnly
+    // PKCE 走本机回环回调，能在应用内 WebView 里走完
+    method == "oauth_pkce" ->
+        if (reopened) OnboardAuthActionKind.InAppLoginReopen else OnboardAuthActionKind.InAppLogin
+    // 设备码 / 私有设备码：确认页是第三方站点，只能外部浏览器
+    else -> OnboardAuthActionKind.ExternalBrowser
+}
+
 /**
  * 接入向导的编排：发起 → 轮询 → 入库，全部经本机网关，不依赖桌面。
  *
@@ -677,6 +849,49 @@ internal class OnboardConnectController(
     fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
+    }
+
+    /**
+     * 应用内 WebView 登录的兜底：立刻拉一次授权状态，不等下一个轮询周期。
+     *
+     * 场景：WebView 里已经跳到 `127.0.0.1/oauth/callback`（网关已收下 code），
+     * 但周期轮询还没轮到——用户点「完成」时用它把状态推进到 success，footer 随即出现「完成接入」。
+     * 失败静默：周期轮询仍在跑，这里只是催一下。
+     */
+    fun nudgeAuthPoll() {
+        val session = _state.value?.auth ?: return
+        if (session.isSuccess || session.isError) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val next = withContext(Dispatchers.IO) { client.getAuth(status, session.id) }
+                when {
+                    next.isSuccess -> {
+                        stopPolling()
+                        mutate { it.copy(auth = next, statusLine = "授权成功，确认备注名即可入库。") }
+                    }
+                    next.isError -> {
+                        stopPolling()
+                        mutate {
+                            it.copy(
+                                auth = next,
+                                statusLine = "",
+                                error = "授权失败：${next.error.ifBlank { next.status }}",
+                            )
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 周期轮询还在跑，催一次失败不打扰用户。
+            }
+        }
     }
 
     private fun mutate(block: (OnboardConnectState) -> OnboardConnectState) {

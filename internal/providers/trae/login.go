@@ -40,6 +40,11 @@ const (
 	traeClientID     = "ono9krqynydwx5"
 	traeSoloClientID = "en1oxy7wnw8j9n"
 	traeLoginTimeout = 10 * time.Minute
+	// callbackPath 是本机回环服务唯一接受的路径。
+	// 之前 mux 把 "/" 上的一切请求都交给回调处理：用户把回调地址当登录页打开、
+	// 或浏览器带 isRedirect 回来时，只会得到"缺少 auth code"，既误导也掩盖了
+	// "浏览器流程需要 Trae 客户端"这个事实。
+	callbackPath = "/authorize"
 )
 
 func traeClientIDFor(providerID string) string {
@@ -103,7 +108,7 @@ func StartLogin(providerID string) (*LoginSession, error) {
 		return nil, fmt.Errorf("分配 Trae 回调端口失败: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	cbURL := fmt.Sprintf("http://127.0.0.1:%d/authorize", port)
+	cbURL := fmt.Sprintf("http://127.0.0.1:%d%s", port, callbackPath)
 	verifier := randB64(32)
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
@@ -153,9 +158,9 @@ func StartLogin(providerID string) (*LoginSession, error) {
 		host:       host,
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		s.handleCallback(w, r)
-	})
+	// 只认回调路径；其它路径明确返回说明页，不再被当成回调。
+	mux.HandleFunc(callbackPath, s.handleCallback)
+	mux.HandleFunc("/", s.handleNotCallback)
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = s.srv.Serve(ln) }()
 	s.timer = time.AfterFunc(traeLoginTimeout, func() {
@@ -203,14 +208,24 @@ func (s *LoginSession) handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if code == "" {
-		s.fail("Trae 回调缺少 auth code")
-		_, _ = w.Write([]byte("<html><body>Trae 授权失败：缺少 auth code</body></html>"))
+		// 两种"没有 code"分开说，避免统一一句"缺少 auth code"误导：
+		//  1) 官方页面带 isRedirect 回来 = 它把 Web 流程交给了 Trae 客户端，
+		//     而浏览器/手机上没人回传 auth code；手机端注定完不成。
+		//  2) 回调地址被直接打开 = 没有参数，提示用户走正确入口。
+		var msg string
+		if q.Has("isRedirect") {
+			msg = "Trae 授权需要 Trae 客户端回传授权码；浏览器只收到 isRedirect，手机端无法完成。请改用「手动 Token」接入。"
+		} else {
+			msg = "Trae 回调缺少 auth code：请从 Aether Cockpit 的「打开登录页面」进入官方授权页；手机端没有 Trae 客户端时请改用「手动 Token」。"
+		}
+		s.fail(msg)
+		writeLoginPage(w, http.StatusOK, "Trae 授权未完成", msg)
 		return
 	}
 	tok, userID, err := s.exchange(code)
 	if err != nil {
 		s.fail(err.Error())
-		_, _ = w.Write([]byte("<html><body>Trae 授权失败：token 交换失败</body></html>"))
+		writeLoginPage(w, http.StatusOK, "Trae 授权失败", "token 交换失败："+err.Error())
 		return
 	}
 	s.mu.Lock()
@@ -222,7 +237,26 @@ func (s *LoginSession) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	s.stop()
-	_, _ = w.Write([]byte("<html><body style='font-family:sans-serif;text-align:center;padding:32px'><h2>Trae 登录已完成</h2><p>可以关闭此页面返回 Aether Cockpit。</p></body></html>"))
+	writeLoginPage(w, http.StatusOK, "Trae 登录已完成", "可以关闭此页面返回 Aether Cockpit。")
+}
+
+// handleNotCallback 处理"打错/直接打开"的路径：明确说清这里是回调服务，
+// 而不是登录页（旧实现把 "/" 全部当回调，才会出现误导性的"缺少 auth code"）。
+func (s *LoginSession) handleNotCallback(w http.ResponseWriter, r *http.Request) {
+	writeLoginPage(w, http.StatusNotFound, "这不是 Trae 登录页",
+		"此地址只用于接收 Trae 授权回调，直接打开不会完成登录。<br>"+
+			"请回到 Aether Cockpit 点击「打开登录页面」；手机端没有 Trae 客户端时，请改用「手动 Token」接入。")
+}
+
+// writeLoginPage 输出统一的中文说明页（带 charset，手机浏览器可读）。
+func writeLoginPage(w http.ResponseWriter, status int, title, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w,
+		`<!doctype html><html><head><meta charset="utf-8">`+
+			`<meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title></head>`+
+			`<body style="font-family:sans-serif;padding:32px;line-height:1.6;max-width:640px;margin:0 auto">`+
+			`<h2>%s</h2><p>%s</p></body></html>`, title, title, body)
 }
 
 func (s *LoginSession) exchange(code string) (string, string, error) {

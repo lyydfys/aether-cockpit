@@ -356,7 +356,9 @@ internal fun parseProviders(body: String): List<ProviderSummary> {
             hasOAuth = item.optBoolean("oauth", false),
             modelIds = parseModelIds(item.optJSONArray("models")),
             // 缺失 / null / 非布尔值一律按 true：老服务端不认这个字段时不能把渠道标成不可对话。
-            chat = item.optBoolean("chat", true),
+            // 注意不能用 optBoolean：Android 的 org.json 会把字符串 "false" 强转成 false，
+            // 那会让畸形回包把渠道误标成「仅账号/额度」。这里自己判类型。
+            chat = (item.opt("chat") as? Boolean) ?: true,
         )
     }
     return out

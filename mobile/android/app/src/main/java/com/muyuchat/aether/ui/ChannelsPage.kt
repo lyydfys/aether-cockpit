@@ -759,16 +759,6 @@ private fun SectionHeader(title: String, note: String) {
 }
 
 /**
- * 账号卡片。
- *
- * 只显示核实过的字段：名称、启用开关（`disabled`）、额度百分比条与窗口、
- * 重置时间（`reset_at`）、最近使用（`last_used`）、额度错误原文（`quota_error`）、
- * 签到入口（仅 `checkin_supported`）。`quota_supported == false` 时写
- * 「该渠道不提供额度接口」并且**不画 0% 的空条**，也不给「读取额度」按钮（点了也没用）。
- *
- * 「读取额度」是单账号动作：走 `POST /api/accounts/{id}/refresh`，成功用回包快照就地重画。
- */
-/**
  * 「仅账号/额度」被动标签：给 `chat == false` 的渠道（cursor / windsurf / zed）用。
  *
  * 尺寸上刻意压到 labelSmall + 1dp 垂直内边距，并且**不做可点击**（它不是筛选 chip）：
@@ -790,6 +780,16 @@ private fun ChatUnsupportedTag() {
     }
 }
 
+/**
+ * 账号卡片。
+ *
+ * 只显示核实过的字段：名称、启用开关（`disabled`）、额度百分比条与窗口、
+ * 重置时间（`reset_at`）、最近使用（`last_used`）、额度错误原文（`quota_error`）、
+ * 签到入口（仅 `checkin_supported`）。`quota_supported == false` 时写
+ * 「该渠道不提供额度接口」并且**不画 0% 的空条**，也不给「读取额度」按钮（点了也没用）。
+ *
+ * 「读取额度」是单账号动作：走 `POST /api/accounts/{id}/refresh`，成功用回包快照就地重画。
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AccountQuotaCard(
