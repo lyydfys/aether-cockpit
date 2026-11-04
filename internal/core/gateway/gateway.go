@@ -458,6 +458,13 @@ func New(cfg Config) *Gateway {
 	g.syncRedactPrefs()
 	// 请求管线插件钩子：与脱敏一样是设置驱动的，启动时装载一次。
 	g.syncHooks()
+	// 链路优化：DoH 解析 + 多 IP 竞速。跨境渠道的不同边缘 IP 质量差异明显
+	// （实测同一域名两个 Cloudflare 边缘差 100ms+），竞速能稳定挑到当前最优
+	// 的那个；DoH 保证拿到的是真实地址而不是被污染的答案。
+	//
+	// 只替换建连逻辑：TLS/SNI/证书校验仍按域名完成，走代理时对端是 IP 字面量、
+	// 优化器直接放行，不产生额外开销。
+	g.tr.Optimizer = transport.NewOptimizer(defaultDoHServer, true)
 	g.callerKeys = newCallerKeyStore(filepath.Join(filepath.Dir(g.settingsPath), "caller-keys.json"))
 	// 渠道页的 on/off 参与模型解析（闭包读实时设置，无需重建）。
 	g.models.SetEnabledFilter(g.providerIsEnabled)
@@ -1160,6 +1167,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("GET /api/pipeline-hooks", g.handlePipelineHooks)
 	// 渠道网络档位与在途数（慢链路优化的可观测入口）。
 	m.HandleFunc("GET /api/channels/net", g.handleChannelNet)
+	// 网络诊断：把"卡在哪一环"摊开（DNS / TCP / TLS / 首字节）。
+	m.HandleFunc("GET /api/network/diag", g.handleNetDiag)
 	m.HandleFunc("GET /api/context", g.handleContextEmpty)
 	m.HandleFunc("GET /api/tune", g.handleTuneEmpty)
 	m.HandleFunc("POST /api/tune/{path...}", g.handleTuneAction)

@@ -31,6 +31,10 @@ type Factory struct {
 	DialTimeout time.Duration
 	// EnableHTTP2 是否启用 HTTP/2。
 	EnableHTTP2 bool
+	// Optimizer 是链路优化器（DoH 解析 + 多 IP 竞速）；nil 表示不启用。
+	//
+	// 只影响建连：TLS/SNI/证书校验仍由 http.Transport 按域名完成。
+	Optimizer *Optimizer
 
 	mu sync.Mutex
 	// proxyParsed 缓存解析结果，避免每次请求都解析 URL。
@@ -176,6 +180,13 @@ func (f *Factory) NewClientOpts(policy provider.NetworkPolicy, proxyOverride, tl
 			}
 			tr.Proxy = http.ProxyURL(u)
 		}
+	}
+
+	// 链路优化：替换建连逻辑（DoH 解析 + 多 IP 竞速）。
+	// 只替换 DialContext，TLS/SNI/证书校验不变；走代理时对端是 127.0.0.1，
+	// 优化器会识别为 IP 字面量直接放行，不产生额外解析。
+	if f.Optimizer != nil {
+		tr.DialContext = f.Optimizer.DialContext
 	}
 
 	// TLS 指纹伪装：只替换 TLS 层，代理与连接池策略不变。
