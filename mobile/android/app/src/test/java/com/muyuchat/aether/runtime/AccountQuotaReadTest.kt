@@ -177,4 +177,28 @@ class AccountQuotaReadTest {
         assertTrue(body, body.contains("\"action\":\"refresh\""))
         assertTrue(body, body.contains("\"ids\":[\"acc-1\"]"))
     }
+
+    /**
+     * 客户端必须比服务端更晚放弃。
+     *
+     * 服务端最坏路径 = 凭据续期 45s（`auth_api.go:307-308`）+ 读额度 20s（`auth_api.go:336`）= 65s。
+     * 之前客户端是 60s，比 65s 早，于是回包永远到不了、`quota_error` 永远为空——
+     * 用户只看到"点了没变化"。所以常量必须 ≥ 90s，且不许为了"看起来通过"放到 120s 以上。
+     */
+    @Test
+    fun clientTimeoutOutlastsTheServerWorstCase() {
+        assertEquals(65_000, SERVER_QUOTA_READ_WORST_MS)
+        assertTrue(
+            "ACCOUNT_REFRESH_TIMEOUT_MS=$ACCOUNT_REFRESH_TIMEOUT_MS 必须 ≥ 90_000",
+            ACCOUNT_REFRESH_TIMEOUT_MS >= 90_000,
+        )
+        assertTrue(
+            "客户端超时必须晚于服务端最坏 65s",
+            ACCOUNT_REFRESH_TIMEOUT_MS > SERVER_QUOTA_READ_WORST_MS,
+        )
+        assertTrue(
+            "不要为了通过而把超时放到 120s 以上",
+            ACCOUNT_REFRESH_TIMEOUT_MS < 120_000,
+        )
+    }
 }

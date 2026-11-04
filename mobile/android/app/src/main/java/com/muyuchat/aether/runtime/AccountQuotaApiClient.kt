@@ -130,6 +130,23 @@ data class AccountBatchOutcome(
 }
 
 /**
+ * 服务端单账号「读额度」的最坏路径（毫秒）：
+ * 凭据续期 45s（`auth_api.go:307-308` 的 `context.WithTimeout(..., 45*time.Second)`）
+ * 加读额度 20s（`auth_api.go:336` 的 `readQuotaFor(env, 20*time.Second)`）。
+ * 客户端超时必须比它晚放弃，否则回包永远到不了，`quota_error` 也就永远不存在。
+ */
+internal const val SERVER_QUOTA_READ_WORST_MS = 45_000 + 20_000
+
+/**
+ * 单账号读额度的客户端读超时（毫秒）。
+ *
+ * Why 90：服务端最坏 65s（见 [SERVER_QUOTA_READ_WORST_MS]）+ 25s 余量，
+ * 留给手机网络的 RTT / TLS 握手 / 本机网关中转。低于 65s 就是"客户端先放弃、服务端还在读"的黑洞；
+ * 也不为了"看起来通过"放大到 120s 以上（用户会以为界面卡死）。
+ */
+internal const val ACCOUNT_REFRESH_TIMEOUT_MS = 90_000
+
+/**
  * 账号与额度客户端。
  *
  * 复用管理面的口径（与 [ManagementApiClient] 同一套）：HTTP 只打 `http://<addr>`，
@@ -149,8 +166,8 @@ class AccountQuotaApiClient(
     private val checkinReadTimeoutMs: Int = 100_000,
     /** 批量刷新由服务端逐条串行执行（`accounts_api.go:186-189` 每条还 sleep 1s+），要给足时间。 */
     private val batchReadTimeoutMs: Int = 120_000,
-    /** 单账号读额度：服务端 45s 预算（`auth_api.go:307-308`）内先续期凭证再读额度，读超时必须更长。 */
-    private val accountRefreshTimeoutMs: Int = 60_000,
+    /** 单账号读额度：必须比服务端最坏路径（[SERVER_QUOTA_READ_WORST_MS]）更晚放弃。 */
+    private val accountRefreshTimeoutMs: Int = ACCOUNT_REFRESH_TIMEOUT_MS,
 ) {
     fun fetchAccounts(status: GatewayStatus): List<AccountQuotaRow> {
         val guard = guardOf(status)

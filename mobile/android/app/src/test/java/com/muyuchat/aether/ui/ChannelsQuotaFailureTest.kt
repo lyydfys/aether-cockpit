@@ -82,6 +82,60 @@ class ChannelsQuotaFailureTest {
         assertEquals(QUOTA_READ_NEVER_COPY, quotaReadAtLabel(rows[0].quotaReadAt, now))
     }
 
+    /** 本次「读取额度」失败（kind == QUOTA）→ 额度区出现「读取失败：<真实原因>」。 */
+    @Test
+    fun quotaReadFailureLandsInTheQuotaArea() {
+        val line = quotaReadFailureText(
+            quotaError = "",
+            actionKind = AccountActionKind.QUOTA,
+            actionMessage = "无法连接本机管理接口",
+        )
+        assertEquals("读取失败：无法连接本机管理接口", line)
+        // 已经在额度区显示，就不再走卡片底部的通用红字
+        assertTrue(!showsGenericActionFailure(AccountActionKind.QUOTA))
+    }
+
+    /** 开关失败（kind == TOGGLE）**不许**伪装成"读取失败"。 */
+    @Test
+    fun toggleFailureNeverPosesAsAQuotaReadFailure() {
+        assertNull(
+            quotaReadFailureText(
+                quotaError = "",
+                actionKind = AccountActionKind.TOGGLE,
+                actionMessage = "切换账号状态失败，请重试",
+            ),
+        )
+        // 它仍走原来的通用红字通道
+        assertTrue(showsGenericActionFailure(AccountActionKind.TOGGLE))
+    }
+
+    @Test
+    fun checkinFailureAlsoStaysOutOfTheQuotaArea() {
+        assertNull(
+            quotaReadFailureText(
+                quotaError = "",
+                actionKind = AccountActionKind.CHECKIN,
+                actionMessage = "签到失败，请重试",
+            ),
+        )
+        assertTrue(showsGenericActionFailure(AccountActionKind.CHECKIN))
+    }
+
+    /** 两边都有原因时，服务端 `quota_error` 原文优先（那是持久化的真相）。 */
+    @Test
+    fun serverQuotaErrorWinsOverTheActionMessage() {
+        assertEquals(
+            "读取失败：上游 401",
+            quotaReadFailureText(
+                quotaError = "上游 401",
+                actionKind = AccountActionKind.QUOTA,
+                actionMessage = "无法连接本机管理接口",
+            ),
+        )
+        // 没有动作（Idle）时也不会凭空造一行
+        assertNull(quotaReadFailureText(quotaError = "", actionKind = null, actionMessage = ""))
+    }
+
     private fun row(quotaReadAt: Long = 0L, quotaError: String = "") = AccountQuotaRow(
         accountId = "acc-1",
         providerId = "claude-sub",

@@ -64,11 +64,22 @@ sealed interface ChannelsUiState {
     data class Failed(val code: String, val message: String) : ChannelsUiState
 }
 
-/** 账号级动作（停用·启用、立即签到）的进行/失败态，只影响对应的那张卡。 */
+/** 账号级动作（停用·启用、立即签到、读额度）的进行/失败态，只影响对应的那张卡。 */
 sealed interface AccountActionUiState {
     data object Idle : AccountActionUiState
     data class Busy(val accountId: String, val kind: AccountActionKind) : AccountActionUiState
-    data class Failed(val accountId: String, val code: String, val message: String) : AccountActionUiState
+
+    /**
+     * 失败必须带上 [kind]：三种动作共用一条错误通道，但**页面处置不同**——
+     * 只有 [AccountActionKind.QUOTA] 的失败会进额度区（`读取失败：…`），
+     * 启停/签到的失败仍走卡片底部那条通用红字，否则会把开关失败误标成"读取失败"。
+     */
+    data class Failed(
+        val accountId: String,
+        val code: String,
+        val message: String,
+        val kind: AccountActionKind,
+    ) : AccountActionUiState
 }
 
 enum class AccountActionKind {
@@ -490,7 +501,12 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         }
         val status = repository.status.value
         if (!status.running) {
-            accountAction.value = AccountActionUiState.Failed(accountId, "gateway_not_running", "网关未启动")
+            accountAction.value = AccountActionUiState.Failed(
+                accountId,
+                "gateway_not_running",
+                "网关未启动",
+                AccountActionKind.TOGGLE,
+            )
             return
         }
         accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.TOGGLE)
@@ -502,9 +518,14 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message)
+                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message, AccountActionKind.TOGGLE)
             } catch (_: Exception) {
-                accountAction.value = AccountActionUiState.Failed(accountId, "unknown", "切换账号状态失败，请重试")
+                accountAction.value = AccountActionUiState.Failed(
+                    accountId,
+                    "unknown",
+                    "切换账号状态失败，请重试",
+                    AccountActionKind.TOGGLE,
+                )
             }
         }
     }
@@ -519,7 +540,12 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         }
         val status = repository.status.value
         if (!status.running) {
-            accountAction.value = AccountActionUiState.Failed(accountId, "gateway_not_running", "网关未启动")
+            accountAction.value = AccountActionUiState.Failed(
+                accountId,
+                "gateway_not_running",
+                "网关未启动",
+                AccountActionKind.CHECKIN,
+            )
             return
         }
         accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.CHECKIN)
@@ -537,9 +563,14 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message)
+                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message, AccountActionKind.CHECKIN)
             } catch (_: Exception) {
-                accountAction.value = AccountActionUiState.Failed(accountId, "unknown", "签到失败，请重试")
+                accountAction.value = AccountActionUiState.Failed(
+                    accountId,
+                    "unknown",
+                    "签到失败，请重试",
+                    AccountActionKind.CHECKIN,
+                )
             }
         }
     }
@@ -560,12 +591,22 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         }
         val status = repository.status.value
         if (!status.running) {
-            accountAction.value = AccountActionUiState.Failed(accountId, "gateway_not_running", "网关未启动")
+            accountAction.value = AccountActionUiState.Failed(
+                accountId,
+                "gateway_not_running",
+                "网关未启动",
+                AccountActionKind.QUOTA,
+            )
             return
         }
         val row = currentAccountRows().firstOrNull { it.accountId == accountId }
         if (row != null && !row.quotaSupported) {
-            accountAction.value = AccountActionUiState.Failed(accountId, "quota_unsupported", QUOTA_UNSUPPORTED_COPY)
+            accountAction.value = AccountActionUiState.Failed(
+                accountId,
+                "quota_unsupported",
+                QUOTA_UNSUPPORTED_COPY,
+                AccountActionKind.QUOTA,
+            )
             return
         }
         accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.QUOTA)
@@ -582,14 +623,19 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 accountAction.value = if (failure == null) {
                     AccountActionUiState.Idle
                 } else {
-                    AccountActionUiState.Failed(accountId, failure.first, failure.second)
+                    AccountActionUiState.Failed(accountId, failure.first, failure.second, AccountActionKind.QUOTA)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message)
+                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message, AccountActionKind.QUOTA)
             } catch (_: Exception) {
-                accountAction.value = AccountActionUiState.Failed(accountId, "unknown", "读取额度失败，请重试")
+                accountAction.value = AccountActionUiState.Failed(
+                    accountId,
+                    "unknown",
+                    "读取额度失败，请重试",
+                    AccountActionKind.QUOTA,
+                )
             }
         }
     }

@@ -717,7 +717,7 @@ private fun AccountQuotaCard(
 
             // 额度
             Spacer(Modifier.height(12.dp))
-            QuotaBlock(row = row, nowMs = nowMs)
+            QuotaBlock(row = row, nowMs = nowMs, actionFailure = failure)
 
             // 重置时间 / 最近使用
             Spacer(Modifier.height(8.dp))
@@ -769,7 +769,9 @@ private fun AccountQuotaCard(
             // 探测结论：独占一行（1.3× 字号下跟按钮挤一行会压成竖排单字）
             ProbeStatusText(probe = probe, probing = probing)
 
-            if (failure != null) {
+            // 读取额度失败已经进额度区（`读取失败：…`），这里只留启停/签到这类通用失败，
+            // 否则同一句原因会在卡片上出现两次。
+            if (failure != null && showsGenericActionFailure(failure.kind)) {
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = "${failure.message}（错误码：${failure.code}）",
@@ -872,7 +874,7 @@ private fun AccountQuotaCard(
 
 /** 额度区：有窗口画窗口条，有总量/已用画一条总条，都没有就说明原因（绝不画 0%）。 */
 @Composable
-private fun QuotaBlock(row: AccountQuotaRow, nowMs: Long) {
+private fun QuotaBlock(row: AccountQuotaRow, nowMs: Long, actionFailure: AccountActionUiState.Failed?) {
     if (!row.quotaSupported) {
         Text(
             text = QUOTA_UNSUPPORTED_COPY,
@@ -916,8 +918,14 @@ private fun QuotaBlock(row: AccountQuotaRow, nowMs: Long) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    // 读取失败：把服务端 quota_error 原文贴出来（只有这一行染 error 色，容器与其它行保持中性）。
-    quotaReadFailureLabel(row.quotaError)?.let { line ->
+    // 读取失败：服务端 quota_error 原文优先；没有原文但本次确实是"读取额度"失败的，
+    // 用这次动作的真实原因（只认 kind == QUOTA，不把启停/签到失败误标成读取失败）。
+    // 只有这一行染 error 色，容器与其它行保持中性。
+    quotaReadFailureText(
+        quotaError = row.quotaError,
+        actionKind = actionFailure?.kind,
+        actionMessage = actionFailure?.message.orEmpty(),
+    )?.let { line ->
         Text(
             text = line,
             style = MaterialTheme.typography.bodySmall,
@@ -1261,6 +1269,28 @@ internal fun quotaReadFailureLabel(quotaError: String): String? {
     val text = quotaError.trim()
     return if (text.isEmpty()) null else "读取失败：$text"
 }
+
+/**
+ * 额度区「读取失败」这一行最终显示什么。
+ *
+ * 优先级：服务端 `quota_error` 原文 → 本次「读取额度」动作的真实失败原因（**只认 kind == QUOTA**）。
+ * 启停/签到的失败返回 null，不会混进额度区（它们仍走卡片底部那条通用红字）。
+ */
+internal fun quotaReadFailureText(
+    quotaError: String,
+    actionKind: AccountActionKind?,
+    actionMessage: String,
+): String? {
+    quotaReadFailureLabel(quotaError)?.let { return it }
+    if (actionKind != AccountActionKind.QUOTA) {
+        return null
+    }
+    return quotaReadFailureLabel(actionMessage)
+}
+
+/** 通用失败红字只服务启停/签到：额度动作的失败已经在额度区里显示了，不重复贴第二遍。 */
+internal fun showsGenericActionFailure(kind: AccountActionKind): Boolean =
+    kind != AccountActionKind.QUOTA
 
 /**
  * 没有额度条可画时的说明文案；有条可画就返回 null（不再叠一句话）。
