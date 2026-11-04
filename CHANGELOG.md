@@ -1,5 +1,14 @@
 # 更新日志
 
+## 0.1.12（2026-11-04）
+
+### 安全修复：兼容渠道的请求被发到示例地址（密钥外泄）
+
+- **现象**：任何"没有自己 spec 的 OpenAI 兼容渠道"（包括新加的自定义端点、以及本轮新增的 Open Design）在账号没填 `base_url` 时，请求会连同**用户的 API Key** 一起被发到通用示例 spec 里写的地址——`configs/specs/openai-compat.json` 里是 `https://api.deepseek.com/v1`。表现是上游返回 `401 Authentication Fails, Your api key: ****xxxx is invalid`。
+- **原因**：渠道没有自己的 spec 时会回退继承通用 `openai-compat` spec，而这份回退是**整份照搬**，把示例的 `base_url`、`models` 映射、`system_prompt_inject` 一并继承了过去，覆盖了渠道自己的默认地址。
+- **修复**：回退只继承"怎么说话"（请求头模板、签名规则、端点路径、补偿中间件），不再继承"说到哪里去 / 叫什么名字"（`base_url`、模型映射、系统提示词、请求参数覆盖、OAuth）。渠道与账号自己的地址优先级不变。
+- 新增 `AETHER_DUMP_UPSTREAM=<文件>` 调试开关：把网关实际发给上游的请求（含目标 URL、请求头、请求体）追加到文件，用于排查"curl 能通、走网关却失败"这类只在客户端侧有差异的问题。
+
 ## 0.1.11（2026-11-04）
 
 ### 网络诊断：把"卡在哪一环"摊开

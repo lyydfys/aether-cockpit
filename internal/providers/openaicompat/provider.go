@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -164,14 +165,38 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 	return manifest
 }
 
+// genericSpecForVendor 把"通用 openai-compat spec"收敛成可安全继承的形态。
+//
+// 只保留"怎么说话"的部分（头模板、签名、端点路径、补偿中间件），
+// 去掉"说到哪里去"和"叫什么名字"的部分（base_url、模型映射、系统提示注入）。
+// 后者是示例配置，继承过去就是静默改路由、改模型名——曾经的实现整份照搬，
+// 导致所有没有自己 spec 的兼容渠道都被发到示例地址 api.deepseek.com。
+func genericSpecForVendor(gen *spec.Spec) *spec.Spec {
+	if gen == nil {
+		return nil
+	}
+	cp := gen.Clone()
+	cp.ProviderID = ""
+	cp.BaseURL = ""
+	cp.Models = nil
+	cp.SystemPromptInject = ""
+	cp.RequestOverrides = nil
+	cp.OAuth = nil
+	return cp
+}
+
 // ChatStream 调用上游并解析 SSE。
 func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req *ir.UnifiedChatRequest) (<-chan ir.UnifiedStreamEvent, error) {
 	// spec 是可热更新的参数层：优先读渠道自己的 spec（DeepSeek / Cline /
 	// Bedrock 等预设都能单独声明 base_url、头模板、签名和模型映射），
 	// 没有时回退到通用 openai-compat，保持旧配置兼容。
 	sp := spec.Load(p.cfg.ID)
+	// 回退**只能继承行为，不能继承地址**：通用 spec 里的 base_url 是示例值
+	// （当前指向 api.deepseek.com），模型映射也是示例映射。整份照搬会把任何
+	// 没有自己 spec 的 OpenAI 兼容渠道——包括用户新加的渠道——的请求连同用户
+	// 密钥一起发到示例地址去。所以这里只保留头模板 / 签名 / 端点 / 中间件。
 	if sp == nil && p.cfg.ID != "" && p.cfg.ID != "openai-compat" {
-		sp = spec.Load("openai-compat")
+		sp = genericSpecForVendor(spec.Load("openai-compat"))
 	}
 
 	accountBase := strings.TrimRight(strings.TrimSpace(env.GetCredential("base_url")), "/")
@@ -313,6 +338,32 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	}
 
 	client := env.Client()
+
+	// 调试开关：把即将发往上游的请求原样追加到指定文件。
+	//
+	// 排查"同样用 curl 能通、走网关却 401"这类问题时，唯一可靠的办法是看
+	// 网关到底把请求发去了哪里、带的是什么头——凭猜测会走很多弯路。
+	if path := strings.TrimSpace(os.Getenv("AETHER_DUMP_UPSTREAM")); path != "" {
+		specID := "-"
+		if sp != nil {
+			specID = sp.ProviderID
+		}
+		var b strings.Builder
+		b.WriteString("=== " + time.Now().Format("15:04:05.000") + " provider=" + p.cfg.ID +
+			" cfgBase=" + p.cfg.BaseURL + " account=" + env.AccountID +
+			" accountBase=" + accountBase + " resolved=" + baseURL + " spec=" + specID + " ===\n")
+		b.WriteString(httpReq.Method + " " + httpReq.URL.String() + "\n")
+		for k, v := range httpReq.Header {
+			b.WriteString(k + ": " + strings.Join(v, ",") + "\n")
+		}
+		b.WriteString("\n")
+		b.Write(body)
+		b.WriteString("\n\n")
+		if f, ferr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); ferr == nil {
+			_, _ = f.WriteString(b.String())
+			_ = f.Close()
+		}
+	}
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
