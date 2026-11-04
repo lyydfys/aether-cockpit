@@ -1916,6 +1916,152 @@ internal fun accountMoreMenuItems(
     return items
 }
 
+/* ==========================================================================
+ * 字段文案：每个数字都要说清「是什么 / 影响什么 / 范围与默认值」
+ *
+ * 用户反馈：详情与设置弹窗里只显示数字，没人知道 5 / 80 / 留空 是什么意思。
+ * 桌面依据（`channels.js`）：优先级 `0 = 默认，1 = 首选`（`:476`，clamp ≥0 `:504`）、
+ * 权重 `1 - 1000`（`:477`，clamp 1..1000 `:505`）、并发上限 `留空 = 跟随全局`（`:478`，
+ * 空 → -1 `:506`）、渠道并发上限 `跟随全局`（`:1065`）、计费倍率 `1`（`:1064`）、
+ * 价格单位 `美元 / 百万 tokens`（`:1038`）、模型倍率 `留空=未配置`（`:1057`）。
+ * ========================================================================== */
+
+/** 账号详情/设置里出现的数字字段。 */
+internal enum class AccountField {
+    Enabled,
+    Priority,
+    Weight,
+    Concurrency,
+    Whitelist,
+    QuotaUsage,
+    TokenUsage,
+    Cost,
+}
+
+/**
+ * 一个字段的三段文案。
+ *
+ * @property label 它叫什么（与桌面字段名一致）
+ * @property help 它影响什么（显示在输入框下方/数值下方的那行小字）
+ * @property range 范围 / 默认值 / 单位——有默认值就必须写出来
+ */
+internal data class AccountFieldCopy(
+    val label: String,
+    val help: String,
+    val range: String,
+)
+
+/** 字段文案表：全站唯一来源，页面里不许散写。 */
+internal fun accountFieldCopy(field: AccountField): AccountFieldCopy = when (field) {
+    AccountField.Enabled -> AccountFieldCopy(
+        label = "启用",
+        help = "停用后这个账号不再参与路由，凭据仍保留在本机",
+        range = "默认：启用",
+    )
+    AccountField.Priority -> AccountFieldCopy(
+        label = "优先级",
+        help = "数字越小越先被选中；同一模型下按优先级排队",
+        range = "范围 ≥ 0 · 默认 0 · 填 1 = 首选",
+    )
+    AccountField.Weight -> AccountFieldCopy(
+        label = "权重",
+        help = "同优先级时按权重分配流量，越大分到越多",
+        range = "范围 1 – 1000 · 默认 1",
+    )
+    AccountField.Concurrency -> AccountFieldCopy(
+        label = "并发上限",
+        help = "该账号同时最多几个请求；到上限后请求会排队或转给别的账号",
+        range = "留空或 -1 = 跟随全局 · 单位：个",
+    )
+    AccountField.Whitelist -> AccountFieldCopy(
+        label = "账号级白名单",
+        help = "限制这个账号只能路由哪些模型；桌面端已改为跟随渠道勾选，这里只保留「清空」",
+        range = "单位：个 · 清空后跟随渠道",
+    )
+    AccountField.QuotaUsage -> AccountFieldCopy(
+        label = "额度用量",
+        help = "已用 / 总额：来自渠道接口的读数，不是本机统计",
+        range = "单位见数值后缀（%, 次, tokens）",
+    )
+    AccountField.TokenUsage -> AccountFieldCopy(
+        label = "令牌用量",
+        help = "本机账本累计，不是渠道后台数字",
+        range = "单位：tokens · 含输入与输出",
+    )
+    AccountField.Cost -> AccountFieldCopy(
+        label = "费用",
+        help = "按本机价格表估算，未计价次数单独列出",
+        range = "单位：$ · 未计价的请求不计入",
+    )
+}
+
+/**
+ * 只读数字行：**标签 —— 值（右对齐）—— 单位** 三段式，说明在下一行小字。
+ *
+ * 与桌面 `detail-field` 同结构；值固定右对齐，多行纵向能对齐成一列。
+ */
+@Composable
+private fun AccountReadonlyRow(
+    copy: AccountFieldCopy,
+    value: String,
+    unit: String = "",
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = copy.label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(88.dp),
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (unit.isNotBlank()) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = unit,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            text = copy.help,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** 可改字段：标签在输入框里、范围当 placeholder、说明贴一行 `labelSmall` 在下面。 */
+@Composable
+private fun AccountFieldEditor(
+    copy: AccountFieldCopy,
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    Column {
+        ChannelTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = copy.label,
+            placeholder = copy.range,
+        )
+        Text(
+            text = copy.help,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /** 桌面端一样的小输入框：Surface(hairline) + BasicTextField，自己撑到 48dp。 */
 @Composable
 private fun ChannelTextField(
@@ -2191,48 +2337,79 @@ private fun AccountDetailsBody(
     var disabledDraft by remember(row.accountId) { mutableStateOf(row.disabled) }
     var clearWhitelist by remember(row.accountId) { mutableStateOf(false) }
     val patch = accountSettingsPatch(row, priorityText, weightText, concurrencyText, disabledDraft, clearWhitelist)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "启用",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 只读信息在前：数字都带单位与「它是什么」的说明
+        if (row.quotaTotal > 0) {
+            AccountReadonlyRow(
+                copy = accountFieldCopy(AccountField.QuotaUsage),
+                value = "${row.quotaUsed} / ${row.quotaTotal}",
+                unit = row.quotaUnit,
             )
+        }
+        AccountReadonlyRow(
+            copy = AccountFieldCopy(
+                label = "额度读取",
+                help = "这条卡片上的额度是何时从渠道读回来的",
+                range = "只读",
+            ),
+            value = accountTimeLabel(row.quotaReadAt) ?: "尚未读取",
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = accountFieldCopy(AccountField.Enabled).label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = accountFieldCopy(AccountField.Enabled).help,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             McaSwitch(
                 checked = !disabledDraft,
                 onCheckedChange = { disabledDraft = !it },
                 enabled = !saving,
-                contentDescription = "启用账号",
+                contentDescription = accountFieldCopy(AccountField.Enabled).label,
             )
         }
-        ChannelTextField(
+        Text(
+            text = "可改设置",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        AccountFieldEditor(
+            copy = accountFieldCopy(AccountField.Priority),
             value = priorityText,
             onValueChange = { priorityText = it },
-            label = "优先级",
-            placeholder = "0 = 默认，1 = 首选",
         )
-        ChannelTextField(
+        AccountFieldEditor(
+            copy = accountFieldCopy(AccountField.Weight),
             value = weightText,
             onValueChange = { weightText = it },
-            label = "权重",
-            placeholder = "1 - 1000",
         )
-        ChannelTextField(
+        AccountFieldEditor(
+            copy = accountFieldCopy(AccountField.Concurrency),
             value = concurrencyText,
             onValueChange = { concurrencyText = it },
-            label = "并发上限",
-            placeholder = "留空 = 跟随全局",
         )
         // 账号级白名单：桌面端已改为跟随渠道，这里只提供"清空"这一条真改动
         if (row.allowedModels.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "账号级白名单 ${row.allowedModels.size} 个",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "${accountFieldCopy(AccountField.Whitelist).label} ${row.allowedModels.size} 个",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = accountFieldCopy(AccountField.Whitelist).help,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 McaChip(
                     selected = clearWhitelist,
                     onClick = { clearWhitelist = !clearWhitelist },

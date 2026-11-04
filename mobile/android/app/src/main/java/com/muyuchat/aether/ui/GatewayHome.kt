@@ -5,7 +5,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
@@ -80,6 +79,9 @@ internal data class NotReadyNotice(
 
 private enum class BundlePassphrasePurpose { PREVIEW, IMPORT }
 
+/** 「关于」在 `settingsGroups()` 里的序号，用于从「更多」直接聚焦到关于区。 */
+private const val SETTINGS_ABOUT_GROUP_ID = "10"
+
 /**
  * 「当前是否还停在某个覆盖页（非 Tab 页）」的显式快照。
  *
@@ -122,6 +124,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     var notReady by remember { mutableStateOf<NotReadyNotice?>(null) }
     var showRouting by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    // 非空 = 设置页只显示该分组（"05" 定价 / "10" 关于 …）；null = 整页。
+    var settingsInitialGroup by remember { mutableStateOf<String?>(null) }
     var showProbe by remember { mutableStateOf(false) }
     var showTotp by remember { mutableStateOf(false) }
     var showWake by remember { mutableStateOf(false) }
@@ -217,13 +221,20 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         clients = showClients,
         plugins = showPlugins,
     )
-    BackHandler(enabled = notReady != null || overlays.anyOpen || selectedTab != MobileTab.OVERVIEW) {
+    // 返回逻辑抽成局部 lambda：预测性返回容器与普通返回键共用同一套关闭顺序。
+    // 体里没有 return（纯 if/else 链），可以安全地做成 () -> Unit。
+    val handleBack: () -> Unit = {
         if (notReady != null) {
             notReady = null
         } else if (showRouting) {
             showRouting = false
         } else if (showSettings) {
-            showSettings = false
+            // 先退聚焦（设置页只显示某一组时），再退整页。
+            if (settingsInitialGroup != null) {
+                settingsInitialGroup = null
+            } else {
+                showSettings = false
+            }
         } else if (showProbe) {
             showProbe = false
         } else if (showTotp) {
@@ -245,7 +256,12 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         }
     }
 
-    Scaffold(
+    // 系统预测性返回：手势进度直接驱动页面位移/缩放；API < 33 时组件内部退回普通 BackHandler。
+    PredictiveBackHost(
+        enabled = notReady != null || overlays.anyOpen || selectedTab != MobileTab.OVERVIEW,
+        onBack = handleBack,
+    ) { _ ->
+        Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
@@ -556,7 +572,15 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     status = state.status,
                     state = settingsState,
                     onRefresh = settingsViewModel::refresh,
-                    onBack = { showSettings = false },
+                    // 聚焦组：进入某个设置分组时只显示该组区块，返回键先退聚焦再退页。
+                    initialGroup = settingsInitialGroup,
+                    onBack = {
+                        if (settingsInitialGroup != null) {
+                            settingsInitialGroup = null
+                        } else {
+                            showSettings = false
+                        }
+                    },
                     onOpenOverview = {
                         showSettings = false
                         selectedTab = MobileTab.OVERVIEW
@@ -802,7 +826,10 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     when (val action = entry.action) {
                         is WorkspaceAction.Tab -> selectedTab = action.tab
                         WorkspaceAction.Routing -> showRouting = true
-                        WorkspaceAction.Settings -> showSettings = true
+                        WorkspaceAction.Settings -> {
+                            settingsInitialGroup = null
+                            showSettings = true
+                        }
                         WorkspaceAction.Probe -> showProbe = true
                         WorkspaceAction.Totp -> showTotp = true
                         WorkspaceAction.Wake -> showWake = true
@@ -819,11 +846,22 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     }
                 },
                 onSettings = { group ->
-                    if (group.available) {
-                        // 02/06 的内容就在设置页里，别再弹「后续阶段」——那是设置页有功能、目录不入口。
-                        showSettings = true
-                    } else {
+                    if (!group.available) {
                         notReady = notReadyNoticeForSettingsGroup(group)
+                    } else {
+                        // 去向是数据（SettingsRoute），不靠组名比较：09 走备份页、10 走「关于」区、
+                        // 其余按分区聚焦打开设置页。设置在打开时记录聚焦组，返回键先退出聚焦再退出页。
+                        when (val route = group.route) {
+                            SettingsRoute.Backup -> showBackup = true
+                            SettingsRoute.About -> {
+                                settingsInitialGroup = SETTINGS_ABOUT_GROUP_ID
+                                showSettings = true
+                            }
+                            is SettingsRoute.Partition -> {
+                                settingsInitialGroup = route.id
+                                showSettings = true
+                            }
+                        }
                     }
                 },
                 modifier = modifier,
@@ -857,6 +895,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
             )
         }
         }
+    }
     }
 }
 
