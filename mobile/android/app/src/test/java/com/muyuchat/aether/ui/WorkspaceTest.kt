@@ -35,6 +35,14 @@ class WorkspaceTest {
         assertEquals(WorkspaceAction.Settings, byTitle.getValue("设置").action)
         assertEquals(WorkspaceAction.Settings, byTitle.getValue("脱敏").action)
         assertEquals(WorkspaceAction.Probe, byTitle.getValue("网关探针").action)
+        // Stage 6 第一片：2FA 从"后续阶段"变成真实页面。
+        assertEquals(WorkspaceAction.Totp, byTitle.getValue("2FA").action)
+        // Stage 6 第二片：会话页（只读、手机端如实空态）。
+        assertEquals(WorkspaceAction.Sessions, byTitle.getValue("会话").action)
+        // Stage 6 第三片：唤醒队列（只读状态 + 手动触发，不承诺定时）。
+        assertEquals(WorkspaceAction.Wake, byTitle.getValue("任务").action)
+        // Stage 6 第四片：资源库（查看/删除；发现与下发仅桌面端）。
+        assertEquals(WorkspaceAction.Library, byTitle.getValue("资源库").action)
     }
 
     @Test
@@ -44,7 +52,9 @@ class WorkspaceTest {
         workspaceEntries().forEach { entry ->
             when (val action = entry.action) {
                 is WorkspaceAction.Tab -> assertTrue(action.tab != MobileTab.MORE)
-                WorkspaceAction.Routing, WorkspaceAction.Settings, WorkspaceAction.Probe -> Unit
+                WorkspaceAction.Routing, WorkspaceAction.Settings, WorkspaceAction.Probe,
+                WorkspaceAction.Totp, WorkspaceAction.Sessions, WorkspaceAction.Wake,
+                WorkspaceAction.Library, WorkspaceAction.Plugins, WorkspaceAction.Clients -> Unit
                 is WorkspaceAction.Pending -> assertTrue(
                     "${entry.title} 的占位阶段不能为空",
                     action.stage.isNotBlank(),
@@ -65,7 +75,10 @@ class WorkspaceTest {
     @Test
     fun pendingEntriesCarryTheirOwnStage() {
         val pending = workspaceEntries().filter { it.action is WorkspaceAction.Pending }
-        assertTrue(pending.isNotEmpty())
+        // 17 条工作区现已全部接线（最后一条占位「Agent/客户端」在本轮换成真实页面），
+        // 所以这里锁的不再是"至少要有一个占位"，而是"占位消失了"这件事本身——
+        // 将来若再加占位，这条会失败，提醒作者显式承认。
+        assertTrue("17 条工作区应已全部接线，仍有占位：${pending.map { it.title }}", pending.isEmpty())
         assertTrue(pending.all { !it.pendingStage.isNullOrBlank() })
         // 已接线的入口不该再带阶段占位。
         val wired = workspaceEntries().filter { it.action !is WorkspaceAction.Pending }
