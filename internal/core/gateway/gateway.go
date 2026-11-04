@@ -325,6 +325,10 @@ type Gateway struct {
 	hostPin     *hostPinStore
 	hostPinOnce sync.Once
 
+	// customIDs 是当前由"自定义渠道"注册的 provider id（见 custom_channels.go）。
+	// 只放内存：启动时会按设置重新注册一遍，不需要落盘。
+	customIDs []string
+
 	// quota 额度卡片的后台补读去重（懒初始化）。
 	quotaOnce sync.Once
 	quota     *quotaRefreshState
@@ -464,6 +468,8 @@ func New(cfg Config) *Gateway {
 	g.syncHooks()
 	// 渠道网络档位与边缘固定表：启动时从设置装载。
 	g.syncChannelNet()
+	// 自定义渠道：按设置把它们注册进 provider 注册表。
+	g.syncCustomChannels()
 	// 链路优化：DoH 解析 + 多 IP 竞速。跨境渠道的不同边缘 IP 质量差异明显
 	// （实测同一域名两个 Cloudflare 边缘差 100ms+），竞速能稳定挑到当前最优
 	// 的那个；DoH 保证拿到的是真实地址而不是被污染的答案。
@@ -1176,6 +1182,11 @@ func (g *Gateway) routes() {
 	// 渠道网络档位与在途数（慢链路优化的可观测入口）。
 	m.HandleFunc("GET /api/channels/net", g.handleChannelNet)
 	m.HandleFunc("POST /api/channels/net", g.handleChannelNetSave)
+	// 自定义渠道：运行时注册任意 OpenAI/Anthropic 兼容端点。
+	m.HandleFunc("GET /api/custom-channels", g.handleCustomChannels)
+	m.HandleFunc("POST /api/custom-channels", g.handleCustomChannelSave)
+	m.HandleFunc("DELETE /api/custom-channels/{id}", g.handleCustomChannelDelete)
+	m.HandleFunc("POST /api/custom-channels/probe", g.handleCustomChannelProbe)
 	// 网络诊断：把"卡在哪一环"摊开（DNS / TCP / TLS / 首字节）。
 	m.HandleFunc("GET /api/network/diag", g.handleNetDiag)
 	// 边缘优选：扫描候选 IP、测机房与延迟，可钉到该渠道（不写 hosts）。

@@ -166,6 +166,9 @@ type runtimeSettings struct {
 	// EdgePins 是按域名固定的上游 IP（Cloudflare 边缘优选的结果）。
 	// 只作用于网关内部，不修改系统 hosts。
 	EdgePins map[string][]string `json:"edge_pins,omitempty"`
+	// CustomChannels 是用户自建的渠道（任意 OpenAI/Anthropic 兼容端点）。
+	// 与内置渠道走同一套实现，只是配置来自这里而不是编译期常量。
+	CustomChannels []CustomChannel `json:"custom_channels,omitempty"`
 	// ProviderOrder 是渠道页的展示/优先级顺序。
 	ProviderOrder []string `json:"provider_order,omitempty"`
 	// ProviderBalances 是渠道自定义余额接口（aether 的 balanceURL / balancePath）。

@@ -138,8 +138,33 @@ func TestWindowName(t *testing.T) {
 		{"", "Custom Plan"}: "Custom Plan",
 	}
 	for in, want := range cases {
-		if got := windowName(in[0], in[1]); got != want {
+		if got := windowName("", in[0], in[1]); got != want {
 			t.Errorf("windowName(%q,%q) = %q, want %q", in[0], in[1], got, want)
 		}
+	}
+}
+
+// bucketId 白名单优先于文案猜测：上游把 "Weekly" 改成别的措辞时，
+// 只要 bucketId 还是 `claude:weekly` 就仍能判定为 7 天窗口。
+func TestWindowNameFromBucketID(t *testing.T) {
+	cases := map[string]string{
+		"3p-5h":                 "5 hours",
+		"claude:5h":             "5 hours",
+		"gemini-argon-3p-5h":    "5 hours",
+		"3p-weekly":             "7 days",
+		"claude:weekly":         "7 days",
+		"gemini-argon-weekly":   "7 days",
+		"argon:weekly":          "7 days",
+		"":                      "",
+		"unknown-bucket":        "",
+	}
+	for id, want := range cases {
+		if got := windowNameFromBucketID(id); got != want {
+			t.Errorf("windowNameFromBucketID(%q) = %q, want %q", id, got, want)
+		}
+	}
+	// 白名单命中时，即便文案写的是别的东西也要以 bucketId 为准。
+	if got := windowName("claude:weekly", "5 小时额度", ""); got != "7 days" {
+		t.Errorf("bucketId 应优先：得到 %q", got)
 	}
 }

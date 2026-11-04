@@ -610,26 +610,12 @@ func readErrorBody(resp *http.Response) string {
 }
 
 // mapStatusCode 把 HTTP 状态码翻译成内核错误。
+//
+// 具体分类集中在 errclass.go 的 classifyUpstream：401/403/404/402/429/5xx
+// 各有不同的可重试性与用户动作，混成一句"上游鉴权失败"会让用户和调度器
+// 都做错决定。
 func mapStatusCode(code int, body string, hdr http.Header) *ir.APIError {
-	switch {
-	case code == http.StatusUnauthorized || code == http.StatusForbidden:
-		return ir.NewAPIErrorf(ir.ErrCodeUpstreamAuth, "上游鉴权失败: %s", body)
-	case code == http.StatusTooManyRequests:
-		return ir.NewAPIErrorf(ir.ErrCodeUpstreamRateLimit, "上游限流: %s", body).
-			WithRetryable(true).WithStatus(429).
-			WithRetryAfter(provider.RetryAfterHint(hdr, body))
-	case code == http.StatusPaymentRequired:
-		return ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed, "上游账户余额不足（402）：%s", body).
-			WithRetryable(true).WithStatus(http.StatusPaymentRequired)
-	case code == http.StatusBadRequest || code == http.StatusUnprocessableEntity:
-		// 400 通常是请求构造问题（比如模型名不对），换账号重试没有意义。
-		return ir.NewAPIErrorf(ir.ErrCodeBadRequest, "上游拒绝请求: %s", body)
-	case code >= 500:
-		return ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed, "上游 %d: %s", code, body).
-			WithRetryable(true).WithStatus(502)
-	default:
-		return ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed, "上游返回 %d: %s", code, body)
-	}
+	return classifyUpstream(code, body, hdr)
 }
 
 // openAIChunk 是上游流式响应的单个 chunk。

@@ -116,7 +116,7 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 				continue
 			}
 			q.Windows = append(q.Windows, provider.QuotaWindow{
-				Name:     windowName(b.Window, b.DisplayName),
+				Name:     windowName(b.BucketID, b.Window, b.DisplayName),
 				Pool:     pool,
 				Used:     usedPercent(frac),
 				ResetsAt: parseResetTime(b.ResetTime),
@@ -132,7 +132,7 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 			continue
 		}
 		q.Windows = append(q.Windows, provider.QuotaWindow{
-			Name:     windowName(b.Window, b.DisplayName),
+			Name:     windowName(b.BucketID, b.Window, b.DisplayName),
 			Used:     usedPercent(frac),
 			ResetsAt: parseResetTime(b.ResetTime),
 		})
@@ -311,7 +311,15 @@ func usedPercent(remainingFraction float64) float64 {
 }
 
 // windowName 统一成 UI 能读出跨度的名字（5 hours / 7 days）。
-func windowName(window, display string) string {
+//
+// 优先用**已知 bucketId 白名单**判定跨度，再回落到字符串猜测：
+// bucketId 是稳定的机器标识（`3p-5h` / `claude:weekly` / `gemini-argon-*-5h`），
+// 而 window/displayName 是给人看的文案，随时可能改措辞（"Weekly limit"
+// 改成 "每周额度" 就猜不出来了）。
+func windowName(bucketID, window, display string) string {
+	if name := windowNameFromBucketID(bucketID); name != "" {
+		return name
+	}
 	w := strings.ToLower(strings.TrimSpace(window + " " + strings.TrimSpace(display)))
 	switch {
 	case strings.Contains(w, "5h"), strings.Contains(w, "5 h"), strings.Contains(w, "5 hour"), strings.Contains(w, "five"), strings.Contains(w, "5_hour"):
@@ -328,6 +336,28 @@ func windowName(window, display string) string {
 		return wt
 	}
 	return "Quota"
+}
+
+// windowNameFromBucketID 用已知 bucketId 判定窗口跨度，未知返回空串。
+//
+// 白名单来自上游实际在用的标识（见审计文档 A2）：
+//
+//	3p-5h / claude:5h / gemini-5h / argon:5h / gemini-argon-*-5h  → 5 hours
+//	3p-weekly / claude:weekly / gemini-weekly / argon:weekly / …-weekly → 7 days
+func windowNameFromBucketID(bucketID string) string {
+	id := strings.ToLower(strings.TrimSpace(bucketID))
+	if id == "" {
+		return ""
+	}
+	switch {
+	case strings.HasSuffix(id, "5h"), strings.Contains(id, ":5h"):
+		return "5 hours"
+	case strings.HasSuffix(id, "weekly"), strings.Contains(id, ":weekly"):
+		return "7 days"
+	case strings.HasSuffix(id, "daily"), strings.Contains(id, ":daily"), strings.HasSuffix(id, "24h"):
+		return "1 day"
+	}
+	return ""
 }
 
 // modelFamily 把模型名归到池的家族名（与 summary 的池名对齐）。

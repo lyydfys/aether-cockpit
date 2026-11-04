@@ -5,6 +5,7 @@ import * as api from '../api.js';
 import { icon } from '../icons.js';
 import { chip, btn, iconBtn, card, meter, drawer, empty, errorBox, skeleton, toast, copyText, confirmDialog, promptDialog, input, select, field, toggle, menu, fmtTokens, fmtDate, fmtReset } from '../components.js';
 import { openProvider } from './onboard.js';
+import { openCustomChannels } from './customchannels.js';
 import { channelNetFields } from './channelnet.js';
 import { brandIcon } from '../brandicons.js';
 import { accountRefreshMode } from '../capabilities.js';
@@ -173,7 +174,7 @@ export default {
         } catch (e) { toast('删除失败：' + (e.message || e)); }
       }, { danger: true });
       const bulk = iconBtn('settings', '批量设置已选账号', () => batchSettings());
-      const bar = h('div', { class: 'batchbar' }, h('label', { class: 'inline', style: 'font-size:12px;color:var(--muted)' }, box, h('span', null, '全选')), count, h('span', { id: 'pickedLabel', class: 'meta' }), groups, plus, bulk, h('span', { class: 'grow' }), btn('接入渠道', { icon: 'plus', onClick: () => ctx.navigate('onboard') }), btn('供应商与开关', { icon: 'database', onClick: supplierDrawer }), del);
+      const bar = h('div', { class: 'batchbar' }, h('label', { class: 'inline', style: 'font-size:12px;color:var(--muted)' }, box, h('span', null, '全选')), count, h('span', { id: 'pickedLabel', class: 'meta' }), groups, plus, bulk, h('span', { class: 'grow' }), btn('接入渠道', { icon: 'plus', onClick: () => ctx.navigate('onboard') }), btn('自定义渠道', { icon: 'plugin', onClick: customChannelsDrawer }), btn('供应商与开关', { icon: 'database', onClick: supplierDrawer }), del);
       return bar;
     }
 
@@ -187,6 +188,10 @@ export default {
         grid.append(h('button', {
           class: 'acct-add', type: 'button', onclick: () => ctx.navigate('onboard'),
         }, icon('plus', 20), h('span', null, '接入新渠道')));
+        // 紧挨着「接入新渠道」：自定义渠道同样是"加一个渠道"，只是配置来自用户而不是内置清单
+        grid.append(h('button', {
+          class: 'acct-add', type: 'button', onclick: customChannelsDrawer,
+        }, icon('plugin', 20), h('span', null, '自定义渠道')));
       }
       return grid;
     }
@@ -711,6 +716,13 @@ export default {
         }, 700);
       }
       return d;
+    }
+
+    /* ---------- 自定义渠道抽屉 ---------- */
+    // 把渠道页的数据入口交给抽屉：保存后它要能拿到新的 custom-<id> provider，
+    // 才能直接走 openProvider 的接入流程；重新 load 一次也能让卡片立刻出现。
+    function customChannelsDrawer() {
+      openCustomChannels({ getProviders: () => state.providers, reload: load });
     }
 
     /* ---------- 供应商抽屉 ---------- */
