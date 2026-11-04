@@ -66,6 +66,15 @@ android {
 
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs").get().asFile)
 
+    // Go 的 c-shared 库约 33 MB。默认打包方式（Android Gradle Plugin 8+）会把它
+    // 按未压缩塞进 APK，实测让包体从 ~46 MB 涨到 ~70 MB。这里改回传统打包
+    // （安装时解压），APK 体消掉那 24 MB 冗余；代价是安装时多占一次解压时间。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -111,6 +120,46 @@ val syncNativeLibs = tasks.register<Sync>("syncNativeLibs") {
     }
 }
 tasks.named("preBuild").configure { dependsOn(syncNativeLibs) }
+
+// 守卫：Kotlin 改动随 APK 走，Go 改动必须重编 dist 里的 .so。曾经出现过
+// 「Kotlin 是新代码、Go 二进制落后近一天」的错配（自定义渠道在真机上 404），
+// 排查成本很高。这里在构建前比一次时间戳：有任何 internal/**/*.go 比目标
+// ABI 的 .so 新，就直接失败并提示去重编。
+// 确实只想编 Kotlin 时可用 -PaetherSkipNativeFreshness=true 显式跳过。
+val verifyNativeFreshness = tasks.register("verifyNativeFreshness") {
+    group = "verification"
+    description = "Fails when dist/ native libraries are older than the Go sources they wrap."
+    doLast {
+        if ((project.findProperty("aetherSkipNativeFreshness") as String?)?.toBoolean() == true) {
+            logger.lifecycle("verifyNativeFreshness: skipped by -PaetherSkipNativeFreshness")
+            return@doLast
+        }
+        val goRoot = rootProject.file("../..").toPath().resolve("internal").toFile()
+        if (!goRoot.isDirectory) {
+            return@doLast
+        }
+        val newestGo = goRoot.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".go") }
+            .maxByOrNull { it.lastModified() }
+            ?: return@doLast
+        targetAbis.forEach { abi ->
+            val so = rootProject.file("../../dist/android/$abi/libaether_mobilebridge.so")
+            if (!so.isFile) {
+                return@forEach
+            }
+            if (so.lastModified() < newestGo.lastModified()) {
+                throw GradleException(
+                    "dist/android/$abi/libaether_mobilebridge.so 比 Go 源码旧" +
+                        "（so=${so.lastModified()}，$newestGo=${newestGo.lastModified()}）。" +
+                        "请先重编原生库，否则 APK 里的网关缺少最新后端：" +
+                        "scripts/build-android-mobilebridge.sh $abi " +
+                        "（仅编 Kotlin 时可加 -PaetherSkipNativeFreshness=true）",
+                )
+            }
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn(verifyNativeFreshness) }
 
 // Stage 0 acceptance says "CI clean runner resolves the same AAR". Comparing the
 // version string and loading a class proves *an* artifact resolved, not that the
