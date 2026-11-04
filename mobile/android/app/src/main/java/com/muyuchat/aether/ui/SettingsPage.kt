@@ -1,5 +1,6 @@
 package com.muyuchat.aether.ui
 
+import android.content.Intent
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -31,6 +33,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
@@ -57,6 +61,8 @@ internal fun SettingsPage(
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     onOpenOverview: () -> Unit,
+    onOpenBackup: () -> Unit,
+    onShareReport: (Intent) -> Unit = {},
     saveState: SettingsSaveState = SettingsSaveState.Idle,
     onToggleRedact: (Boolean) -> Unit = {},
     personalSaving: Boolean = false,
@@ -156,6 +162,21 @@ internal fun SettingsPage(
                     notice = preferredPortNotice,
                     onSave = onSavePreferredPort,
                 )
+            }
+        }
+        // 备份导出放在设置里（IA 的「同步与备份」），不新增工作区入口：
+        // 手机端只做导出，导入仍在桌面端完成。
+        item {
+            HealthReportSection(
+                status = status,
+                settings = (state as? SettingsUiState.Ready)?.settings,
+                onShare = onShareReport,
+            )
+            SettingsSection("备份") {
+                SettingsRow("配置备份", "口令密封导出与导入")
+                McaButton(onClick = onOpenBackup, style = McaButtonStyle.Outlined) {
+                    Text("导出备份…")
+                }
             }
         }
         when (state) {
@@ -539,7 +560,12 @@ private fun RedactRuleField(label: String, value: String, onValueChange: (String
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    // BasicTextField 不吃 Compose 的触摸目标扩展，自己撑到 48dp；
+                    // 垂直 padding 放在 heightIn 之后会把点按区压回一行字。
+                    .heightIn(min = 48.dp)
+                    .wrapContentHeight(Alignment.CenterVertically)
+                    .padding(horizontal = 12.dp)
+                    .semantics { contentDescription = label },
             )
         }
     }
@@ -662,7 +688,12 @@ private fun CallerKeysSection(
             onDismissRequest = { deleting = null },
             title = { Text("删除调用方密钥", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
             text = {
-                Column {
+                // 内容限高 + 可滚动：软键盘弹起时对话框不会长到把按钮顶到键盘下面。
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 132.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     Text(
                         text = "将删除「${target.name.ifBlank { target.id }}」；使用该密钥的客户端会立即被拒绝。输入名称确认：",
                         style = MaterialTheme.typography.bodySmall,
@@ -677,7 +708,10 @@ private fun CallerKeysSection(
                             textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .heightIn(min = 48.dp)
+                                .wrapContentHeight(Alignment.CenterVertically)
+                                .padding(horizontal = 12.dp)
+                                .semantics { contentDescription = "输入密钥名称以确认删除" },
                         )
                     }
                 }
@@ -690,7 +724,7 @@ private fun CallerKeysSection(
                         onRemove(id)
                     },
                     style = McaButtonStyle.Primary,
-                    enabled = confirmName.trim() == target.name.ifBlank { target.id },
+                    enabled = callerKeyDeleteConfirmed(confirmName, target.name, target.id),
                 ) { Text("删除") }
             },
             dismissButton = {
@@ -718,7 +752,10 @@ private fun CallerKeysSection(
                             textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .heightIn(min = 48.dp)
+                                .wrapContentHeight(Alignment.CenterVertically)
+                                .padding(horizontal = 12.dp)
+                                .semantics { contentDescription = "密钥名称（可留空）" },
                         )
                     }
                 }
@@ -860,7 +897,10 @@ private fun AccessListRow(
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .heightIn(min = 48.dp)
+                                .wrapContentHeight(Alignment.CenterVertically)
+                                .padding(horizontal = 12.dp)
+                                .semantics { contentDescription = placeholder },
                             decorationBox = { inner ->
                                 if (entry.isEmpty()) {
                                     Text(
@@ -956,7 +996,10 @@ private fun PreferredPortRow(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .heightIn(min = 48.dp)
+                        .wrapContentHeight(Alignment.CenterVertically)
+                        .padding(horizontal = 12.dp)
+                        .semantics { contentDescription = "首选端口" },
                 )
             }
             Spacer(Modifier.height(4.dp))
@@ -1034,13 +1077,23 @@ private fun SettingsSections(
                     else -> "—"
                 },
             )
+            // 局域网共享在手机端**只读**：移动运行时 Start 里只绑 127.0.0.1，
+            // 非回环直接返回 listen_host_must_be_loopback。开这个开关只会翻一个配置位，
+            // 永远不会有局域网监听——那是假开关，所以这里不提供切换。
             SettingsToggleRow(
                 label = "局域网共享",
-                value = if (settings.lanEnabled) "开启" else "关闭",
-                actionLabel = if (settings.lanEnabled) "关闭" else "开启",
-                enabled = !lanSaving,
-                onAction = { onToggleLan(!settings.lanEnabled) },
+                value = (if (settings.lanEnabled) "配置为开启" else "关闭") + " · 仅桌面端生效",
+                actionLabel = "仅桌面端",
+                enabled = false,
+                onAction = {},
             )
+            Text(
+                text = "手机端网关只监听 127.0.0.1（启动时即拒绝非回环地址），所以这里开关不生效；" +
+                    "需要局域网共享请在桌面端开启。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SettingsSecuritySection(status = status)
             if (lanError != null) {
                 Text(
                     text = lanError,
@@ -1075,7 +1128,10 @@ private fun SettingsSections(
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                            .heightIn(min = 48.dp)
+                            .wrapContentHeight(Alignment.CenterVertically)
+                            .padding(horizontal = 12.dp)
+                            .semantics { contentDescription = "代理地址" },
                         decorationBox = { inner ->
                             if (proxyDraft.isEmpty()) {
                                 Text(

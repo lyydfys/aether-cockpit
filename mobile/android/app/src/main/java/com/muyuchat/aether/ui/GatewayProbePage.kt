@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -158,6 +159,10 @@ internal fun GatewayProbePage(
                 items(sessionRows.size) { index -> ProbeRowCard(sessionRows[index]) }
             }
         }
+        // 自检：与探针同页（都是"排查为什么连不上"），不新增第 18 个 IA 条目。
+        item { DiagnoseSection(status = status) }
+        item { RecentFailuresSection(status = status) }
+        item { DriftSection(status = status) }
         item {
             Text(
                 text = "诚实说明：探针结果只代表当前这一刻。每次进入本页或点刷新都会重新探测；" +
@@ -387,8 +392,9 @@ private fun ProbeFieldRow(field: ProbeField) {
             text = field.label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.width(56.dp),
+            // 不写死宽度也不限行：1.3x 字体下「构建时间」需要 ≈57dp，固定 56dp + maxLines=1
+            // 会把字硬裁掉。用 widthIn 当最小对齐宽度，放不下就换行。
+            modifier = Modifier.widthIn(min = 56.dp),
         )
         Spacer(Modifier.width(8.dp))
         Text(

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -60,6 +61,9 @@ import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayState
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.stateLabel
+import com.muyuchat.core.designsystem.McaButton
+import com.muyuchat.core.designsystem.McaButtonStyle
+import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
@@ -98,6 +102,14 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     var showRouting by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showProbe by remember { mutableStateOf(false) }
+    var showTotp by remember { mutableStateOf(false) }
+    var showSessions by remember { mutableStateOf(false) }
+    var showWake by remember { mutableStateOf(false) }
+    var showLibrary by remember { mutableStateOf(false) }
+    var showPlugins by remember { mutableStateOf(false) }
+    var showClients by remember { mutableStateOf(false) }
+    var showDesktopOnly by remember { mutableStateOf(false) }
+    var showBackup by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var copied by remember { mutableStateOf(false) }
 
@@ -138,7 +150,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         }
     }
 
-    BackHandler(enabled = pending != null || showRouting || showSettings || showProbe || selectedTab != MobileTab.OVERVIEW) {
+    BackHandler(enabled = pending != null || showRouting || showSettings || showProbe || showTotp || showSessions || showWake || showLibrary || showBackup || selectedTab != MobileTab.OVERVIEW) {
         if (pending != null) {
             pending = null
         } else if (showRouting) {
@@ -147,6 +159,16 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
             showSettings = false
         } else if (showProbe) {
             showProbe = false
+        } else if (showTotp) {
+            showTotp = false
+        } else if (showSessions) {
+            showSessions = false
+        } else if (showWake) {
+            showWake = false
+        } else if (showLibrary) {
+            showLibrary = false
+        } else if (showBackup) {
+            showBackup = false
         } else {
             selectedTab = MobileTab.OVERVIEW
         }
@@ -164,11 +186,18 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     showRouting = false
                     showSettings = false
                     showProbe = false
+                    showTotp = false
+                    showSessions = false
+                    showWake = false
+                    showLibrary = false
+                    showBackup = false
                 },
             )
         },
     ) { innerPadding ->
-        val modifier = Modifier.padding(innerPadding)
+        // safeDrawing 不含 IME inset：键盘弹出时页面底部输入框会被遮住，
+        // 这里补一次 imePadding（对话框是独立 window，另有自己的处理）。
+        val modifier = Modifier.padding(innerPadding).imePadding()
         val target = pending
         when {
             target != null -> PendingPage(
@@ -177,6 +206,193 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 onBack = { pending = null },
                 modifier = modifier,
             )
+            showBackup -> {
+                val backupViewModel: BackupViewModel = viewModel()
+                val backupState by backupViewModel.state.collectAsStateWithLifecycle()
+                BackupPage(
+                    status = state.status,
+                    state = backupState,
+                    onExport = backupViewModel::export,
+                    onShare = { ready ->
+                        // 分享意图由 ViewModel 组装（只有它知道 FileProvider authority），
+                        // 外包一层 runCatching：没有可处理 SEND 的应用时不能崩。
+                        runCatching {
+                            context.startActivity(
+                                Intent.createChooser(
+                                    backupViewModel.shareIntent(ready),
+                                    "分享备份文件",
+                                ),
+                            )
+                        }
+                    },
+                    onReset = backupViewModel::reset,
+                    onBack = { showBackup = false },
+                    onOpenOverview = {
+                        showBackup = false
+                        selectedTab = MobileTab.OVERVIEW
+                    },
+                    modifier = modifier,
+                )
+            }
+            showDesktopOnly -> {
+                DesktopOnlyPage(
+                    status = state.status,
+                    onBack = { showDesktopOnly = false },
+                    modifier = modifier,
+                )
+            }            showClients -> {
+                ClientsPage(
+                    status = state.status,
+                    onBack = { showClients = false },
+                    onOpenOverview = {
+                        showClients = false
+                        selectedTab = MobileTab.OVERVIEW
+                    },
+                    modifier = modifier,
+                )
+            }            showPlugins -> {
+                PluginsPage(
+                    status = state.status,
+                    onBack = { showPlugins = false },
+                    onOpenOverview = {
+                        showPlugins = false
+                        selectedTab = MobileTab.OVERVIEW
+                    },
+                    modifier = modifier,
+                )
+            }            showLibrary -> {
+                val libraryViewModel: LibraryViewModel = viewModel()
+                val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
+                val libraryKind by libraryViewModel.kindFilter.collectAsStateWithLifecycle()
+                val libraryDeleting by libraryViewModel.deleting.collectAsStateWithLifecycle()
+                val librarySaving by libraryViewModel.saving.collectAsStateWithLifecycle()
+                val librarySaveProblems by libraryViewModel.saveProblems.collectAsStateWithLifecycle()
+                val libraryNotice by libraryViewModel.notice.collectAsStateWithLifecycle()
+                val libraryActionError by libraryViewModel.actionError.collectAsStateWithLifecycle()
+                LibraryPage(
+                    status = state.status,
+                    state = libraryState,
+                    kindFilter = libraryKind,
+                    deleting = libraryDeleting,
+                    notice = libraryNotice,
+                    actionError = libraryActionError,
+                    onKindFilter = libraryViewModel::setKindFilter,
+                    onRefresh = libraryViewModel::refresh,
+                    onDelete = libraryViewModel::delete,
+                    onDismissNotice = libraryViewModel::dismissNotice,
+                    onDismissActionError = libraryViewModel::dismissActionError,
+                    saving = librarySaving,
+                    saveProblems = librarySaveProblems,
+                    onCreate = libraryViewModel::create,
+                    onClearSaveProblems = libraryViewModel::clearSaveProblems,
+                    onBack = { showLibrary = false },
+                    onOpenOverview = {
+                        showLibrary = false
+                        selectedTab = MobileTab.OVERVIEW
+                    },
+                    modifier = modifier,
+                )
+            }
+            showWake -> {
+                val wakeViewModel: WakeViewModel = viewModel()
+                val wakeState by wakeViewModel.state.collectAsStateWithLifecycle()
+                val wakeTriggering by wakeViewModel.triggering.collectAsStateWithLifecycle()
+                val wakeNotice by wakeViewModel.notice.collectAsStateWithLifecycle()
+                val wakeActionError by wakeViewModel.actionError.collectAsStateWithLifecycle()
+                val wakeScheduler by wakeViewModel.scheduler.collectAsStateWithLifecycle()
+                val wakeCheckinRunning by wakeViewModel.checkinRunning.collectAsStateWithLifecycle()
+                val wakeCheckinNote by wakeViewModel.checkinNote.collectAsStateWithLifecycle()
+                val wakeCheckinSummary by wakeViewModel.checkinSummary.collectAsStateWithLifecycle()
+                val wakeAccounts by wakeViewModel.accounts.collectAsStateWithLifecycle()
+                val wakeCreating by wakeViewModel.creating.collectAsStateWithLifecycle()
+                val wakeCreateProblems by wakeViewModel.createProblems.collectAsStateWithLifecycle()
+                WakePage(
+                    status = state.status,
+                    state = wakeState,
+                    triggering = wakeTriggering,
+                    notice = wakeNotice,
+                    actionError = wakeActionError,
+                    onRefresh = wakeViewModel::refresh,
+                    onRun = wakeViewModel::runTask,
+                    onDismissNotice = wakeViewModel::dismissNotice,
+                    onDismissActionError = wakeViewModel::dismissActionError,
+                    scheduler = wakeScheduler,
+                    checkinRunning = wakeCheckinRunning,
+                    checkinNote = wakeCheckinNote,
+                    onRefreshScheduler = wakeViewModel::refreshScheduler,
+                    onRunCheckin = wakeViewModel::runCheckin,
+                    onDismissCheckinNote = wakeViewModel::dismissCheckinNote,
+                    checkinSummary = wakeCheckinSummary,
+                    accounts = wakeAccounts,
+                    creating = wakeCreating,
+                    createProblems = wakeCreateProblems,
+                    onCreateWake = wakeViewModel::createWake,
+                    onClearCreateProblems = wakeViewModel::clearCreateProblems,
+                    onDeleteWake = wakeViewModel::deleteWake,
+                    onRefreshAccounts = wakeViewModel::refreshAccountsAndSummary,
+                    onBack = { showWake = false },
+                    onOpenOverview = {
+                        showWake = false
+                        selectedTab = MobileTab.OVERVIEW
+                    },
+                    modifier = modifier,
+                )
+            }
+            showSessions -> {
+                val sessionsViewModel: SessionsViewModel = viewModel()
+                val sessionsState by sessionsViewModel.state.collectAsStateWithLifecycle()
+                val agentFilter by sessionsViewModel.agentFilter.collectAsStateWithLifecycle()
+                val sessionQuery by sessionsViewModel.query.collectAsStateWithLifecycle()
+                val sessionsContentSearch by sessionsViewModel.contentSearch.collectAsStateWithLifecycle()
+                val sessionsStats by sessionsViewModel.stats.collectAsStateWithLifecycle()
+                SessionsPage(
+                    status = state.status,
+                    state = sessionsState,
+                    agentFilter = agentFilter,
+                    query = sessionQuery,
+                    onAgentChange = sessionsViewModel::setAgentFilter,
+                    onQueryChange = sessionsViewModel::setQuery,
+                    onRefresh = sessionsViewModel::refresh,
+                    stats = sessionsStats,
+                    onRefreshStats = { sessionsViewModel.refreshStats() },
+                    contentSearch = sessionsContentSearch,
+                    onSearchContent = sessionsViewModel::searchContent,
+                    onDismissContentSearch = sessionsViewModel::dismissContentSearch,
+                    onBack = { showSessions = false },
+                    onOpenOverview = {
+                        showSessions = false
+                        selectedTab = MobileTab.OVERVIEW
+                    },
+                    modifier = modifier,
+                )
+            }
+            showTotp -> {
+                val totpViewModel: TotpViewModel = viewModel()
+                val totpState by totpViewModel.state.collectAsStateWithLifecycle()
+                val totpAdding by totpViewModel.adding.collectAsStateWithLifecycle()
+                val totpAddError by totpViewModel.addError.collectAsStateWithLifecycle()
+                val totpDeleting by totpViewModel.deleting.collectAsStateWithLifecycle()
+                val totpActionError by totpViewModel.actionError.collectAsStateWithLifecycle()
+                TotpPage(
+                    status = state.status,
+                    state = totpState,
+                    adding = totpAdding,
+                    addError = totpAddError,
+                    deleting = totpDeleting,
+                    actionError = totpActionError,
+                    onRefresh = totpViewModel::refresh,
+                    onAdd = totpViewModel::add,
+                    onDelete = totpViewModel::delete,
+                    onDismissAddError = totpViewModel::dismissAddError,
+                    onDismissActionError = totpViewModel::dismissActionError,
+                    onBack = { showTotp = false },
+                    onOpenOverview = {
+                        showTotp = false
+                        selectedTab = MobileTab.OVERVIEW
+                    },
+                    modifier = modifier,
+                )
+            }
             showProbe -> {
                 val probeViewModel: GatewayProbeViewModel = viewModel()
                 val probeState by probeViewModel.state.collectAsStateWithLifecycle()
@@ -225,6 +441,13 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onOpenOverview = {
                         showSettings = false
                         selectedTab = MobileTab.OVERVIEW
+                    },
+                    onOpenBackup = {
+                        showSettings = false
+                        showBackup = true
+                    },
+                    onShareReport = { intent ->
+                        runCatching { context.startActivity(Intent.createChooser(intent, "分享自检摘要")) }
                     },
                     saveState = settingsSave,
                     onToggleRedact = settingsViewModel::toggleRedact,
@@ -312,26 +535,39 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     modifier = modifier,
                 )
             }
-            selectedTab == MobileTab.OVERVIEW -> OverviewPage(
-                state = state,
-                url = url,
-                copied = copied,
-                onPrimaryAction = { requestPrimaryAction() },
-                onCopy = {
-                    if (url.isNotEmpty()) {
-                        clipboard.setText(AnnotatedString(url))
-                        copied = true
-                    }
-                },
-                onSearch = { selectedTab = MobileTab.MORE },
-                modifier = modifier,
-            )
+            selectedTab == MobileTab.OVERVIEW -> {
+                val overviewStats by viewModel.stats.collectAsStateWithLifecycle()
+                val overviewLatest by viewModel.latest.collectAsStateWithLifecycle()
+                LaunchedEffect(Unit) { viewModel.refreshStats() }
+                OverviewPage(
+                    state = state,
+                    url = url,
+                    copied = copied,
+                    onPrimaryAction = { requestPrimaryAction() },
+                    onCopy = {
+                        if (url.isNotEmpty()) {
+                            clipboard.setText(AnnotatedString(url))
+                            copied = true
+                        }
+                    },
+                    onSearch = { selectedTab = MobileTab.MORE },
+                    stats = overviewStats,
+                    latestRequest = overviewLatest,
+                    modifier = modifier,
+                )
+            }
             selectedTab == MobileTab.CHANNELS -> {
                 val channelsViewModel: ChannelsViewModel = viewModel()
                 val channelsState by channelsViewModel.state.collectAsStateWithLifecycle()
                 val bundleState by channelsViewModel.bundlePreview.collectAsStateWithLifecycle()
                 val bundleImportState by channelsViewModel.bundleImport.collectAsStateWithLifecycle()
                 val qoderLoginState by channelsViewModel.qoderLogin.collectAsStateWithLifecycle()
+                LaunchedEffect(Unit) { channelsViewModel.refreshProbes() }
+                val channelProbes by channelsViewModel.probes.collectAsStateWithLifecycle()
+                val channelProbing by channelsViewModel.probing.collectAsStateWithLifecycle()
+                val channelsToggling by channelsViewModel.toggling.collectAsStateWithLifecycle()
+                val channelsModels by channelsViewModel.models.collectAsStateWithLifecycle()
+                val channelsToggleError by channelsViewModel.toggleError.collectAsStateWithLifecycle()
                 var pendingBundle by remember { mutableStateOf<Uri?>(null) }
                 var askPassphrase by remember { mutableStateOf<BundlePassphrasePurpose?>(null) }
                 val bundlePicker = rememberLauncherForActivityResult(
@@ -361,9 +597,37 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onPickBundle = { bundlePicker.launch(arrayOf("*/*")) },
                     onImportBundle = { askPassphrase = BundlePassphrasePurpose.IMPORT },
                     onDismissBundle = channelsViewModel::dismissBundlePreview,
+                    probes = channelProbes,
+                    probing = channelProbing,
+                    onTestProvider = channelsViewModel::testProvider,
+                    toggling = channelsToggling,
+                    models = channelsModels,
+                    onLoadModels = channelsViewModel::loadModels,
+                    onDismissModels = channelsViewModel::dismissModels,
+                    onToggleProvider = channelsViewModel::toggleProvider,
                     modifier = modifier,
                 )
                 val purpose = askPassphrase
+                // 启停失败：必须让用户看到错误码，而不是"点了没反应"。
+                channelsToggleError?.let { (code, message) ->
+                    McaDialog(
+                        onDismissRequest = channelsViewModel::dismissToggleError,
+                        title = { Text("切换渠道失败", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Text(
+                                text = "$message（错误码：$code）",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                        confirmButton = {
+                            McaButton(
+                                onClick = channelsViewModel::dismissToggleError,
+                                style = McaButtonStyle.Outlined,
+                            ) { Text("知道了") }
+                        },
+                    )
+                }
                 if (purpose != null) {
                     val importing = purpose == BundlePassphrasePurpose.IMPORT
                     BundlePassphraseDialog(
@@ -395,6 +659,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val usageViewModel: UsageViewModel = viewModel()
                 val usageState by usageViewModel.state.collectAsStateWithLifecycle()
                 val usagePeriod by usageViewModel.period.collectAsStateWithLifecycle()
+                val usageDetail by usageViewModel.detail.collectAsStateWithLifecycle()
+                LaunchedEffect(Unit) { usageViewModel.refreshDetail() }
                 UsagePage(
                     status = state.status,
                     state = usageState,
@@ -402,6 +668,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onPeriod = usageViewModel::setPeriod,
                     onRefresh = usageViewModel::refresh,
                     onOpenOverview = { selectedTab = MobileTab.OVERVIEW },
+                    detail = usageDetail,
+                    onRefreshDetail = usageViewModel::refreshDetail,
                     modifier = modifier,
                 )
             }
@@ -409,6 +677,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val requestsViewModel: RequestsViewModel = viewModel()
                 val requestsState by requestsViewModel.state.collectAsStateWithLifecycle()
                 val requestsQuery by requestsViewModel.query.collectAsStateWithLifecycle()
+                val requestsExport by requestsViewModel.export.collectAsStateWithLifecycle()
                 val requestDetail by requestsViewModel.selected.collectAsStateWithLifecycle()
                 RequestsPage(
                     status = state.status,
@@ -422,6 +691,14 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     selected = requestDetail,
                     onSelect = requestsViewModel::select,
                     onDismissDetail = requestsViewModel::dismissDetail,
+                    exportState = requestsExport,
+                    onExportCsv = requestsViewModel::exportCsv,
+                    onShareCsv = {
+                        (requestsExport as? RequestsExportUiState.Ready)?.let { ready ->
+                            runCatching { context.startActivity(requestsViewModel.shareIntent(ready)) }
+                        }
+                    },
+                    onDismissExport = requestsViewModel::dismissExport,
                     modifier = modifier,
                 )
             }
@@ -435,7 +712,13 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                         WorkspaceAction.Routing -> showRouting = true
                         WorkspaceAction.Settings -> showSettings = true
                         WorkspaceAction.Probe -> showProbe = true
-                        WorkspaceAction.DesktopOnly -> Unit
+                        WorkspaceAction.Totp -> showTotp = true
+                        WorkspaceAction.Sessions -> showSessions = true
+                        WorkspaceAction.Wake -> showWake = true
+                        WorkspaceAction.Library -> showLibrary = true
+                        WorkspaceAction.Plugins -> showPlugins = true
+                        WorkspaceAction.Clients -> showClients = true
+                        WorkspaceAction.DesktopOnly -> showDesktopOnly = true
                         is WorkspaceAction.Pending -> pending = PendingTarget(
                             title = entry.title,
                             subtitle = entry.subtitle,

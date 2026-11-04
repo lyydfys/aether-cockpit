@@ -206,12 +206,15 @@ private fun SettingsRow(group: SettingsGroup, onClick: () -> Unit) {
 
 @Composable
 private fun WorkspaceRow(entry: WorkspaceEntry, onClick: () -> Unit) {
-    val enabled = !entry.desktopOnly
+    // 仅 Windows 的行也可点：点开是**说明为什么做不到**，不是执行动作。
+    val enabled = true
     val trailing = when (val action = entry.action) {
         is WorkspaceAction.Tab -> if (action.tab == MobileTab.OVERVIEW) "当前" else action.tab.label
         WorkspaceAction.DesktopOnly -> "仅 Windows"
         is WorkspaceAction.Pending -> action.stage
-        WorkspaceAction.Probe, WorkspaceAction.Routing, WorkspaceAction.Settings -> "已接入"
+        WorkspaceAction.Probe, WorkspaceAction.Routing, WorkspaceAction.Settings,
+        WorkspaceAction.Totp, WorkspaceAction.Sessions, WorkspaceAction.Wake,
+        WorkspaceAction.Library, WorkspaceAction.Plugins, WorkspaceAction.Clients -> "已接入"
     }
     Row(
         modifier = Modifier
@@ -225,7 +228,7 @@ private fun WorkspaceRow(entry: WorkspaceEntry, onClick: () -> Unit) {
                 },
             )
             .padding(12.dp)
-            .alpha(if (enabled) 1f else 0.5f),
+            .alpha(if (entry.desktopOnly) 0.75f else 1f),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Surface(

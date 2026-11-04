@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayState
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.OverviewStats
 import com.muyuchat.aether.runtime.stateLabel
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
@@ -46,6 +49,8 @@ internal fun OverviewPage(
     onPrimaryAction: () -> Unit,
     onCopy: () -> Unit,
     onSearch: () -> Unit,
+    stats: OverviewStats? = null,
+    latestRequest: String? = null,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -71,7 +76,18 @@ internal fun OverviewPage(
                 onCopy = onCopy,
             )
         }
-        item { StatsGrid() }
+        item { StatsGrid(stats) }
+        item {
+            // 「最近一次模型请求」：回答"这台手机的网关被客户端用过没有"。
+            // latestRequest 为 null 表示网关未启动（不写"未知"，也不写"没有请求"）。
+            if (latestRequest != null) {
+                Text(
+                    text = latestRequest,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         item { EntryProtocols(state.status) }
         if (state.notice.isNotEmpty()) {
             item {
@@ -258,23 +274,23 @@ private fun GatewayCard(
 }
 
 @Composable
-private fun StatsGrid() {
+private fun StatsGrid(stats: OverviewStats?) {
     Surface(
         shape = McaShape.Card,
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
         Column {
-            Row {
-                StatCell("今日请求", "—", "Stage 5 接入", Modifier.weight(1f))
+            Row(Modifier.height(IntrinsicSize.Min)) {
+                StatCell("今日请求", stats?.calls ?: "—", stats?.captions?.get(0) ?: "读不到", Modifier.weight(1f))
                 VerticalHairline()
-                StatCell("已启用账号", "—", "Stage 4 接入", Modifier.weight(1f))
+                StatCell("已启用账号", stats?.accounts ?: "—", stats?.captions?.get(3) ?: "读不到", Modifier.weight(1f))
             }
             HorizontalHairline()
-            Row {
-                StatCell("今日 Token", "—", "Stage 5 接入", Modifier.weight(1f))
+            Row(Modifier.height(IntrinsicSize.Min)) {
+                StatCell("今日 Token", stats?.tokens ?: "—", stats?.captions?.get(1) ?: "读不到", Modifier.weight(1f))
                 VerticalHairline()
-                StatCell("今日成本", "—", "Stage 5 接入", Modifier.weight(1f))
+                StatCell("今日成本", stats?.cost ?: "—", stats?.captions?.get(2) ?: "读不到", Modifier.weight(1f))
             }
         }
     }
@@ -306,10 +322,11 @@ private fun StatCell(label: String, value: String, note: String, modifier: Modif
 
 @Composable
 private fun VerticalHairline() {
+    // 高度交给父 Row 的 IntrinsicSize：写死 82dp 在 1.3x 字体下会比 StatCell 短一截。
     Box(
         Modifier
             .width(1.dp)
-            .height(82.dp)
+            .fillMaxHeight()
             .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
     )
 }

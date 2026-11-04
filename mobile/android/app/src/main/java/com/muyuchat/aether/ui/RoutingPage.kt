@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -30,12 +32,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.RoutingCatalogModel
+import com.muyuchat.aether.runtime.routingTemplateLine
 import com.muyuchat.aether.runtime.RoutingGroup
 import com.muyuchat.aether.runtime.routingChainProviders
 import com.muyuchat.aether.runtime.routingGroupMembers
@@ -158,6 +163,36 @@ internal fun RoutingPage(
                 }
             }
         }
+        // 组模板（只读）：服务端给的"怎么组一套路由"的现成方案。
+        // 套用模板要写配置，留在桌面端；这里只说明每个模板是否具备条件。
+        if (state is RoutingUiState.Ready && state.overview.templates.isNotEmpty()) {
+            item {
+                Text(
+                    text = "组模板",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            items(state.overview.templates.size) { index ->
+                val template = state.overview.templates[index]
+                Surface(shape = McaShape.Card, color = McaTonal.fill()) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                        Text(
+                            text = routingTemplateLine(template),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "模板只读：套用与调整请到桌面端。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        item { ModelRedirectSection(running = state is RoutingUiState.Ready) }
         item {
             Text(
                 text = "点击路由组可查看解析链、修改组名与成员；保存以组 id 为 from 基准，失败原因由服务端返回。",
@@ -702,7 +737,11 @@ private fun RoutingEditorField(
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    // BasicTextField 不吃 Compose 的触摸目标扩展，自己撑到 48dp。
+                    .heightIn(min = 48.dp)
+                    .wrapContentHeight(Alignment.CenterVertically)
+                    .padding(horizontal = 12.dp)
+                    .semantics { contentDescription = label },
             )
         }
     }

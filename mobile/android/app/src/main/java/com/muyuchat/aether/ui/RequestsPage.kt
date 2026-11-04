@@ -55,6 +55,10 @@ internal fun RequestsPage(
     selected: RequestRow? = null,
     onSelect: (RequestRow) -> Unit = {},
     onDismissDetail: () -> Unit = {},
+    exportState: RequestsExportUiState = RequestsExportUiState.Idle,
+    onExportCsv: () -> Unit = {},
+    onShareCsv: () -> Unit = {},
+    onDismissExport: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -93,7 +97,10 @@ internal fun RequestsPage(
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 McaButton(
                     onClick = { onFailedOnly(false) },
                     style = if (!failedOnly) McaButtonStyle.Primary else McaButtonStyle.Outlined,
@@ -102,6 +109,48 @@ internal fun RequestsPage(
                     onClick = { onFailedOnly(true) },
                     style = if (failedOnly) McaButtonStyle.Primary else McaButtonStyle.Outlined,
                 ) { Text("仅失败") }
+                Spacer(Modifier.weight(1f))
+                McaButton(
+                    onClick = onExportCsv,
+                    style = McaButtonStyle.Outlined,
+                    enabled = exportState !is RequestsExportUiState.Exporting,
+                ) { Text(if (exportState is RequestsExportUiState.Exporting) "导出中…" else "导出 CSV") }
+            }
+        }
+        // 导出结果：说清楚"导了多少条、去哪一步"，不说"已备份"。
+        if (exportState !is RequestsExportUiState.Idle) {
+            item {
+                when (exportState) {
+                    is RequestsExportUiState.Exporting -> RequestsStateCard(
+                        title = "正在导出",
+                        detail = "服务端会按当前筛选生成 CSV；条数多时会慢一些。",
+                    )
+                    is RequestsExportUiState.Ready -> Column {
+                        RequestsStateCard(
+                            title = "已生成 ${exportState.fileName}",
+                            detail = "共 ${exportState.rows} 条记录、${exportState.bytes} 字节。" +
+                                "下一步选择保存位置或直接分享。" +
+                                "CSV 保留台账全部列（与桌面导出一致），请勿分享给他人。",
+                            actionLabel = "分享 / 保存",
+                            onAction = onShareCsv,
+                        )
+                        McaButton(onClick = onDismissExport, style = McaButtonStyle.Outlined) { Text("关闭") }
+                    }
+                    is RequestsExportUiState.Failed -> Column {
+                        RequestsStateCard(
+                            title = "导出失败",
+                            detail = when (exportState.code) {
+                                "empty_csv" -> "没有可导出的记录（当前筛选下是空的）"
+                                "gateway_not_running" -> "网关未启动：先回「概览」启动网关"
+                                else -> "${exportState.message}（错误码：${exportState.code}）"
+                            },
+                            actionLabel = "重试",
+                            onAction = onExportCsv,
+                        )
+                        McaButton(onClick = onDismissExport, style = McaButtonStyle.Outlined) { Text("关闭") }
+                    }
+                    RequestsExportUiState.Idle -> Unit
+                }
             }
         }
         when (state) {

@@ -33,6 +33,24 @@ sealed interface WorkspaceAction {
     /** 打开网关探针页（真实页面，非 Tab）。 */
     data object Probe : WorkspaceAction
 
+    /** 打开 2FA（TOTP）页（真实页面，非 Tab）。 */
+    data object Totp : WorkspaceAction
+
+    /** 打开插件页（真实页面，只读：规则与内置插件说明）。 */
+    data object Plugins : WorkspaceAction
+
+    /** 打开客户端页（真实页面，只读：客户端清单与检测状态）。 */
+    data object Clients : WorkspaceAction
+
+    /** 打开会话页（真实页面，只读；手机端通常为空，见页面说明）。 */
+    data object Sessions : WorkspaceAction
+
+    /** 打开唤醒队列页（真实页面：只读状态 + 手动触发，不承诺定时）。 */
+    data object Wake : WorkspaceAction
+
+    /** 打开资源库页（真实页面：查看与删除，发现/下发仅桌面端）。 */
+    data object Library : WorkspaceAction
+
     /** 尚未实现：显示明确阶段占位，不伪装成可用。 */
     data class Pending(val stage: String) : WorkspaceAction
 
@@ -71,18 +89,20 @@ fun workspaceEntries(): List<WorkspaceEntry> = listOf(
     WorkspaceEntry("渠道接入", "登录、新增账号、导入；PC 扫描仅 Windows", WorkspaceAction.Tab(MobileTab.CHANNELS)),
     WorkspaceEntry("账号额度", "额度、优先级与并发", WorkspaceAction.Tab(MobileTab.CHANNELS)),
     WorkspaceEntry("用量", "成本、Token 与趋势", WorkspaceAction.Tab(MobileTab.USAGE)),
-    WorkspaceEntry("任务", "签到、唤醒队列", WorkspaceAction.Pending("Stage 6")),
+    // 签到调度器已随移动运行时接线（Go 侧），但手机端还没有独立的签到页面，
+    // 所以这里不再写"签到仅 Windows"——那会变成一句假话。
+    WorkspaceEntry("任务", "唤醒队列（签到调度已接线）", WorkspaceAction.Wake),
     WorkspaceEntry("应用", "启动 PC 客户端；仅 Windows", WorkspaceAction.DesktopOnly),
-    WorkspaceEntry("会话", "本机 Agent 会话与导出", WorkspaceAction.Pending("Stage 6")),
-    WorkspaceEntry("资源库", "指令、技能、MCP、子代理与 Hooks", WorkspaceAction.Pending("Stage 6")),
+    WorkspaceEntry("会话", "本机 Agent 会话（只读）", WorkspaceAction.Sessions),
+    WorkspaceEntry("资源库", "指令、技能、MCP、子代理（查看/删除）", WorkspaceAction.Library),
     WorkspaceEntry("请求", "请求日志与诊断", WorkspaceAction.Tab(MobileTab.REQUESTS)),
     WorkspaceEntry("网关探针", "健康、版本与指标", WorkspaceAction.Probe),
-    WorkspaceEntry("2FA", "TOTP 验证码", WorkspaceAction.Pending("Stage 6")),
+    WorkspaceEntry("2FA", "TOTP 验证码", WorkspaceAction.Totp),
     WorkspaceEntry("设置", "常规、网络、隐私与备份", WorkspaceAction.Settings),
-    WorkspaceEntry("Agent", "客户端接入片段", WorkspaceAction.Pending("Stage 6")),
+    WorkspaceEntry("Agent", "客户端接入片段（只读）", WorkspaceAction.Clients),
     WorkspaceEntry("路由", "模型映射与回退", WorkspaceAction.Routing),
     WorkspaceEntry("脱敏", "隐私与请求改写", WorkspaceAction.Settings),
-    WorkspaceEntry("插件", "扩展与工具", WorkspaceAction.Pending("Stage 6")),
+    WorkspaceEntry("插件", "请求改写规则与内置插件（只读）", WorkspaceAction.Plugins),
     WorkspaceEntry("额度快捷查看", "渠道余量速览", WorkspaceAction.Tab(MobileTab.CHANNELS)),
 )
 

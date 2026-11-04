@@ -46,6 +46,8 @@ internal fun UsagePage(
     onPeriod: (UsagePeriod) -> Unit,
     onRefresh: () -> Unit,
     onOpenOverview: () -> Unit,
+    detail: UsageDetailUiState = UsageDetailUiState.Idle,
+    onRefreshDetail: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -128,6 +130,37 @@ internal fun UsagePage(
                         item { SectionTitle("近期趋势") }
                         item { UsageSeriesCard(points) }
                     }
+                }
+            }
+        }
+        // 用量细分三节：各自独立，任何一节读不到都只在本节报错。
+        when (detail) {
+            UsageDetailUiState.Idle, UsageDetailUiState.Loading -> Unit
+            is UsageDetailUiState.Failed -> item {
+                UsageStateCard(
+                    title = "用量细分读不到",
+                    detail = "错误码： · 原因：",
+                    actionLabel = "重试",
+                    onAction = onRefreshDetail,
+                )
+            }
+            is UsageDetailUiState.Ready -> {
+                val today = java.time.LocalDate.now().toString()
+                item { SectionTitle("近 30 天") }
+                item {
+                    UsageHeatmapSection(
+                        days = detail.heatmap.recentDays(30, today),
+                        error = detail.errors["heatmap"],
+                    )
+                }
+                item { QuotaPlanSection(running = status.running) }
+                item { SectionTitle("配额历史") }
+                item {
+                    UsageQuotaSection(accounts = detail.quotaHistory, error = detail.errors["quota"])
+                }
+                item { SectionTitle("价格表") }
+                item {
+                    UsagePricingSection(pricing = detail.pricing, error = detail.errors["pricing"])
                 }
             }
         }

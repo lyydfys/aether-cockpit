@@ -36,6 +36,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.AccountSummary
+import com.muyuchat.aether.runtime.channelToggleConfirmTitle
+import com.muyuchat.core.designsystem.McaDialog
+import androidx.compose.runtime.remember
+import com.muyuchat.aether.runtime.channelToggleLabel
+import com.muyuchat.aether.runtime.channelToggleConfirmBody
+import com.muyuchat.aether.runtime.providerModelsPreview
+import com.muyuchat.aether.runtime.providerModelsSummary
+import com.muyuchat.aether.runtime.ChannelProbe
+import com.muyuchat.aether.runtime.channelProbeAgeLabel
+import com.muyuchat.aether.runtime.channelProbeSummary
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ProviderSummary
 import com.muyuchat.aether.runtime.parseBrandColor
@@ -63,6 +73,14 @@ internal fun ChannelsPage(
     onPickBundle: () -> Unit,
     onImportBundle: () -> Unit,
     onDismissBundle: () -> Unit,
+    probes: Map<String, ChannelProbe> = emptyMap(),
+    probing: String? = null,
+    onTestProvider: (String) -> Unit = {},
+    toggling: String? = null,
+    models: Map<String, ProviderModelsUiState> = emptyMap(),
+    onLoadModels: (String) -> Unit = {},
+    onDismissModels: (String) -> Unit = {},
+    onToggleProvider: (String, Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -119,6 +137,8 @@ internal fun ChannelsPage(
                 onDismiss = onDismissBundle,
             )
         }
+        // 账号包的另一半：把本机账号导回桌面。放在导入卡片旁边，口径成对出现。
+        item { AccountExportSection(status = status) }
         when (state) {
             ChannelsUiState.Idle -> item {
                 StateCard(
@@ -156,7 +176,19 @@ internal fun ChannelsPage(
                             )
                         }
                     } else {
-                        item { ProviderList(filtered) }
+                        item {
+                        ProviderList(
+                            providers = filtered,
+                            probes = probes,
+                            probing = probing,
+                            onTestProvider = onTestProvider,
+                            toggling = toggling,
+                            models = models,
+                            onLoadModels = onLoadModels,
+                            onDismissModels = onDismissModels,
+                            onToggleProvider = onToggleProvider,
+                        )
+                    }
                     }
                 }
             }
@@ -216,7 +248,17 @@ private fun SummaryCard(providers: List<ProviderSummary>) {
 }
 
 @Composable
-private fun ProviderList(providers: List<ProviderSummary>) {
+private fun ProviderList(
+    providers: List<ProviderSummary>,
+    probes: Map<String, ChannelProbe>,
+    probing: String?,
+    onTestProvider: (String) -> Unit,
+    toggling: String?,
+    onToggleProvider: (String, Boolean) -> Unit,
+    models: Map<String, ProviderModelsUiState>,
+    onLoadModels: (String) -> Unit,
+    onDismissModels: (String) -> Unit,
+) {
     val nowMs = System.currentTimeMillis()
     Surface(
         shape = McaShape.Card,
@@ -229,7 +271,17 @@ private fun ProviderList(providers: List<ProviderSummary>) {
         ) {
             providers.forEach { provider ->
                 Column {
-                    ProviderRow(provider)
+                    ProviderRow(
+                        provider = provider,
+                        probe = probes[provider.id],
+                        probing = probing == provider.id,
+                        onTest = { onTestProvider(provider.id) },
+                        toggling = toggling == provider.id,
+                        onToggle = { enable -> onToggleProvider(provider.id, enable) },
+                        modelsState = models[provider.id],
+                        onLoadModels = { onLoadModels(provider.id) },
+                        onDismissModels = { onDismissModels(provider.id) },
+                    )
                     provider.accounts.forEach { account ->
                         AccountRow(account = account, nowMs = nowMs)
                     }
@@ -306,7 +358,18 @@ private fun AccountRow(account: AccountSummary, nowMs: Long) {
 }
 
 @Composable
-private fun ProviderRow(provider: ProviderSummary) {
+private fun ProviderRow(
+    provider: ProviderSummary,
+    probe: ChannelProbe?,
+    probing: Boolean,
+    onTest: () -> Unit,
+    toggling: Boolean = false,
+    onToggle: (Boolean) -> Unit = {},
+    modelsState: ProviderModelsUiState? = null,
+    onLoadModels: () -> Unit = {},
+    onDismissModels: () -> Unit = {},
+) {
+    var confirmToggle by remember { mutableStateOf(false) }
     val accent = when {
         provider.off -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
         provider.ready -> MaterialTheme.colorScheme.primary
@@ -319,10 +382,9 @@ private fun ProviderRow(provider: ProviderSummary) {
         provider.accountCount == 0 -> "未添加账号"
         else -> "${provider.readyCount}/${provider.accountCount} 可用"
     }
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp)) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Surface(
@@ -381,6 +443,162 @@ private fun ProviderRow(provider: ProviderSummary) {
             },
             maxLines = 1,
         )
+    }
+        // 启停：写操作，先弹确认；按钮文案随**当前状态**变化（off=true → 显示「启用」）。
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            McaButton(
+                onClick = { confirmToggle = true },
+                style = McaButtonStyle.Text,
+                enabled = !toggling,
+            ) {
+                Text(
+                    when {
+                        toggling -> "切换中…"
+                        provider.off -> "启用此渠道"
+                        else -> "停用此渠道"
+                    },
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            McaButton(
+                onClick = onLoadModels,
+                style = McaButtonStyle.Text,
+                enabled = modelsState !is ProviderModelsUiState.Loading,
+            ) { Text(if (modelsState is ProviderModelsUiState.Loading) "读取模型…" else "查看模型") }
+        }
+        // 探测行单独占一行：1.3× 字号下跟按钮挤在同一行会把「还没有探测记录」压成竖排单字。
+        ProbeLine(probe = probe, probing = probing, onTest = onTest)
+        // 模型清单结果：只列条数与名字（超长折叠），不展示任何凭据。
+        val openModels = modelsState
+        if (openModels != null) {
+            McaDialog(
+                onDismissRequest = { onDismissModels() },
+                title = { Text("${provider.name} 的模型", fontWeight = FontWeight.Bold) },
+                text = {
+                    when (openModels) {
+                        ProviderModelsUiState.Loading -> Text("读取中…")
+                        is ProviderModelsUiState.Failed -> Text(
+                            text = "${openModels.message}（错误码：${openModels.code}）",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        is ProviderModelsUiState.Ready -> {
+                            val preview = providerModelsPreview(openModels.models.models)
+                            Column {
+                                Text(
+                                    text = providerModelsSummary(openModels.models),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                preview.shown.forEach { model ->
+                                    Text(
+                                        text = "· $model",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (preview.more > 0) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = "还有 ${preview.more} 个未显示",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    McaButton(onClick = { onDismissModels() }, style = McaButtonStyle.Outlined) { Text("知道了") }
+                },
+            )
+        }
+        if (confirmToggle) {
+            McaDialog(
+                onDismissRequest = { confirmToggle = false },
+                title = {
+                    Text(
+                        text = channelToggleConfirmTitle(provider.off, provider.name),
+                        fontWeight = FontWeight.Bold,
+                    )
+                },
+                text = {
+                    Text(
+                        text = channelToggleConfirmBody(provider.off),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                confirmButton = {
+                    McaButton(
+                        onClick = {
+                            confirmToggle = false
+                            onToggle(provider.off)
+                        },
+                        style = McaButtonStyle.Primary,
+                    ) { Text(channelToggleLabel(provider.off)) }
+                },
+                dismissButton = {
+                    McaButton(onClick = { confirmToggle = false }, style = McaButtonStyle.Outlined) { Text("取消") }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * 渠道探测结论行。
+ *
+ * 口径：这是**一次探测的结果**（"刚刚测试"），不是"已连接"这种持续状态；
+ * 失败时把服务端原文贴出来，不写"测试失败"四个字了事。
+ */
+@Composable
+private fun ProbeLine(
+    probe: ChannelProbe?,
+    probing: Boolean,
+    onTest: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Spacer(Modifier.height(8.dp))
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            when {
+                probing -> Text(
+                    text = "正在探测（服务端用账号池里的账号发起一次真实请求）…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                probe == null -> Text(
+                    text = "还没有探测记录",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> {
+                    Text(
+                        text = channelProbeSummary(probe),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (probe.ok) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                    if (probe.at > 0) {
+                        Text(
+                            text = channelProbeAgeLabel(probe.at, System.currentTimeMillis() / 1000),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        McaButton(
+            onClick = onTest,
+            style = McaButtonStyle.Outlined,
+            enabled = !probing,
+        ) { Text(if (probing) "探测中…" else "测试") }
     }
 }
 
