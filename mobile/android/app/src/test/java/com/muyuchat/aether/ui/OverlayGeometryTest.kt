@@ -64,6 +64,16 @@ class OverlayGeometryTest {
     }
 
     @Test
+    fun snapFractionGoesToNearestHorizontalEdge() {
+        assertEquals(0f, OverlayGeometry.snapFraction(0.49f))
+        assertEquals(1f, OverlayGeometry.snapFraction(0.5f))
+        assertEquals(1f, OverlayGeometry.snapFraction(0.9f))
+        assertEquals(0f, OverlayGeometry.snapFraction(-1f))
+        assertEquals(1f, OverlayGeometry.snapFraction(2f))
+        assertEquals(0f, OverlayGeometry.snapFraction(Float.NaN))
+    }
+
+    @Test
     fun edgeInsetIsEightDp() {
         assertEquals(8, OverlayGeometry.EDGE_DP)
         assertTrue(OverlayGeometry.EDGE_DP > 0)

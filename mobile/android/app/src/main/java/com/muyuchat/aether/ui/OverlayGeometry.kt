@@ -52,4 +52,13 @@ internal object OverlayGeometry {
         val moved = clampFraction(currentFraction) + deltaPx / travelPx
         return if (moved.isFinite()) moved.coerceIn(0f, 1f) else clampFraction(currentFraction)
     }
+
+    /**
+     * 横向吸附：拖完只落到最近的一条边（0 或 1）。
+     *
+     * 页面球和系统 overlay 共用；系统层再把比例翻成 `Gravity.END/START`，
+     * 不在窗口层算绝对坐标。
+     */
+    fun snapFraction(fraction: Float): Float =
+        if (clampFraction(fraction) >= 0.5f) 1f else 0f
 }

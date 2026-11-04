@@ -172,8 +172,8 @@ internal fun GatewayBubble(
                 .pointerInput(travelX, travelY) {
                     detectDragGestures(
                         onDragStart = { expanded = false },
-                        onDragEnd = { xFraction = if (xFraction >= 0.5f) 1f else 0f },
-                        onDragCancel = { xFraction = if (xFraction >= 0.5f) 1f else 0f },
+                        onDragEnd = { xFraction = OverlayGeometry.snapFraction(xFraction) },
+                        onDragCancel = { xFraction = OverlayGeometry.snapFraction(xFraction) },
                     ) { change, dragAmount ->
                         change.consume()
                         xFraction = OverlayGeometry.fractionAfterDrag(xFraction, dragAmount.x, travelX)

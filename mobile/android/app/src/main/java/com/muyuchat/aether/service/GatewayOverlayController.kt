@@ -201,7 +201,7 @@ object GatewayOverlayController {
                 MotionEvent.ACTION_UP -> {
                     if (dragging) {
                         // 横向吸附到最近一边；只改比例 + gravity，不手算绝对坐标。
-                        xFraction = if (xFraction >= 0.5f) 1f else 0f
+                        xFraction = OverlayGeometry.snapFraction(xFraction)
                         applyPosition(view, updateLayout = true)
                     } else {
                         openApp(context)
@@ -210,7 +210,7 @@ object GatewayOverlayController {
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     if (dragging) {
-                        xFraction = if (xFraction >= 0.5f) 1f else 0f
+                        xFraction = OverlayGeometry.snapFraction(xFraction)
                         applyPosition(view, updateLayout = true)
                     }
                     true
