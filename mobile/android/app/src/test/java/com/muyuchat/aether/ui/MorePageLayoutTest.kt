@@ -49,8 +49,10 @@ class MorePageLayoutTest {
         val pending = SettingsGroup("01", "常规", "外观与语言")
         assertEquals("已接入", settingsRowTrailing(wired))
         assertEquals("后续阶段", settingsRowTrailing(pending))
-        // 目录本身的事实：17 个工作区、9 个设置分组，且只有 2 组真的接进了设置页。
-        assertEquals(17, workspaceEntries().size)
+        // 目录本身的事实：18 个工作区、9 个设置分组，且只有 2 组真的接进了设置页。
+        // 18 = 17 + 「客户端」：桌面端本来就有「Agent 接入」（misc.js:10）与
+        // 「客户端接入片段」（gateway.js:113）两个独立视图，手机端此前合并成一个入口。
+        assertEquals(18, workspaceEntries().size)
         assertEquals(9, settingsGroups().size)
         assertEquals(2, settingsGroups().count { it.available })
     }
@@ -60,7 +62,7 @@ class MorePageLayoutTest {
         val detail = moreSearchEmptyDetail("路由")
         assertTrue("要点出被搜索的关键词", detail.contains("「路由」"))
         assertTrue("要用真实计数，不写死", detail.contains("9 个设置分组"))
-        assertTrue("要用真实计数，不写死", detail.contains("17 个工作区"))
+        assertTrue("要用真实计数，不写死", detail.contains("18 个工作区"))
         assertTrue("要给出下一步", detail.contains("清除搜索"))
         // 匹配是「标题或说明」，文案不能夸大成「全文搜索」。
         assertTrue(detail.contains("标题或说明"))

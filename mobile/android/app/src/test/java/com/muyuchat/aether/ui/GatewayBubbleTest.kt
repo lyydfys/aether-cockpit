@@ -13,6 +13,15 @@ import org.junit.Test
  */
 class GatewayBubbleTest {
     @Test
+    fun dragUnderEightDpIsAClickAndEightDpIsNot() {
+        assertTrue(isBubbleClick(distancePx = 0f, density = 1f))
+        assertTrue(isBubbleClick(distancePx = 7.9f, density = 1f))
+        assertTrue(isBubbleClick(distancePx = 15.9f, density = 2f))
+        assertFalse(isBubbleClick(distancePx = 8f, density = 1f))
+        assertFalse(isBubbleClick(distancePx = 16f, density = 2f))
+    }
+
+    @Test
     fun overlayNeedsGatewayBeforePermission() {
         assertEquals(OverlayAvailability.NeedGateway, overlayAvailability(running = false, permissionGranted = false))
         assertEquals(OverlayAvailability.NeedGateway, overlayAvailability(running = false, permissionGranted = true))

@@ -9,7 +9,10 @@ class WorkspaceTest {
     @Test
     fun directoryMatchesTheApprovedDesign() {
         val workspaces = workspaceEntries()
-        assertEquals(17, workspaces.size)
+        // 18 条：桌面端「Agent 接入」与「客户端接入片段」是两个独立视图
+        // （internal/web/ui2/js/views/gateway.js:113、overview.js:64），
+        // 所以手机端也保留两条入口，不再为了守住 17 让 ClientsPage 变成不可达死页面。
+        assertEquals(18, workspaces.size)
         assertEquals(workspaces.size, workspaces.map { it.title }.toSet().size)
         val settings = settingsGroups()
         assertEquals(9, settings.size)
@@ -45,6 +48,9 @@ class WorkspaceTest {
         assertEquals(WorkspaceAction.Library, byTitle.getValue("资源库").action)
         // 「Agent」曾经错指到客户端页（WorkspaceAction.Clients）；现在指向真正的 Agent 接入页。
         assertEquals(WorkspaceAction.Agents, byTitle.getValue("Agent 接入").action)
+        // 桌面端这两个是独立视图（misc.js:10 与 gateway.js:113），所以手机端也拆成两行；
+        // 「客户端」那一行的入口必须回来，否则 ClientsPage 变成不可达页面。
+        assertEquals(WorkspaceAction.Clients, byTitle.getValue("客户端").action)
     }
 
     @Test
@@ -78,10 +84,10 @@ class WorkspaceTest {
     @Test
     fun pendingEntriesCarryTheirOwnStage() {
         val pending = workspaceEntries().filter { it.action is WorkspaceAction.Pending }
-        // 17 条工作区现已全部接线（最后一条占位「Agent/客户端」在本轮换成真实页面），
+        // 18 条工作区现已全部接线（「Agent 接入」与「客户端」按桌面端拆成两行），
         // 所以这里锁的不再是"至少要有一个占位"，而是"占位消失了"这件事本身——
         // 将来若再加占位，这条会失败，提醒作者显式承认。
-        assertTrue("17 条工作区应已全部接线，仍有占位：${pending.map { it.title }}", pending.isEmpty())
+        assertTrue("18 条工作区应已全部接线，仍有占位：${pending.map { it.title }}", pending.isEmpty())
         assertTrue(pending.all { !it.pendingStage.isNullOrBlank() })
         // 已接线的入口不该再带阶段占位。
         val wired = workspaceEntries().filter { it.action !is WorkspaceAction.Pending }

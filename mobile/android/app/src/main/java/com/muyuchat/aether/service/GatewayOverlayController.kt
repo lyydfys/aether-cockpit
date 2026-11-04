@@ -5,7 +5,10 @@ import android.content.Intent
 import android.graphics.PixelFormat
 import android.provider.Settings
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
@@ -21,10 +24,15 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.muyuchat.aether.MainActivity
 import com.muyuchat.aether.runtime.GatewayServiceController
 import com.muyuchat.aether.runtime.GatewayState
+import com.muyuchat.aether.ui.BubbleMarkDp
 import com.muyuchat.aether.ui.GatewaySystemOverlayBubble
+import com.muyuchat.aether.ui.OverlayGeometry
+import com.muyuchat.aether.ui.isBubbleClick
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 /**
  * 页面 → 服务传递的 MCA 颜色。
@@ -67,17 +75,25 @@ data class OverlayColors(
  *
  * 由前台 [AetherGatewayService] 调用：服务活着，overlay 就活着；服务被停止/销毁时
  * 一定会 `hide()`。它不是独立进程、也不会在服务死后单独存活——这一点必须如实说明。
+ *
+ * 位置存的是**比例**（xFraction/yFraction），进程内保留；旋转/分屏后按新的 travel
+ * 重新换算，不用旧像素贴边。左右吸附只切 `Gravity.END/START`，不手算绝对边缘坐标。
  */
 object GatewayOverlayController {
     private val _visible = MutableStateFlow(false)
     val visible: StateFlow<Boolean> = _visible.asStateFlow()
 
-    private var view: ComposeView? = null
+    private var root: FrameLayout? = null
+    private var composeView: ComposeView? = null
     private var owner: OverlayViewTreeOwner? = null
     private var windowManager: WindowManager? = null
 
+    /** 进程内记住位置比例；关闭外显再打开回到这里（不跨进程/重启）。 */
+    private var xFraction: Float = 1f
+    private var yFraction: Float = 0.15f
+
     fun show(context: Context, colors: OverlayColors): Boolean {
-        if (view != null) {
+        if (root != null) {
             _visible.value = true
             return true
         }
@@ -87,7 +103,7 @@ object GatewayOverlayController {
         val manager = context.getSystemService(WindowManager::class.java) ?: return false
         val treeOwner = OverlayViewTreeOwner()
         treeOwner.create()
-        val composeView = ComposeView(context).apply {
+        val compose = ComposeView(context).apply {
             setViewTreeLifecycleOwner(treeOwner)
             setViewTreeSavedStateRegistryOwner(treeOwner)
             setContent {
@@ -103,41 +119,132 @@ object GatewayOverlayController {
             }
         }
         val density = context.resources.displayMetrics.density
+        val screenWidthPx = context.resources.displayMetrics.widthPixels
+        val screenHeightPx = context.resources.displayMetrics.heightPixels
+        val markPx = BubbleMarkDp * density
+        val edgePx = OverlayGeometry.EDGE_DP * density
+        val travelX = OverlayGeometry.travelPx(screenWidthPx, markPx.roundToInt(), edgePx.roundToInt())
+        val travelY = OverlayGeometry.travelPx(screenHeightPx, markPx.roundToInt(), edgePx.roundToInt())
+        xFraction = OverlayGeometry.clampFraction(xFraction)
+        yFraction = OverlayGeometry.clampFraction(yFraction)
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = (16 * density).toInt()
-            y = (160 * density).toInt()
+        )
+
+        fun applyPosition(target: View, updateLayout: Boolean) {
+            val rightAnchored = xFraction >= 0.5f
+            params.gravity = (if (rightAnchored) Gravity.END else Gravity.START) or Gravity.TOP
+            val xOffset = OverlayGeometry.offsetPx(xFraction, travelX)
+            val yOffset = OverlayGeometry.offsetPx(yFraction, travelY)
+            params.x = if (rightAnchored) {
+                (screenWidthPx - (edgePx + xOffset + markPx))
+                    .roundToInt()
+                    .coerceAtLeast(edgePx.roundToInt())
+            } else {
+                (edgePx + xOffset)
+                    .roundToInt()
+                    .coerceAtLeast(edgePx.roundToInt())
+            }
+            params.y = (edgePx + yOffset)
+                .roundToInt()
+                .coerceAtLeast(edgePx.roundToInt())
+            if (updateLayout) {
+                runCatching { manager.updateViewLayout(target, params) }
+            }
         }
+
+        val touchRoot = OverlayTouchRoot(context)
+        touchRoot.addView(
+            compose,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        var downRawX = 0f
+        var downRawY = 0f
+        var startXFraction = xFraction
+        var startYFraction = yFraction
+        var dragging = false
+        touchRoot.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startXFraction = xFraction
+                    startYFraction = yFraction
+                    dragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downRawX
+                    val dy = event.rawY - downRawY
+                    if (!dragging) {
+                        val distance = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                        if (!isBubbleClick(distance, density)) {
+                            dragging = true
+                        }
+                    }
+                    if (dragging) {
+                        xFraction = OverlayGeometry.fractionAfterDrag(startXFraction, dx, travelX)
+                        yFraction = OverlayGeometry.fractionAfterDrag(startYFraction, dy, travelY)
+                        applyPosition(view, updateLayout = true)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (dragging) {
+                        // 横向吸附到最近一边；只改比例 + gravity，不手算绝对坐标。
+                        xFraction = if (xFraction >= 0.5f) 1f else 0f
+                        applyPosition(view, updateLayout = true)
+                    } else {
+                        openApp(context)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    if (dragging) {
+                        xFraction = if (xFraction >= 0.5f) 1f else 0f
+                        applyPosition(view, updateLayout = true)
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+        applyPosition(touchRoot, updateLayout = false)
         return try {
-            manager.addView(composeView, params)
+            manager.addView(touchRoot, params)
             treeOwner.start()
-            view = composeView
+            root = touchRoot
+            composeView = compose
             owner = treeOwner
             windowManager = manager
             _visible.value = true
             true
         } catch (_: Exception) {
             treeOwner.destroy()
-            runCatching { composeView.disposeComposition() }
+            runCatching { compose.disposeComposition() }
             false
         }
     }
 
     fun hide() {
-        val current = view ?: run {
+        val current = root ?: run {
             _visible.value = false
             return
         }
         runCatching { windowManager?.removeViewImmediate(current) }
-        runCatching { current.disposeComposition() }
+        runCatching { composeView?.disposeComposition() }
         owner?.destroy()
-        view = null
+        root = null
+        composeView = null
         owner = null
         windowManager = null
         _visible.value = false
@@ -152,6 +259,14 @@ object GatewayOverlayController {
             )
         }
     }
+}
+
+/**
+ * 把 overlay 的触摸全部拦截到自己的 OnTouchListener：
+ * ComposeView 子层不再消费事件，拖动才能稳定生效。
+ */
+private class OverlayTouchRoot(context: Context) : FrameLayout(context) {
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
 }
 
 /** ComposeView 在 WindowManager 里也需要 Lifecycle/SavedState owner；否则组合会抛异常。 */

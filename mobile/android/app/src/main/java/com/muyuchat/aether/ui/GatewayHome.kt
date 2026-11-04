@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -49,6 +50,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
@@ -80,8 +82,33 @@ internal data class NotReadyNotice(
 private enum class BundlePassphrasePurpose { PREVIEW, IMPORT }
 
 /**
+ * 「当前是否还停在某个覆盖页（非 Tab 页）」的显式快照。
+ *
+ * 返回键只用 [anyOpen] 判断要不要接管，不再手写一长串 `||`——那里漏一个就会让
+ * 那个页面上的返回键直接把用户丢回概览 Tab（曾经漏了 clients / plugins 两个）。
+ * 新增覆盖页时**同时**加字段和 [anyOpen] 里的一项，[GatewayHome] 的构造点也要补。
+ */
+internal data class OverlayFlags(
+    val routing: Boolean = false,
+    val settings: Boolean = false,
+    val probe: Boolean = false,
+    val totp: Boolean = false,
+    val sessions: Boolean = false,
+    val wake: Boolean = false,
+    val library: Boolean = false,
+    val backup: Boolean = false,
+    val agents: Boolean = false,
+    val clients: Boolean = false,
+    val plugins: Boolean = false,
+) {
+    val anyOpen: Boolean
+        get() = routing || settings || probe || totp || sessions || wake ||
+            library || backup || agents || clients || plugins
+}
+
+/**
  * Mobile route shell matching the approved concept: five primary tabs, Overview
- * as the only wired workspace, and a searchable "更多" directory for the 17
+ * as the only wired workspace, and a searchable "更多" directory for the 18
  * Windows workspaces and 9 settings groups.
  *
  * Wired pages read the real controller status. 手机端每个入口要么进真实页面，要么标
@@ -177,7 +204,23 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         }
     }
 
-    BackHandler(enabled = notReady != null || showRouting || showSettings || showProbe || showTotp || showSessions || showWake || showLibrary || showBackup || showAgents || selectedTab != MobileTab.OVERVIEW) {
+    // 覆盖页开关集中成一个值：返回键只看它，避免某个页面漏接线。
+    // 曾经 showClients / showPlugins 就漏了——在客户端页 / 插件页按返回键会掉回概览 Tab，
+    // 那是"点了返回却换了页"的真 bug，现在由 OverlayFlags.anyOpen 一次性覆盖。
+    val overlays = OverlayFlags(
+        routing = showRouting,
+        settings = showSettings,
+        probe = showProbe,
+        totp = showTotp,
+        sessions = showSessions,
+        wake = showWake,
+        library = showLibrary,
+        backup = showBackup,
+        agents = showAgents,
+        clients = showClients,
+        plugins = showPlugins,
+    )
+    BackHandler(enabled = notReady != null || overlays.anyOpen || selectedTab != MobileTab.OVERVIEW) {
         if (notReady != null) {
             notReady = null
         } else if (showRouting) {
@@ -198,6 +241,10 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
             showBackup = false
         } else if (showAgents) {
             showAgents = false
+        } else if (showClients) {
+            showClients = false
+        } else if (showPlugins) {
+            showPlugins = false
         } else {
             selectedTab = MobileTab.OVERVIEW
         }
@@ -221,28 +268,20 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     showLibrary = false
                     showBackup = false
                     showAgents = false
+                    showClients = false
+                    showPlugins = false
                 },
-            )
-        },
-        floatingActionButton = {
-            GatewayBubble(
-                status = state.status,
-                overlayVisible = overlayVisible,
-                copied = copied,
-                onPrimaryAction = { requestPrimaryAction() },
-                onCopy = {
-                    if (url.isNotEmpty()) {
-                        clipboard.setText(AnnotatedString(url))
-                        copied = true
-                    }
-                },
-                onToggleOverlay = { toggleOverlay() },
             )
         },
     ) { innerPadding ->
         // safeDrawing 不含 IME inset：键盘弹出时页面底部输入框会被遮住，
         // 这里补一次 imePadding（对话框是独立 window，另有自己的处理）。
-        val modifier = Modifier.padding(innerPadding).imePadding()
+        // 底部再预留球高 + 边距，保证默认停在右下角时不压住列表最后一张卡。
+        val modifier = Modifier
+            .padding(innerPadding)
+            .imePadding()
+            .padding(bottom = BubbleReservedBottom)
+        Box(Modifier.fillMaxSize()) {
         when {
             showBackup -> {
                 val backupViewModel: BackupViewModel = viewModel()
@@ -811,6 +850,25 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     }
                 },
             )
+        }
+        GatewayBubble(
+            status = state.status,
+            overlayVisible = overlayVisible,
+            copied = copied,
+            onPrimaryAction = { requestPrimaryAction() },
+            onCopy = {
+                if (url.isNotEmpty()) {
+                    clipboard.setText(AnnotatedString(url))
+                    copied = true
+                }
+            },
+            onToggleOverlay = { toggleOverlay() },
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .imePadding()
+                .zIndex(2f),
+        )
         }
     }
 }

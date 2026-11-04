@@ -21,6 +21,15 @@ enum class MobileTab(
  * 上一版把去向藏在 `title == "路由"` 这类字符串比较里，于是 17 个工作区里只有 3 个真跳，
  * 用量/请求/渠道明明已经能用却点了弹「后续阶段」。改成显式的 sealed 类型后，
  * 「这一行到底去哪」是数据的一部分，可以被单测锁住，也不会再靠标题字符串猜。
+ *
+ * **条目数是 18，不是 17**：多出来的那条不是"手机端自己加的功能"，而是桌面端
+ * 本来就有、而手机端此前合并掉的一个视图——
+ * 「Agent 接入」与「客户端」在桌面端是两个独立视图：
+ * `internal/web/ui2/js/views/misc.js:10`（agents 视图，看各 agent 的模型）与
+ * `internal/web/ui2/js/views/gateway.js:113`（客户端接入片段卡）＋ `overview.js:64`。
+ * 手机端曾经把「Agent」这一行错指到客户端页（[WorkspaceAction.Clients]），
+ * 于是两个视图只剩一个入口。这里按桌面端拆回两行（DESKTOP_PARITY_GAPS §2-12 / §3-2）。
+ * 换句话说：17→18 是**对齐桌面端**，不是给手机端加桌面端没有的东西。
  */
 sealed interface WorkspaceAction {
     /** 切到某个真实存在的底部 Tab。 */
@@ -111,6 +120,7 @@ fun workspaceEntries(): List<WorkspaceEntry> = listOf(
     WorkspaceEntry("2FA", "TOTP 验证码", WorkspaceAction.Totp),
     WorkspaceEntry("设置", "常规、网络、隐私与备份", WorkspaceAction.Settings),
     WorkspaceEntry("Agent 接入", "本机 agent 的模型与 CLI 巡检（只读）", WorkspaceAction.Agents),
+    WorkspaceEntry("客户端", "客户端接入片段（只读）", WorkspaceAction.Clients),
     WorkspaceEntry("路由", "模型映射与回退", WorkspaceAction.Routing),
     WorkspaceEntry("脱敏", "隐私与请求改写", WorkspaceAction.Settings),
     WorkspaceEntry("插件", "请求改写规则与内置插件（只读）", WorkspaceAction.Plugins),
