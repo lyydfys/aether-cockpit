@@ -6,6 +6,7 @@ import java.io.IOException
 import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 /** GET /healthz 的应答：正文恒为 ok，只是文本/JSON 两种形状。 */
 data class HealthzProbe(
@@ -103,6 +104,10 @@ internal fun probeNeedsSession(path: String): Boolean = when (path) {
     "/api/alerts" -> true
     // Codex 身份对照（`GET /api/providers/codex/identity`，`gateway.go:1150`）同样在 `/api/` 面。
     "/api/providers/codex/identity" -> true
+    // 渠道网络策略（`GET /api/channels/net`，`gateway.go:1205`）也是管理面。
+    "/api/channels/net" -> true
+    // 网络连通诊断（`GET /api/network/diag`，`gateway.go:1213`）也是管理面。
+    "/api/network/diag" -> true
     // /healthz 与 /api/health：移动运行时里显式匿名。
     else -> false
 }
@@ -186,6 +191,34 @@ class ProbeApiClient(
         }
         val safe = limit.coerceIn(1, 20)
         return parseCodexIdentity(probe(status, "/api/providers/codex/identity?limit=$safe").body)
+    }
+
+    /**
+     * 渠道网络策略：`GET /api/channels/net`（`gateway.go:1205` → `channel_net.go:306-324`）。
+     *
+     * 桌面把它放在**单个渠道**的详情抽屉里（`channelnet.js:63-77`，含保存表单）；
+     * 手机端只做只读汇总（不提供 POST 保存——那属于渠道页的写操作）。
+     */
+    fun fetchChannelNet(status: GatewayStatus): List<ChannelNetRow> {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        return parseChannelNetRows(probe(status, "/api/channels/net").body)
+    }
+
+    /**
+     * 网络连通诊断：`GET /api/network/diag?host=…&port=…`（`gateway.go:1213` → `netdiag.go:81-99`）。
+     *
+     * 服务端单次最长 25 秒；host 非法会 400，所以调用方先用 [parseNetDiagInput] 本地拦。
+     */
+    fun fetchNetDiag(status: GatewayStatus, host: String, port: String): NetDiagReport {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val safePort = port.trim().ifEmpty { "443" }
+        val path = "/api/network/diag?host=${URLEncoder.encode(host.trim(), Charsets.UTF_8.name())}" +
+            "&port=${URLEncoder.encode(safePort, Charsets.UTF_8.name())}"
+        return parseNetDiag(probe(status, path).body)
     }
 
     /** 凭据只由 [probeAuthorization] 决定，调用点不可能"顺手"把 Bearer 带到匿名端点。 */
@@ -536,6 +569,299 @@ internal fun codexIdentityMismatchLine(item: CodexIdentity): String =
 /** 桌面 `gateway.js:151` 的空态原话。 */
 internal const val CODEX_IDENTITY_EMPTY_COPY: String =
     "还没有收到 Responses 请求；客户端发起一次对话后这里会出现身份对照。"
+
+/**
+ * 一条渠道的网络策略与实时在途数（`GET /api/channels/net`，`gateway.go:1205` → `channel_net.go:306-324`）。
+ *
+ * 零值表示"未单独配置，跟随默认"——展示时写「默认」，不要写成 0。
+ */
+data class ChannelNetRow(
+    val providerId: String,
+    val providerName: String,
+    val baseUrl: String,
+    /** 预热间隔（秒）；0 = 默认。 */
+    val prewarmSec: Int,
+    /** 并发上限；0 = 默认。 */
+    val maxInflight: Int,
+    /** 停顿超时（毫秒）；0 = 默认。 */
+    val stallTimeoutMs: Int,
+    /** 当前在途请求数（服务端实时值）。 */
+    val inflight: Int,
+)
+
+/** 解析 `/api/channels/net`：`{"channels":[{provider_id,provider_name,base_url,prewarm_sec,max_inflight,stall_timeout_ms,inflight}]}`。 */
+internal fun parseChannelNetRows(body: String): List<ChannelNetRow> {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "渠道网络返回的数据格式不正确")
+    }
+    return root.optJSONArray("channels")?.let { array ->
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val providerId = item.optString("provider_id").trim()
+            if (providerId.isEmpty()) {
+                return@mapNotNull null
+            }
+            ChannelNetRow(
+                providerId = providerId,
+                providerName = item.optString("provider_name").trim(),
+                baseUrl = item.optString("base_url").trim(),
+                prewarmSec = item.optInt("prewarm_sec", 0).coerceAtLeast(0),
+                maxInflight = item.optInt("max_inflight", 0).coerceAtLeast(0),
+                stallTimeoutMs = item.optInt("stall_timeout_ms", 0).coerceAtLeast(0),
+                inflight = item.optInt("inflight", 0).coerceAtLeast(0),
+            )
+        }
+    }.orEmpty()
+}
+
+/**
+ * 策略一行（桌面 `channelnet.js:68-73` 的输入框/说明口径）：`预热 30s · 并发 4 · 停顿 1200ms`。
+ *
+ * 0 值写成「默认」——桌面输入框为空字符时也是"跟随默认"的意思，不是"关掉"。
+ */
+internal fun channelNetPolicyLine(row: ChannelNetRow): String {
+    val parts = mutableListOf<String>()
+    parts += if (row.prewarmSec > 0) "预热 ${row.prewarmSec}s" else "预热 默认"
+    parts += if (row.maxInflight > 0) "并发 ${row.maxInflight}" else "并发 默认"
+    if (row.stallTimeoutMs > 0) parts += "停顿 ${row.stallTimeoutMs}ms"
+    return parts.joinToString(" · ")
+}
+
+/** 在途数文案（桌面 `channelnet.js:70` 的 chip「在途 N」）。 */
+internal fun channelNetInflightLabel(row: ChannelNetRow): String = "在途 ${row.inflight}"
+
+// ——— 网络连通诊断（`GET /api/network/diag`，`gateway.go:1213` → `netdiag.go:81-99`） ———
+
+/** 服务端单次诊断最长 25 秒（`netdiag.go:96`），进行中必须把这件事告诉用户。 */
+internal const val NET_DIAG_RUNNING_COPY: String = "诊断中…（最长约 25 秒）"
+
+/**
+ * 本地输入的解析结果：`host` + `port`（默认 443），或者一条**本地**校验错误。
+ *
+ * 规则照搬服务端（`netdiag.go:82-95`），能在本地拦的就不发请求：
+ * - 空白 → 「先填上游域名」；
+ * - host 含 `/ \ ? & @` 或空格 → 直接拒绝（服务端同样 400：「host 只能是域名或 IP」）；
+ * - 支持 `host:port`（末尾一段纯数字才当端口）、`[v6]:port`、裸 IPv6（多冒号不当端口）；
+ * - 端口必须是 1..65535 的数字。
+ */
+data class NetDiagInput(
+    val host: String,
+    val port: String,
+    /** 非空表示本地校验失败，此时不要发请求。 */
+    val error: String,
+)
+
+internal fun parseNetDiagInput(raw: String): NetDiagInput {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) {
+        return NetDiagInput("", "443", "先填上游域名（例如 api.example.com 或 1.2.3.4:443）")
+    }
+    var host = trimmed
+    var port = "443"
+
+    // [::1]:443 —— 带方括号的 IPv6
+    if (host.startsWith("[")) {
+        val close = host.indexOf(']')
+        if (close > 0) {
+            val inside = host.substring(1, close)
+            val rest = host.substring(close + 1)
+            if (rest.startsWith(":")) {
+                port = rest.substring(1).trim()
+            } else if (rest.isNotEmpty()) {
+                return NetDiagInput(inside, "443", "IPv6 地址后面只能跟端口，例如 [::1]:443")
+            }
+            host = inside
+        }
+    } else if (host.count { it == ':' } == 1) {
+        // host:port —— 只有一段冒号、且冒号后全是数字才当端口；否则原样交给服务端
+        val idx = host.lastIndexOf(':')
+        val maybePort = host.substring(idx + 1)
+        if (maybePort.isNotEmpty() && maybePort.all { it.isDigit() }) {
+            port = maybePort
+            host = host.substring(0, idx)
+        }
+    }
+
+    host = host.trim()
+    if (host.isEmpty()) {
+        return NetDiagInput("", port, "缺少主机名")
+    }
+    // 与服务端同一套非法字符集（`netdiag.go:88`）
+    if (host.any { it in "/\\?&@ " } || host.any { it.isWhitespace() }) {
+        return NetDiagInput(host, port, "host 只能是域名或 IP（不能带 / \\ ? & @ 或空格）")
+    }
+    if (port.isNotEmpty() && (port.any { !it.isDigit() } || port.toIntOrNull() !in 1..65535)) {
+        return NetDiagInput(host, "443", "端口必须是 1–65535 的数字")
+    }
+    return NetDiagInput(host, port.ifEmpty { "443" }, "")
+}
+
+/** 一个 IP 的探测结果（`netdiag.go` 的 `netDiagIPResult`）。 */
+data class NetDiagIp(
+    val ip: String,
+    val ok: Boolean,
+    val colo: String,
+    val tcpMs: Long,
+    val tcpError: String,
+    val tlsMs: Long,
+    val tlsError: String,
+    val ttfbMs: Long,
+    val httpStatus: Int,
+    val httpError: String,
+    val tlsVersion: String,
+    val alpn: String,
+    val verdict: String,
+)
+
+/** `GET /api/network/diag` 整包（`netdiag.go` 的 `netDiagResponse`）。 */
+data class NetDiagReport(
+    val host: String,
+    val port: String,
+    val systemDns: List<String>,
+    val systemDnsError: String,
+    val doh: Map<String, List<String>>,
+    val dohErrors: Map<String, String>,
+    val ips: List<NetDiagIp>,
+    val summary: String,
+    val elapsedMs: Long,
+)
+
+internal fun parseNetDiag(body: String): NetDiagReport {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "网络诊断返回的数据格式不正确")
+    }
+    val doh = LinkedHashMap<String, List<String>>()
+    root.optJSONObject("doh")?.let { obj ->
+        for (key in obj.keys()) {
+            val arr = obj.optJSONArray(key) ?: continue
+            val ips = (0 until arr.length()).mapNotNull { i ->
+                arr.optString(i).trim().takeIf { it.isNotEmpty() }
+            }
+            if (ips.isNotEmpty()) {
+                doh[key] = ips
+            }
+        }
+    }
+    val dohErrors = LinkedHashMap<String, String>()
+    root.optJSONObject("doh_errors")?.let { obj ->
+        for (key in obj.keys()) {
+            val value = obj.optString(key).trim()
+            if (value.isNotEmpty()) {
+                dohErrors[key] = value
+            }
+        }
+    }
+    val ips = root.optJSONArray("ips")?.let { array ->
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val ip = item.optString("ip").trim()
+            if (ip.isEmpty()) {
+                return@mapNotNull null
+            }
+            NetDiagIp(
+                ip = ip,
+                ok = item.optBoolean("ok", false),
+                colo = item.optString("colo").trim(),
+                tcpMs = item.optLong("tcp_ms", 0L).coerceAtLeast(0L),
+                tcpError = item.optString("tcp_error").trim(),
+                tlsMs = item.optLong("tls_ms", 0L).coerceAtLeast(0L),
+                tlsError = item.optString("tls_error").trim(),
+                ttfbMs = item.optLong("ttfb_ms", 0L).coerceAtLeast(0L),
+                httpStatus = item.optInt("http_status", 0),
+                httpError = item.optString("http_error").trim(),
+                tlsVersion = item.optString("tls_version").trim(),
+                alpn = item.optString("alpn").trim(),
+                verdict = item.optString("verdict").trim(),
+            )
+        }
+    }.orEmpty()
+    return NetDiagReport(
+        host = root.optString("host").trim(),
+        port = root.optString("port").trim().ifEmpty { "443" },
+        systemDns = root.optJSONArray("system_dns")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i -> arr.optString(i).trim().takeIf { it.isNotEmpty() } }
+        }.orEmpty(),
+        systemDnsError = root.optString("system_dns_error").trim(),
+        doh = doh,
+        dohErrors = dohErrors,
+        ips = ips,
+        summary = root.optString("summary").trim(),
+        elapsedMs = root.optLong("elapsed_ms", 0L).coerceAtLeast(0L),
+    )
+}
+
+/** 一步诊断的展示行：名称 + 成败 + 耗时（桌面 `channelnet.js:153-163` 的 `parts` 口径）。 */
+data class NetDiagStep(val label: String, val ok: Boolean, val detail: String)
+
+/**
+ * 把回包拆成「系统 DNS / DoH / 每个 IP 的 TCP·TLS·首字节」三类可读步骤。
+ *
+ * 桌面只展示 `summary` + 每个 IP 的 `TCP/TLS/首字节` 三段时间（`channelnet.js:121-124,153-163`）；
+ * 这里额外把 DNS / DoH 的成败也列出来——服务端已经算好，不列白不列。
+ */
+internal fun netDiagSteps(report: NetDiagReport): List<NetDiagStep> {
+    val steps = mutableListOf<NetDiagStep>()
+    steps += NetDiagStep(
+        label = "系统 DNS",
+        ok = report.systemDnsError.isEmpty() && report.systemDns.isNotEmpty(),
+        detail = when {
+            report.systemDnsError.isNotEmpty() -> report.systemDnsError
+            report.systemDns.isEmpty() -> "没有解析结果"
+            else -> report.systemDns.joinToString(", ")
+        },
+    )
+    if (report.doh.isNotEmpty() || report.dohErrors.isNotEmpty()) {
+        val okParts = report.doh.entries.map { "${it.key}: ${it.value.joinToString(", ")}" }
+        val errParts = report.dohErrors.entries.map { "${it.key}: ${it.value}" }
+        steps += NetDiagStep(
+            label = "DoH 对照",
+            ok = report.doh.isNotEmpty(),
+            detail = (okParts + errParts).joinToString("；").ifEmpty { "未查询" },
+        )
+    }
+    for (ip in report.ips) {
+        // 失败的那一跳必须把**原因**带出来：桌面 `channelnet.js:163` 的 chip 写的是
+        // `tcp_error || tls_error || http_error || '不可用'`；只给耗时等于把失败原因吞掉。
+        val timings = netDiagIpLine(ip)
+        val reason = if (ip.ok) "" else netDiagIpVerdict(ip)
+        val detail = when {
+            reason.isEmpty() -> timings
+            timings == "—" -> reason
+            else -> "$timings · $reason"
+        }
+        steps += NetDiagStep(
+            label = "TCP ${ip.ip}",
+            ok = ip.ok,
+            detail = detail,
+        )
+    }
+    return steps
+}
+
+/** 单个 IP 的耗时行：`TCP 120ms · TLS 300ms · 首字节 480ms`；都没有时「—」。 */
+internal fun netDiagIpLine(ip: NetDiagIp): String {
+    val parts = mutableListOf<String>()
+    if (ip.tcpMs > 0) parts += "TCP ${ip.tcpMs}ms"
+    if (ip.tlsMs > 0) parts += "TLS ${ip.tlsMs}ms"
+    if (ip.ttfbMs > 0) parts += "首字节 ${ip.ttfbMs}ms"
+    if (ip.tlsVersion.isNotEmpty()) parts += ip.tlsVersion
+    if (ip.alpn.isNotEmpty()) parts += ip.alpn
+    return if (parts.isEmpty()) "—" else parts.joinToString(" · ")
+}
+
+/** 不可用的原因：优先具体错误，其次服务端 verdict（桌面 `channelnet.js:163`）。 */
+internal fun netDiagIpVerdict(ip: NetDiagIp): String = when {
+    ip.ok -> "可用"
+    ip.tcpError.isNotEmpty() -> ip.tcpError
+    ip.tlsError.isNotEmpty() -> ip.tlsError
+    ip.httpError.isNotEmpty() -> ip.httpError
+    ip.verdict.isNotEmpty() -> ip.verdict
+    else -> "不可用"
+}
 
 /**
  * /healthz 正文恒为 ok，但有两种真实形状：

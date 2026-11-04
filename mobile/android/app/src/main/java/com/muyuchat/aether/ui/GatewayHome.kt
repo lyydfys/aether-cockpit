@@ -461,6 +461,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val wakeState by wakeViewModel.state.collectAsStateWithLifecycle()
                 val wakeTriggering by wakeViewModel.triggering.collectAsStateWithLifecycle()
                 val wakeEnabledUpdating by wakeViewModel.enabledUpdating.collectAsStateWithLifecycle()
+                val wakeProviderRunning by wakeViewModel.providerRunning.collectAsStateWithLifecycle()
                 val wakeNotice by wakeViewModel.notice.collectAsStateWithLifecycle()
                 val wakeActionError by wakeViewModel.actionError.collectAsStateWithLifecycle()
                 val wakeScheduler by wakeViewModel.scheduler.collectAsStateWithLifecycle()
@@ -495,6 +496,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onDeleteWake = wakeViewModel::deleteWake,
                     enabledUpdating = wakeEnabledUpdating,
                     onSetEnabled = wakeViewModel::setEnabled,
+                    providerRunning = wakeProviderRunning,
+                    onRunSchedulerProvider = wakeViewModel::runSchedulerProvider,
                     onRefreshAccounts = wakeViewModel::refreshAccountsAndSummary,
                     onBack = { showWake = false },
                     onOpenOverview = {
@@ -536,12 +539,17 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val probeState by probeViewModel.state.collectAsStateWithLifecycle()
                 val probeAlerts by probeViewModel.alerts.collectAsStateWithLifecycle()
                 val probeIdentity by probeViewModel.identity.collectAsStateWithLifecycle()
+                val probeChannelNet by probeViewModel.channelNet.collectAsStateWithLifecycle()
+                val probeNetDiag by probeViewModel.netDiag.collectAsStateWithLifecycle()
                 GatewayProbePage(
                     status = state.status,
                     state = probeState,
                     onRefresh = probeViewModel::refresh,
                     alerts = probeAlerts,
                     identity = probeIdentity,
+                    channelNet = probeChannelNet,
+                    netDiag = probeNetDiag,
+                    onRunNetDiag = probeViewModel::runNetDiag,
                     onRefreshIdentity = probeViewModel::refreshIdentity,
                     onOpenUsage = {
                         showProbe = false

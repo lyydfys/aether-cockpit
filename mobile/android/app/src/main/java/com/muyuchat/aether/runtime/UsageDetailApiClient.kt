@@ -129,6 +129,17 @@ class UsageDetailApiClient(
         java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
 
     /**
+     * 厂商级「立即签到」：`POST /api/usage/{vendor}-checkin`（`gateway.go:1011-1014` →
+     * `checkin_api.go:180 handleUsageCheckIn`）。
+     *
+     * 请求体为空；回包是 `[{user,outcome,credit,streak,msg,again}]`（`checkinPressResult`）。
+     * 服务端会把该厂商下**所有可用账号**逐个打一次（`vendorProviders` 里的渠道），
+     * 今天已确定的账号直接带旧结果返回、不再请求上游（`:211-223`）。
+     */
+    fun checkinVendor(status: GatewayStatus, vendor: CheckinVendor): List<VendorCheckinResult> =
+        parseVendorCheckins(post(status, vendor.apiPath, "{}"))
+
+    /**
      * 切换计价币种：桌面 `usage.js:78` → `POST /api/pricing/save {price_currency}`，
      * 回最新价格表（含 currency / usd_cny），页面据此重画所有金额。
      */
@@ -670,4 +681,106 @@ internal fun quotaAccountLabel(provider: String, user: String): String {
         u.isEmpty() -> p
         else -> "$p · $u"
     }
+}
+
+/* ============================================================================
+ * 厂商级「立即签到」（`POST /api/usage/{vendor}-checkin`）
+ *
+ * 端点：`gateway.go:1011-1014` → `checkin_api.go:180 handleUsageCheckIn(vendor)`
+ * 请求体：空（handler 根本不读 body）
+ * 回包：`[{user,outcome,credit,streak,msg,again}]`（`checkinPressResult`，`checkin_api.go:170-177`）
+ *   `outcome` 取值：`claimed`（本次领到）/ `done`（今天已签）/ `failed`（无结论，稍后重试）
+ *   ——`internal/provider/contract.go:188-192`
+ * ========================================================================== */
+
+/**
+ * 支持的四个厂商。`providers` 与服务端 `vendorProviders`
+ * （`checkin_api.go:11-16`）逐项一致：点一次会打到该厂商下**所有**可用账号。
+ */
+/** 渠道签到厂商。
+ *  `public`：`UsageViewModel.checkinVendor` 与 `UsageDetailApiClient.checkinVendor` 是公开成员，
+ *  暴露 internal 类型会触发 Kotlin 的「public ... exposes its internal ...」编译错误。 */
+enum class CheckinVendor(
+    val apiPath: String,
+    val label: String,
+    val providers: List<String>,
+) {
+    TRAE("/api/usage/trae-checkin", "Trae", listOf("trae-cn", "trae-solo-cn")),
+    QODER("/api/usage/qoder-checkin", "Qoder", listOf("qoder-cn", "qoder-intl")),
+    MINIMAX("/api/usage/minimax-checkin", "MiniMax", listOf("minimax-code", "minimax-code-global")),
+    WORKBUDDY("/api/usage/workbuddy-checkin", "WorkBuddy", listOf("workbuddy-cn")),
+}
+
+/** 单账号签到结果（`checkinPressResult`）。 */
+data class VendorCheckinResult(
+    val user: String,
+    val outcome: String,
+    val credit: Double,
+    val streak: Int,
+    val message: String,
+    val again: Boolean,
+)
+
+internal fun parseVendorCheckins(body: String): List<VendorCheckinResult> {
+    val array = try {
+        JSONArray(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "签到接口返回的数据格式不正确")
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val user = item.optString("user").trim()
+        VendorCheckinResult(
+            user = user.ifBlank { "未命名账号" },
+            outcome = item.optString("outcome").trim(),
+            credit = item.optDouble("credit", 0.0).takeIf { it.isFinite() } ?: 0.0,
+            streak = item.optInt("streak", 0).coerceAtLeast(0),
+            message = item.optString("msg").trim().take(300),
+            again = item.optBoolean("again", false),
+        )
+    }
+}
+
+/** outcome → 人话（`contract.go:188-192`）。未知值原样回显，不硬翻成"成功"。 */
+internal fun checkinOutcomeLabel(outcome: String): String = when (outcome.trim().lowercase(Locale.US)) {
+    "claimed" -> "本次领到"
+    "done" -> "今天已签"
+    "failed" -> "失败"
+    else -> outcome.trim().ifBlank { "无结论" }
+}
+
+/** 一行结果：`user · 本次领到 +1.5 天（连续 3 天）：msg`。 */
+internal fun vendorCheckinLine(result: VendorCheckinResult): String {
+    val parts = mutableListOf(result.user, checkinOutcomeLabel(result.outcome))
+    if (result.credit > 0.0) {
+        parts.add("+" + formatCheckinCredit(result.credit))
+    }
+    if (result.streak > 0) {
+        parts.add("连续 ${result.streak} 天")
+    }
+    val head = parts.joinToString(" · ")
+    return if (result.message.isBlank()) head else "$head：${result.message}"
+}
+
+/** 领取数额：整数不带小数点（与界面上其他金额同一习惯）。 */
+internal fun formatCheckinCredit(credit: Double): String {
+    if (!credit.isFinite() || credit <= 0.0) {
+        return "0"
+    }
+    val text = String.format(Locale.US, "%.2f", credit).trimEnd('0').trimEnd('.')
+    return text.ifEmpty { "0" }
+}
+
+/**
+ * 结论汇总：`2 个账号：本次领到 1 · 今天已签 1 · 失败 0`。
+ *
+ * 空列表也说清楚：服务端返回空数组 = 这个厂商没有可用账号，不是"全部成功"。
+ */
+internal fun vendorCheckinSummary(results: List<VendorCheckinResult>): String {
+    if (results.isEmpty()) {
+        return "没有可签到的账号：这台机器的网关里没有该厂商的可用账号。"
+    }
+    fun count(outcome: String) = results.count { it.outcome.equals(outcome, ignoreCase = true) }
+    return "${results.size} 个账号：本次领到 ${count("claimed")} · " +
+        "今天已签 ${count("done")} · 失败 ${count("failed")}"
 }

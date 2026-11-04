@@ -16,6 +16,7 @@ import com.muyuchat.aether.runtime.WakeDraft
 import com.muyuchat.aether.runtime.WakeDraftProblems
 import com.muyuchat.aether.runtime.WakeTask
 import com.muyuchat.aether.runtime.WakeWriteApiClient
+import com.muyuchat.aether.runtime.schedulerRunAckText
 import com.muyuchat.aether.runtime.validateWakeDraft
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -270,6 +271,48 @@ class WakeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissCheckinNote() {
         _checkinNote.value = null
+    }
+
+    /* ---------------- 按渠道单独跑（`POST /api/scheduler/run/{渠道}`） ---------------- */
+
+    /** 正在跑的渠道 id（null = 没有在跑）：用来禁用该行按钮并显示"入队中…"。 */
+    private val _providerRunning = MutableStateFlow<String?>(null)
+    val providerRunning: StateFlow<String?> = _providerRunning.asStateFlow()
+
+    /**
+     * 只跑某一个渠道的签到：`POST /api/scheduler/run/{id}`（`scheduler_api.go:65`）。
+     *
+     * ⚠ 路径里的 `{id}` 是**渠道 id**（服务端 `provider.Get(id)` 校验），不是调度任务 id；
+     * 语义是"把这个渠道下所有账号的签到入队"。与全局 run 一样是**入队**，
+     * 返回时还没执行完，所以文案只说"已入队 N 个"。
+     */
+    fun runSchedulerProvider(providerId: String) {
+        val id = providerId.trim()
+        if (id.isEmpty() || _providerRunning.value != null || _checkinRunning.value) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _checkinNote.value = "网关未启动"
+            return
+        }
+        _providerRunning.value = id
+        _checkinNote.value = null
+        viewModelScope.launch {
+            try {
+                val ack = withContext(Dispatchers.IO) { writeClient.runSchedulerProvider(status, id) }
+                _checkinNote.value = schedulerRunAckText(ack)
+                refreshScheduler()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _checkinNote.value = e.message
+            } catch (_: Exception) {
+                _checkinNote.value = "触发这个渠道的签到失败，请重试"
+            } finally {
+                _providerRunning.value = null
+            }
+        }
     }
 
     fun refresh() {

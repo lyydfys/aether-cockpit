@@ -211,6 +211,27 @@ class WakeWriteApiClient(
     fun fetchCheckinSummary(status: GatewayStatus): CheckinSummary =
         parseCheckinSummary(request(status, "GET", "/api/scheduler/checkin-summary", null))
 
+    /**
+     * 只跑某一个渠道的签到：`POST /api/scheduler/run/{id}`（`gateway.go:1116` →
+     * `scheduler_api.go:65 handleSchedulerRunProvider`）。
+     *
+     * ⚠ 路径里的 `{id}` 是**渠道 id**（`provider.Get(id)`，`:72`），不是调度任务 id：
+     * 服务端拿它去 `RunProviderDetailed(id, "manual")`，把这个渠道下所有账号的签到入队。
+     * 请求体为空；回包 `{queued, skipped, note}`。
+     *
+     * 与全局 `POST /api/scheduler/run`（`:1115`）的差别只有范围：那个是 RunAllDetailed。
+     * 两者都是**入队**，HTTP 返回时还没执行完（`scheduler_api.go:41-42` 的注释）。
+     */
+    fun runSchedulerProvider(status: GatewayStatus, providerId: String): SchedulerRunAck {
+        val id = providerId.trim()
+        if (id.isEmpty()) {
+            throw ManagementApiException("invalid_provider", "渠道 id 为空")
+        }
+        return parseSchedulerRunAck(
+            request(status, "POST", "/api/scheduler/run/${java.net.URLEncoder.encode(id, Charsets.UTF_8.name())}", null),
+        )
+    }
+
     private fun request(status: GatewayStatus, method: String, path: String, body: String?): String {
         if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
             throw ManagementApiException("gateway_not_running", "网关未启动")
@@ -284,5 +305,44 @@ internal fun wakeUpdatePath(id: String): String =
         !root.has("ok") || root.optBoolean("ok", true)
     } catch (_: JSONException) {
         true
+    }
+}
+
+/**
+ * `POST /api/scheduler/run` 与 `/api/scheduler/run/{渠道}` 的回包
+ * （`scheduler_api.go:59-61 / 85-88`）：`{queued, skipped, note}`。
+ *
+ * 两个计数都要保留：`queued` 是**本次入队**的账号数，`skipped` 是"今天已经签到过、这次跳过"的。
+ * 把两者合并成一个"处理了 N 个"会让人以为跳过的也签到了一次。
+ */
+data class SchedulerRunAck(
+    val queued: Int,
+    val skipped: Int,
+    val note: String,
+)
+
+internal fun parseSchedulerRunAck(body: String): SchedulerRunAck {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "调度器返回的数据格式不正确")
+    }
+    return SchedulerRunAck(
+        queued = root.optInt("queued", 0).coerceAtLeast(0),
+        skipped = root.optInt("skipped", 0).coerceAtLeast(0),
+        note = root.optString("note").trim(),
+    )
+}
+
+/** 结果文案：优先用服务端 `note`（它知道"为什么是 0"），没有再按计数兜一句。 */
+internal fun schedulerRunAckText(ack: SchedulerRunAck): String {
+    if (ack.note.isNotBlank()) {
+        return ack.note
+    }
+    return when {
+        ack.queued == 0 && ack.skipped == 0 -> "当前没有可入队的账号"
+        ack.queued == 0 -> "今天已完成，本次跳过 ${ack.skipped} 个账号"
+        ack.skipped > 0 -> "已入队 ${ack.queued} 个账号；今日已完成 ${ack.skipped} 个，已跳过"
+        else -> "已入队 ${ack.queued} 个账号"
     }
 }

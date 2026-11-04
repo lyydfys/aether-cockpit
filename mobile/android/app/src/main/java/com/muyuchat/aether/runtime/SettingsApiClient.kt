@@ -74,6 +74,8 @@ data class SettingsSummary(
     val tools: ToolsConfig = ToolsConfig(),
     /** `dir`：网关数据目录（服务端 settingsView 下发；只读展示）。 */
     val dataDir: String = "",
+    /** `remote_quotas`：远程 Aether 实例用量源；Key 只回 hasKey，不回显密文。 */
+    val remoteQuotas: List<RemoteQuotaSourceRow> = emptyList(),
 )
 
 /** 请求管线钩子（桌面 `settings.js:468-485` 四项 + 服务端第五项 `guard_accounts`）。 */
@@ -186,6 +188,46 @@ class SettingsApiClient(
      */
     fun fetchProfiles(status: GatewayStatus): List<ProfileRow> =
         parseProfiles(requestJson(status, "/api/profiles", "GET", null))
+
+    /**
+     * 远程额度源：整表替换。Key 留空时服务端按同 name+url 沿用旧密文；
+     * 新 Key 由网关加密保存，GET /api/settings 只回 hasKey。
+     */
+    fun saveRemoteQuotas(
+        status: GatewayStatus,
+        sources: List<RemoteQuotaDraft>,
+    ): List<RemoteQuotaSourceRow> {
+        val body = requestJson(
+            status,
+            "/api/settings/remote-quotas",
+            "POST",
+            buildRemoteQuotasJson(sources),
+        )
+        val root = runCatching { JSONObject(body.trim()) }.getOrNull()
+        return parseRemoteQuotaSources(root?.optJSONArray("sources"))
+    }
+
+    fun testRemoteQuota(
+        status: GatewayStatus,
+        name: String,
+        url: String,
+        key: String,
+    ): RemoteQuotaTestResult = parseRemoteQuotaTestResult(
+        requestJson(status, "/api/settings/remote-quotas/test", "POST", buildRemoteQuotaTestJson(name, url, key)),
+    )
+
+    fun useRemoteQuotaAsProvider(
+        status: GatewayStatus,
+        name: String,
+        url: String,
+    ): RemoteQuotaProviderResult = parseRemoteQuotaProviderResult(
+        requestJson(
+            status,
+            "/api/settings/remote-quotas/use-provider",
+            "POST",
+            buildRemoteQuotaUseProviderJson(name, url),
+        ),
+    )
 
     fun fetchRedactDetail(status: GatewayStatus): RedactDetail {
         val body = requestJson(status, "/api/settings/redact-actions", "GET", null)
@@ -698,6 +740,7 @@ internal fun parseSettings(body: String): SettingsSummary {
         otlp = parseOtlpConfig(root.optJSONObject("otlp")),
         tools = parseToolsConfig(root.optJSONObject("tools")),
         dataDir = root.optString("dir").trim(),
+        remoteQuotas = parseRemoteQuotaSources(root.optJSONArray("remote_quotas")),
     )
 }
 
@@ -1241,8 +1284,22 @@ data class ProfileRow(
 )
 
 internal fun parseProfiles(body: String): List<ProfileRow> {
+    val trimmed = body.trim()
     val array = try {
-        JSONArray(body.trim())
+        if (trimmed.startsWith("{")) {
+            val root = JSONObject(trimmed)
+            // 真实回包恒为 {"profiles":[...],"active":...}；缺键或 null 都是"没读懂"，
+            // 不能静默当成"没有档案"。只有显式空数组才是合法空表。
+            if (!root.has("profiles") || root.isNull("profiles")) {
+                throw ManagementApiException("invalid_response", "管理接口返回的档案缺少 profiles 数组")
+            }
+            root.optJSONArray("profiles")
+                ?: throw ManagementApiException("invalid_response", "管理接口返回的 profiles 不是数组")
+        } else {
+            JSONArray(trimmed)
+        }
+    } catch (e: ManagementApiException) {
+        throw e
     } catch (_: JSONException) {
         throw ManagementApiException("invalid_response", "管理接口返回的档案格式不正确")
     }
@@ -1285,4 +1342,100 @@ internal fun profileClientLabel(client: ProfileClientRow): String {
     val parts = listOf(client.clientId.trim(), client.model.trim(), client.origin.trim())
         .filter { it.isNotEmpty() }
     return parts.joinToString(" · ")
+}
+
+/* ---------------- 远程额度源（settings.js remote-quotas） ---------------- */
+
+data class RemoteQuotaSourceRow(
+    val name: String,
+    val url: String,
+    val enabled: Boolean,
+    val hasKey: Boolean,
+)
+
+/** 编辑草稿：key 为空表示"不修改已保存的 Key"（服务端按同 name+url 沿用）。 */
+data class RemoteQuotaDraft(
+    val name: String,
+    val url: String,
+    val key: String = "",
+    val enabled: Boolean = true,
+)
+
+data class RemoteQuotaTestResult(
+    val ok: Boolean,
+    val message: String,
+)
+
+data class RemoteQuotaProviderResult(
+    val ok: Boolean,
+    val message: String,
+)
+
+internal fun parseRemoteQuotaSources(array: org.json.JSONArray?): List<RemoteQuotaSourceRow> {
+    if (array == null) return emptyList()
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        RemoteQuotaSourceRow(
+            name = item.optString("name").trim(),
+            url = item.optString("url").trim(),
+            enabled = item.optBoolean("enabled", false),
+            hasKey = item.optBoolean("hasKey", false),
+        )
+    }
+}
+
+/**
+ * 保存体：只提交当前列表，Key 留空时不写 key 字段（等价于空串，服务端会沿用
+ * 同 name+url 的旧 Key）。不要从 GET 回显里拿一个假 Key 回填。
+ */
+internal fun buildRemoteQuotasJson(sources: List<RemoteQuotaDraft>): String {
+    val array = org.json.JSONArray()
+    sources.forEach { source ->
+        val item = JSONObject()
+            .put("name", source.name.trim())
+            .put("url", source.url.trim().trimEnd('/'))
+            .put("enabled", source.enabled)
+        if (source.key.isNotBlank()) {
+            item.put("key", source.key.trim())
+        }
+        array.put(item)
+    }
+    return JSONObject().put("sources", array).toString()
+}
+
+internal fun buildRemoteQuotaTestJson(name: String, url: String, key: String): String =
+    JSONObject()
+        .put("name", name.trim())
+        .put("url", url.trim().trimEnd('/'))
+        .put("key", key.trim())
+        .toString()
+
+internal fun buildRemoteQuotaUseProviderJson(name: String, url: String): String =
+    JSONObject()
+        .put("name", name.trim())
+        .put("url", url.trim().trimEnd('/'))
+        .toString()
+
+internal fun parseRemoteQuotaTestResult(body: String): RemoteQuotaTestResult {
+    val root = runCatching { JSONObject(body.trim()) }.getOrNull()
+        ?: return RemoteQuotaTestResult(false, "远程测试回包不是 JSON")
+    val ok = root.optBoolean("ok", false)
+    if (!ok) {
+        return RemoteQuotaTestResult(false, root.optString("error").trim().ifBlank { "远程实例不可达" })
+    }
+    val accounts = root.optInt("accounts", 0).coerceAtLeast(0)
+    val providers = root.optInt("providers", 0).coerceAtLeast(0)
+    return RemoteQuotaTestResult(true, "连接成功 · $providers 个渠道 / $accounts 个账号")
+}
+
+internal fun parseRemoteQuotaProviderResult(body: String): RemoteQuotaProviderResult {
+    val root = runCatching { JSONObject(body.trim()) }.getOrNull()
+        ?: return RemoteQuotaProviderResult(false, "注册 provider 回包不是 JSON")
+    val ok = root.optBoolean("ok", false)
+    val created = root.optBoolean("created", false)
+    return if (ok) {
+        RemoteQuotaProviderResult(true, if (created) "已注册为 openai-compat 上游" else "该实例已注册过")
+    } else {
+        RemoteQuotaProviderResult(false, root.optString("error").trim().ifBlank { "注册 provider 失败" })
+    }
 }

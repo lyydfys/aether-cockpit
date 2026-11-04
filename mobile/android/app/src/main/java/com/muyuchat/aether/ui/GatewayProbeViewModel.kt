@@ -16,7 +16,10 @@ import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.ProbeApiClient
+import com.muyuchat.aether.runtime.ChannelNetRow
 import com.muyuchat.aether.runtime.CodexIdentityReport
+import com.muyuchat.aether.runtime.NetDiagReport
+import com.muyuchat.aether.runtime.parseNetDiagInput
 import com.muyuchat.aether.runtime.QuotaAlertsReport
 import com.muyuchat.aether.runtime.SessionProbeReport
 import com.muyuchat.aether.runtime.SettingsApiClient
@@ -81,6 +84,31 @@ sealed interface CodexIdentityUiState {
     data class Failed(val code: String, val message: String) : CodexIdentityUiState
 }
 
+/** 渠道网络只读汇总（桌面 `channelnet.js:63-77` 是单渠道抽屉；手机端只读列表，不写）。 */
+sealed interface ChannelNetUiState {
+    data object Idle : ChannelNetUiState
+    data object Loading : ChannelNetUiState
+    data class Ready(val rows: List<ChannelNetRow>) : ChannelNetUiState
+    data class Failed(val code: String, val message: String) : ChannelNetUiState
+}
+
+/**
+ * 网络连通诊断（桌面 `channelnet.js:113-129`）。
+ *
+ * [Failed.local] 区分"本地校验拦下"与"服务端/网络失败"——前者不发请求，也就没有服务端原文。
+ */
+sealed interface NetDiagUiState {
+    data object Idle : NetDiagUiState
+    data class Running(val target: String) : NetDiagUiState
+    data class Ready(val report: NetDiagReport) : NetDiagUiState
+    data class Failed(
+        val target: String,
+        val code: String,
+        val message: String,
+        val local: Boolean,
+    ) : NetDiagUiState
+}
+
 /**
  * 探针工作区的 ViewModel。
  *
@@ -106,6 +134,64 @@ class GatewayProbeViewModel(application: Application) : AndroidViewModel(applica
     // —— Codex 请求身份对照（桌面 gateway.js:141-175）：同样独立取，只读观测 ——
     private val _identity = MutableStateFlow<CodexIdentityUiState>(CodexIdentityUiState.Idle)
     val identity: StateFlow<CodexIdentityUiState> = _identity.asStateFlow()
+
+    // —— 渠道网络（桌面 channelnet.js:63-77）：只读汇总，不提供 POST 保存 ——
+    private val _channelNet = MutableStateFlow<ChannelNetUiState>(ChannelNetUiState.Idle)
+    val channelNet: StateFlow<ChannelNetUiState> = _channelNet.asStateFlow()
+
+    // —— 网络连通诊断（桌面 channelnet.js:113-129）：用户填 host，服务端最长跑 25 秒 ——
+    private val _netDiag = MutableStateFlow<NetDiagUiState>(NetDiagUiState.Idle)
+    val netDiag: StateFlow<NetDiagUiState> = _netDiag.asStateFlow()
+
+    /** 本地校验 → 发请求；结果留在状态里（页面不清空，方便对比重测）。 */
+    fun runNetDiag(rawHost: String) {
+        if (_netDiag.value is NetDiagUiState.Running) {
+            return
+        }
+        val input = parseNetDiagInput(rawHost)
+        val target = if (input.port == "443") input.host else "${input.host}:${input.port}"
+        if (input.error.isNotEmpty()) {
+            // 本地拦下：不发请求，直接把原因摆出来
+            _netDiag.value = NetDiagUiState.Failed(target, "invalid_input", input.error, local = true)
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _netDiag.value = NetDiagUiState.Failed(target, "gateway_not_running", "网关未启动", local = false)
+            return
+        }
+        _netDiag.value = NetDiagUiState.Running(target)
+        viewModelScope.launch {
+            _netDiag.value = try {
+                val report = withContext(Dispatchers.IO) {
+                    probeClient.fetchNetDiag(status, input.host, input.port)
+                }
+                NetDiagUiState.Ready(report)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                NetDiagUiState.Failed(target, e.code, e.message, local = false)
+            } catch (_: Exception) {
+                NetDiagUiState.Failed(target, "unknown", "网络诊断失败，请重试", local = false)
+            }
+        }
+    }
+
+    private fun loadChannelNet(status: GatewayStatus) {
+        viewModelScope.launch {
+            _channelNet.value = ChannelNetUiState.Loading
+            _channelNet.value = try {
+                val rows = withContext(Dispatchers.IO) { probeClient.fetchChannelNet(status) }
+                ChannelNetUiState.Ready(rows)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                ChannelNetUiState.Failed(e.code, e.message)
+            } catch (_: Exception) {
+                ChannelNetUiState.Failed("unknown", "读取渠道网络失败，请重试")
+            }
+        }
+    }
 
     fun refreshIdentity() {
         val status = repository.status.value
@@ -167,6 +253,7 @@ class GatewayProbeViewModel(application: Application) : AndroidViewModel(applica
         }
         loadQuotaAlerts(status)
         loadIdentity(status)
+        loadChannelNet(status)
         viewModelScope.launch {
             _state.value = withContext(Dispatchers.IO) { collect(status, current) }
         }

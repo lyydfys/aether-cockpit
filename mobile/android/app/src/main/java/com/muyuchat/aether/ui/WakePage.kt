@@ -44,6 +44,7 @@ import com.muyuchat.aether.runtime.wakeIntervalLabel
 import com.muyuchat.aether.runtime.wakeLastRunLabel
 import com.muyuchat.aether.runtime.wakeNextRunLabel
 import com.muyuchat.core.designsystem.McaButton
+import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaIconButton
@@ -86,6 +87,15 @@ internal fun WakePage(
     enabledUpdating: String? = null,
     /** 启停开关（桌面 scheduler.js:405-412）；GatewayHome 接线后生效，未接线时不渲染开关。 */
     onSetEnabled: ((WakeTask, Boolean) -> Unit)? = null,
+    /** 正在按渠道单独入队的渠道 id（来自 VM.providerRunning）；null = 空闲。 */
+    providerRunning: String? = null,
+    /**
+     * 按渠道单独跑签到（`POST /api/scheduler/run/{渠道 id}`）。
+     *
+     * 与「一键签到」的区别只有范围：那个是全部渠道，这个是这一个渠道的**全部账号**。
+     * 未接线时不渲染每行的「运行」按钮——宁可没有按钮，也不留一排按不动的灰点。
+     */
+    onRunSchedulerProvider: ((String) -> Unit)? = null,
     onBack: () -> Unit,
     onOpenOverview: () -> Unit,
     modifier: Modifier = Modifier,
@@ -187,6 +197,9 @@ internal fun WakePage(
                 onRunCheckin = onRunCheckin,
                 onDismissCheckinNote = onDismissCheckinNote,
                 onRefresh = onRefreshScheduler,
+                providerRunning = providerRunning,
+                onRunProvider = onRunSchedulerProvider ?: {},
+                onRunProviderEnabled = onRunSchedulerProvider != null,
             )
         }
         // 桌面「账号唤醒」（scheduler.js:348-385）。
@@ -391,6 +404,10 @@ private fun SchedulerSection(
     onRunCheckin: () -> Unit,
     onDismissCheckinNote: () -> Unit,
     onRefresh: () -> Unit,
+    providerRunning: String? = null,
+    onRunProvider: (String) -> Unit = {},
+    /** false = 未接线：不渲染每行的「运行」按钮（避免一排按不动的灰点）。 */
+    onRunProviderEnabled: Boolean = false,
 ) {
     DeepCard {
         when (scheduler) {
@@ -402,12 +419,33 @@ private fun SchedulerSection(
                     // 只列渠道与今日进度，不展示 cron/凭证之类的内部信息。
                     scheduler.state.jobs.take(6).forEach { job ->
                         Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = "· ${job.title}：今日 ${job.todayDone}/${job.todayTotal}" +
-                                if (job.pending > 0) "（队列 ${job.pending}）" else "",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "· ${job.title}：今日 ${job.todayDone}/${job.todayTotal}" +
+                                    if (job.pending > 0) "（队列 ${job.pending}）" else "",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (onRunProviderEnabled) {
+                                Spacer(Modifier.width(8.dp))
+                                // 按渠道单独入队（`POST /api/scheduler/run/{渠道 id}`）：
+                                // 一次只动这一个渠道，其他渠道今天的进度不受影响。
+                                McaButton(
+                                    onClick = { onRunProvider(job.providerId) },
+                                    style = McaButtonStyle.Outlined,
+                                    size = McaButtonSize.CardAction,
+                                    enabled = !checkinRunning &&
+                                        providerRunning == null &&
+                                        job.providerId.isNotBlank(),
+                                ) {
+                                    Text(
+                                        text = if (providerRunning == job.providerId) "入队中…" else "运行",
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                        }
                     }
                     if (scheduler.state.jobs.size > 6) {
                         Text(

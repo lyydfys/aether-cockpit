@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.PricingCatalog
+import com.muyuchat.aether.runtime.CheckinVendor
 import com.muyuchat.aether.runtime.QuotaHistoryAccount
 import com.muyuchat.aether.runtime.QuotaHoldWindow
 import com.muyuchat.aether.runtime.UsageApiClient
 import com.muyuchat.aether.runtime.UsageDetailApiClient
 import com.muyuchat.aether.runtime.UsageHeatmap
 import com.muyuchat.aether.runtime.UsageSummary
+import com.muyuchat.aether.runtime.VendorCheckinResult
 import com.muyuchat.aether.runtime.quotaCycleRange
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -187,6 +189,49 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         loadQuotaHistory()
     }
 
+    /* ---------------- 厂商级「立即签到」 ---------------- */
+
+    private val _vendorCheckin = MutableStateFlow<VendorCheckinUiState>(VendorCheckinUiState.Idle)
+    val vendorCheckin: StateFlow<VendorCheckinUiState> = _vendorCheckin.asStateFlow()
+
+    /**
+     * 打一次厂商级签到（`POST /api/usage/{vendor}-checkin`）。
+     *
+     * 会打到该厂商下**所有**可用账号（`vendorProviders`），所以页面要先二次确认。
+     * 结果按账号逐条回来；今天已确定的账号服务端直接返回旧结果，不会重复打上游。
+     */
+    fun checkinVendor(vendor: CheckinVendor) {
+        val status = repository.status.value
+        if (!status.running) {
+            _vendorCheckin.value = VendorCheckinUiState.Failed(vendor, "网关未启动")
+            return
+        }
+        if (_vendorCheckin.value is VendorCheckinUiState.Running) {
+            return
+        }
+        _vendorCheckin.value = VendorCheckinUiState.Running(vendor)
+        viewModelScope.launch {
+            _vendorCheckin.value = try {
+                VendorCheckinUiState.Ready(
+                    vendor = vendor,
+                    results = withContext(Dispatchers.IO) { detailClient.checkinVendor(status, vendor) },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                VendorCheckinUiState.Failed(vendor, e.message)
+            } catch (_: Exception) {
+                VendorCheckinUiState.Failed(vendor, "签到失败，请重试")
+            }
+        }
+    }
+
+    fun dismissVendorCheckin() {
+        if (_vendorCheckin.value !is VendorCheckinUiState.Running) {
+            _vendorCheckin.value = VendorCheckinUiState.Idle
+        }
+    }
+
     /* ---------------- 额度历史 + 周期估算（holds） ---------------- */
 
     private val _quotaHistory = MutableStateFlow<QuotaHistoryUiState>(QuotaHistoryUiState.Idle)
@@ -271,4 +316,12 @@ sealed interface QuotaHistoryUiState {
     data object Loading : QuotaHistoryUiState
     data class Ready(val accounts: List<QuotaHistoryAccount>) : QuotaHistoryUiState
     data class Failed(val message: String) : QuotaHistoryUiState
+}
+
+/** 厂商级签到的页面状态（一次只跑一个厂商）。 */
+sealed interface VendorCheckinUiState {
+    data object Idle : VendorCheckinUiState
+    data class Running(val vendor: CheckinVendor) : VendorCheckinUiState
+    data class Ready(val vendor: CheckinVendor, val results: List<VendorCheckinResult>) : VendorCheckinUiState
+    data class Failed(val vendor: CheckinVendor, val message: String) : VendorCheckinUiState
 }

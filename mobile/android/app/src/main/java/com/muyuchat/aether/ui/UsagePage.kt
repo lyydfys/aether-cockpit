@@ -45,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.CheckinVendor
 import com.muyuchat.aether.runtime.QuotaHistoryAccount
 import com.muyuchat.aether.runtime.QuotaHistoryLine
 import com.muyuchat.aether.runtime.QuotaHistoryPoint
@@ -63,6 +64,8 @@ import com.muyuchat.aether.runtime.quotaHistoryEmptyHint
 import com.muyuchat.aether.runtime.quotaHoldsWhyLabel
 import com.muyuchat.aether.runtime.usageCacheHitRatePercent
 import com.muyuchat.aether.runtime.usageSuccessRatePercent
+import com.muyuchat.aether.runtime.vendorCheckinLine
+import com.muyuchat.aether.runtime.vendorCheckinSummary
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
@@ -104,6 +107,7 @@ internal fun UsagePage(
     // 额度历史与周期估算：本节自己读（不改 GatewayHome 的接线点）。
     val quotaHistory by viewModel.quotaHistory.collectAsStateWithLifecycle()
     val quotaHolds by viewModel.quotaHolds.collectAsStateWithLifecycle()
+    val vendorCheckin by viewModel.vendorCheckin.collectAsStateWithLifecycle()
     LaunchedEffect(status.running) {
         if (status.running) {
             viewModel.loadQuotaHistory()
@@ -178,7 +182,15 @@ internal fun UsagePage(
                         onOpenOverview = onOpenOverview,
                     )
                 }
-                // ④ 额度历史 + 周期估算（`GET /api/usage/quotas/history` 与 `/history/holds`）
+                // ④ 渠道每日签到（`POST /api/usage/{vendor}-checkin`）
+                item {
+                    UsageVendorCheckinCard(
+                        state = vendorCheckin,
+                        onCheckin = viewModel::checkinVendor,
+                        onDismiss = viewModel::dismissVendorCheckin,
+                    )
+                }
+                // ⑤ 额度历史 + 周期估算（`GET /api/usage/quotas/history` 与 `/history/holds`）
                 item {
                     UsageQuotaHistoryCard(
                         history = quotaHistory,
@@ -1062,5 +1074,117 @@ internal fun quotaHoldText(window: QuotaHoldWindow?): String {
             "本网关经手 ${formatTokens(estimate.routedTokens)} Token / ${formatUsageCount(estimate.routedCalls)} 次调用）"
     }
     return "周期估算：${quotaHoldsWhyLabel(window.why)}"
+}
+
+/* ---------------- 渠道每日签到 ---------------- */
+
+/**
+ * 卡片说明：一次点下去会打到该厂商下**所有**渠道的全部可用账号
+ * （`vendorProviders`，`checkin_api.go:11-16`），所以按钮之后要二次确认。
+ */
+internal fun vendorCheckinScopeHint(vendor: CheckinVendor): String =
+    "会打到 ${vendor.providers.joinToString("、")} 下的全部可用账号；" +
+        "今天已经签到的账号由服务端直接返回旧结果，不会重复请求上游。"
+
+@Composable
+private fun UsageVendorCheckinCard(
+    state: VendorCheckinUiState,
+    onCheckin: (CheckinVendor) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // 二次确认用行内两段式（不弹对话框）：1.3× 下弹窗要重新排版，行内确认没有这个问题。
+    var pending by remember { mutableStateOf<CheckinVendor?>(null) }
+    val running = state as? VendorCheckinUiState.Running
+    val variant = MaterialTheme.colorScheme.onSurfaceVariant
+    DeepCard {
+        DeepCardTitle("渠道签到")
+        Text(
+            text = "按厂商一次签到这个渠道下的所有账号；今日已签的会跳过。",
+            style = MaterialTheme.typography.labelSmall,
+            color = variant,
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(TightGap),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CheckinVendor.entries.forEach { vendor ->
+                McaButton(
+                    onClick = { pending = vendor },
+                    style = if (running?.vendor == vendor) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                    enabled = running == null,
+                ) {
+                    Text(
+                        text = if (running?.vendor == vendor) "签到中…" else vendor.label,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+        pending?.let { vendor ->
+            Text(
+                text = "确认签到「${vendor.label}」？${vendorCheckinScopeHint(vendor)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
+                McaButton(
+                    onClick = {
+                        pending = null
+                        onCheckin(vendor)
+                    },
+                    style = McaButtonStyle.Primary,
+                    size = McaButtonSize.CardAction,
+                ) { Text("确认签到") }
+                McaButton(
+                    onClick = { pending = null },
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text("取消") }
+            }
+        }
+        when (state) {
+            VendorCheckinUiState.Idle -> Unit
+            is VendorCheckinUiState.Running -> Text(
+                text = "正在签到…（服务端会逐个账号请求上游，可能需要几十秒）",
+                style = MaterialTheme.typography.bodySmall,
+                color = variant,
+            )
+            is VendorCheckinUiState.Failed -> Text(
+                text = state.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            is VendorCheckinUiState.Ready -> {
+                Text(
+                    text = vendorCheckinSummary(state.results),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                state.results.take(8).forEach { result ->
+                    Text(
+                        text = vendorCheckinLine(result),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = variant,
+                    )
+                }
+                if (state.results.size > 8) {
+                    Text(
+                        text = "…另有 ${state.results.size - 8} 个账号",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = variant,
+                    )
+                }
+                McaButton(
+                    onClick = onDismiss,
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text("清除结果") }
+            }
+        }
+    }
 }
 

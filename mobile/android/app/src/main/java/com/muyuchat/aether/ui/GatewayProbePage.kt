@@ -3,6 +3,7 @@ package com.muyuchat.aether.ui
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -28,11 +30,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,11 +49,16 @@ import com.muyuchat.aether.runtime.ChannelProbeReport
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.HealthzProbe
 import com.muyuchat.aether.runtime.MetricsDigest
+import com.muyuchat.aether.runtime.channelNetInflightLabel
+import com.muyuchat.aether.runtime.channelNetPolicyLine
 import com.muyuchat.aether.runtime.CODEX_IDENTITY_EMPTY_COPY
 import com.muyuchat.aether.runtime.codexIdentityBits
 import com.muyuchat.aether.runtime.codexIdentityExpectedLine
 import com.muyuchat.aether.runtime.codexIdentityMismatchLine
 import com.muyuchat.aether.runtime.codexIdentityStatusLabel
+import com.muyuchat.aether.runtime.NET_DIAG_RUNNING_COPY
+import com.muyuchat.aether.runtime.netDiagIpVerdict
+import com.muyuchat.aether.runtime.netDiagSteps
 import com.muyuchat.aether.runtime.ProbeOutcome
 import com.muyuchat.aether.runtime.QuotaAlertsReport
 import com.muyuchat.aether.runtime.quotaAlertCountLabel
@@ -109,6 +119,12 @@ internal fun GatewayProbePage(
     identity: CodexIdentityUiState = CodexIdentityUiState.Idle,
     /** 「刷新」身份对照；为 null 时不渲染按钮。 */
     onRefreshIdentity: (() -> Unit)? = null,
+    /** 渠道网络只读汇总（桌面 `channelnet.js:63-77` 是单渠道抽屉；这里只读不写）。 */
+    channelNet: ChannelNetUiState = ChannelNetUiState.Idle,
+    /** 网络连通诊断（桌面 `channelnet.js:113-129`）。 */
+    netDiag: NetDiagUiState = NetDiagUiState.Idle,
+    /** 「诊断」；为 null 时不渲染按钮（未接线不出死按钮）。 */
+    onRunNetDiag: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var protocol by remember { mutableStateOf("openai") }
@@ -160,6 +176,19 @@ internal fun GatewayProbePage(
                 CodexIdentityCard(
                     state = identity,
                     onRefresh = onRefreshIdentity,
+                )
+            }
+        }
+        // ③ 渠道网络（桌面 channelnet.js:63-77；手机端只读汇总，不提供保存）
+        if (channelNet !is ChannelNetUiState.Idle) {
+            item { ChannelNetCard(channelNet) }
+        }
+        // ④ 网络连通诊断（桌面 channelnet.js:113-129）：输入 host → 诊断，结果留在页面上
+        if (onRunNetDiag != null) {
+            item {
+                NetDiagCard(
+                    state = netDiag,
+                    onRun = onRunNetDiag,
                 )
             }
         }
@@ -412,6 +441,217 @@ private fun QuotaAlertsFailedCard(state: QuotaAlertsUiState.Failed) {    DeepCar
             },
             tone = if (state.code == "gateway_not_running") DeepTone.Info else DeepTone.Danger,
         )
+    }
+}
+
+/* ---------------- 渠道网络（桌面 channelnet.js:63-77） ---------------- */
+
+/**
+ * 「渠道网络」只读汇总：每个渠道一行 = 名称 + 在途数 + 策略（预热/并发/停顿，0 写「默认」）。
+ *
+ * 桌面这块在**单个渠道**的详情抽屉里（还有保存表单）；手机端按只读汇总展示，
+ * 保存属于渠道页的写操作，不在这里做。
+ */
+@Composable
+private fun ChannelNetCard(state: ChannelNetUiState) {
+    DeepCard {
+        DeepCardTitle("渠道网络")
+        Spacer(Modifier.height(6.dp))
+        when (state) {
+            ChannelNetUiState.Idle -> Unit
+            ChannelNetUiState.Loading -> DeepCardBody("正在读取渠道网络策略…")
+            is ChannelNetUiState.Failed -> DeepCardBody(
+                if (state.code == "gateway_not_running") {
+                    "网关未启动；启动后这里会显示各渠道的预热/并发策略与在途请求数。"
+                } else {
+                    "读取失败：${state.message}（错误码：${state.code}）"
+                },
+                tone = if (state.code == "gateway_not_running") DeepTone.Info else DeepTone.Danger,
+            )
+            is ChannelNetUiState.Ready -> {
+                if (state.rows.isEmpty()) {
+                    DeepCardBody("还没有配置网络策略的渠道；接入渠道后这里会出现每渠道的预热/并发/在途。")
+                } else {
+                    for (row in state.rows) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = row.providerName.ifBlank { row.providerId },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = channelNetPolicyLine(row),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(
+                                text = channelNetInflightLabel(row),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (row.inflight > 0) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ---------------- 网络连通诊断（桌面 channelnet.js:113-129） ---------------- */
+
+/**
+ * 「网络连通诊断」：host 输入框 + 诊断按钮 + 结果区。
+ *
+ * - 本地先校验（`parseNetDiagInput`，规则与服务端 `netdiag.go:82-95` 一致），非法不发请求；
+ * - 进行中按钮禁用并写清「最长约 25 秒」（服务端 `netdiag.go:96` 的 context 超时）；
+ * - 结果**留在页面上**（不弹窗、不清空），方便改 host 后对比重测；
+ * - 可用宽度 < 340dp（1.3× 字号常见）时按钮换到下一行，输入框占满一行。
+ */
+@Composable
+private fun NetDiagCard(state: NetDiagUiState, onRun: (String) -> Unit) {
+    var host by rememberSaveable { mutableStateOf("") }
+    val running = state is NetDiagUiState.Running
+    DeepCard {
+        DeepCardTitle("网络连通诊断")
+        Spacer(Modifier.height(6.dp))
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val narrow = maxWidth < 340.dp
+            val field: @Composable (Modifier) -> Unit = { modifier ->
+                Surface(
+                    modifier = modifier,
+                    shape = McaShape.CardAction,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = McaHairline.stroke(),
+                ) {
+                    BasicTextField(
+                        value = host,
+                        onValueChange = { host = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .semantics { contentDescription = "上游域名或 IP" },
+                        decorationBox = { inner ->
+                            if (host.isEmpty()) {
+                                Text(
+                                    text = "api.example.com 或 1.2.3.4:443",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            inner()
+                        },
+                    )
+                }
+            }
+            if (narrow) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    field(Modifier.fillMaxWidth())
+                    McaButton(
+                        onClick = { onRun(host) },
+                        style = McaButtonStyle.Primary,
+                        enabled = !running,
+                    ) { Text(if (running) NET_DIAG_RUNNING_COPY else "诊断") }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    field(Modifier.weight(1f))
+                    McaButton(
+                        onClick = { onRun(host) },
+                        style = McaButtonStyle.Primary,
+                        enabled = !running,
+                    ) { Text(if (running) NET_DIAG_RUNNING_COPY else "诊断") }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        when (state) {
+            NetDiagUiState.Idle -> DeepCardBody(
+                "填一个上游域名或 IP：本机会先跑系统 DNS、再拿 DoH 答案对照，然后对每个 IP 测 TCP / TLS / 首字节。",
+            )
+            is NetDiagUiState.Running -> DeepCardBody("正在诊断 ${state.target}…${NET_DIAG_RUNNING_COPY}")
+            is NetDiagUiState.Failed -> DeepCardBody(
+                if (state.local) {
+                    state.message
+                } else {
+                    "诊断失败：${state.message}（错误码：${state.code}）"
+                },
+                tone = if (state.local) DeepTone.Info else DeepTone.Danger,
+            )
+            is NetDiagUiState.Ready -> {
+                val report = state.report
+                if (report.summary.isNotEmpty()) {
+                    DeepCardBody(report.summary)
+                    Spacer(Modifier.height(4.dp))
+                }
+                Text(
+                    text = "${report.host}:${report.port} · 用时 ${report.elapsedMs}ms",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                for (step in netDiagSteps(report)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(
+                            text = if (step.ok) "✓" else "✗",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (step.ok) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                            maxLines = 1,
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = step.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = step.detail,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                val verdicts = report.ips.map { "${it.ip} ${netDiagIpVerdict(it)}" }
+                if (verdicts.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = verdicts.joinToString("；"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 

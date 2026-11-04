@@ -45,6 +45,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -74,6 +75,11 @@ import com.muyuchat.aether.runtime.maskingRecordsEmptyDetail
 import com.muyuchat.aether.runtime.maskingTimestamp
 import com.muyuchat.aether.runtime.MaskingRecord
 import com.muyuchat.aether.runtime.validateRedactCustomRule
+import com.muyuchat.aether.runtime.RemoteQuotaDraft
+import com.muyuchat.aether.runtime.RemoteQuotaSourceRow
+import com.muyuchat.aether.runtime.ProfileRow
+import com.muyuchat.aether.runtime.SettingsApiClient
+import com.muyuchat.aether.runtime.profileClientLabel
 import com.muyuchat.aether.runtime.SettingsSummary
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
@@ -250,13 +256,19 @@ internal fun SettingsPage(
                                             onReload = onLoadCallerKeys,
                                         )
                                     }
-                                    "03" -> SettingsToolsSection(status = status)
+                                    "03" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        SettingsToolsSection(status = status)
+                                        SettingsRemoteQuotasSection(status = status)
+                                    }
                                     "04" -> SettingsPresetsSection(status = status)
                                     "05" -> SettingsPricingSection(status = status)
                                     "06" -> SettingsModelsSection(status = status)
                                     "07" -> SettingsPrivacySection(status = status)
                                     "08" -> SettingsObservabilitySection(status = status)
-                                    "10" -> SettingsAboutSection(status = status)
+                                    "10" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        SettingsAboutSection(status = status)
+                                        SettingsProfilesSection(status = status)
+                                    }
                                 }
                             }
                         }
@@ -2294,5 +2306,416 @@ private fun FocusedSettingsHeader(title: String, onBack: () -> Unit) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/**
+ * 只读的配置档案卡。`GET /api/profiles` 的真实回包是
+ * `{"profiles":[...],"active":...}`；激活要写桌面客户端配置文件，手机端不做。
+ */
+@Composable
+private fun SettingsProfilesSection(status: GatewayStatus) {
+    val client = remember { SettingsApiClient() }
+    var profiles by remember(status.addr) { mutableStateOf<List<ProfileRow>?>(null) }
+    var error by remember(status.addr) { mutableStateOf<String?>(null) }
+    LaunchedEffect(status.running, status.addr) {
+        if (!status.running) {
+            profiles = emptyList()
+            error = null
+            return@LaunchedEffect
+        }
+        error = null
+        runCatching {
+            withContext(Dispatchers.IO) { client.fetchProfiles(status) }
+        }.onSuccess { profiles = it }
+            .onFailure { error = it.message ?: "读取配置档案失败" }
+    }
+    DeepCard {
+        DeepCardTitle("配置档案（只读）")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "激活配置要写桌面客户端配置文件，手机端不做；这里只展示每套档案的名字与客户端。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        when {
+            error != null -> Text(
+                text = error ?: "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            profiles == null -> Text(
+                text = "正在读取配置档案…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            profiles?.isEmpty() == true -> Text(
+                text = "网关没有配置档案（桌面端可新建）。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> profiles.orEmpty().forEach { profile ->
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = DeepRowVertical),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = profile.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (profile.clients.isEmpty()) {
+                        Text(
+                            text = "没有客户端",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        profile.clients.forEach { clientRow ->
+                            Text(
+                                text = profileClientLabel(clientRow),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ---------------- 远程额度源（POST /api/settings/remote-quotas*） ---------------- */
+
+@Composable
+private fun SettingsRemoteQuotasSection(status: GatewayStatus) {
+    val client = remember { SettingsApiClient() }
+    var sources by remember(status.addr) { mutableStateOf<List<RemoteQuotaSourceRow>?>(null) }
+    var error by remember(status.addr) { mutableStateOf<String?>(null) }
+    var editingIndex by remember { mutableStateOf<Int?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    LaunchedEffect(status.running, status.addr) {
+        if (!status.running) {
+            sources = emptyList()
+            error = null
+            return@LaunchedEffect
+        }
+        error = null
+        runCatching { withContext(Dispatchers.IO) { client.fetchSettings(status).remoteQuotas } }
+            .onSuccess { sources = it }
+            .onFailure { error = it.message ?: "读取远程额度源失败" }
+    }
+    DeepCard {
+        DeepCardTitle("远程额度源")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "读取其它 Aether 实例的用量；保存时整表替换。访问 Key 由网关加密保存，" +
+                "GET 不回显密文。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        when {
+            error != null -> Text(
+                text = error ?: "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            sources == null -> Text(
+                text = "正在读取远程额度源…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            sources?.isEmpty() == true -> Text(
+                text = "没有远程额度源。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> sources.orEmpty().forEachIndexed { index, source ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = DeepRowVertical),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = source.name.ifBlank { "远程实例" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = source.url + " · " + if (source.enabled) "启用" else "停用" +
+                                " · " + if (source.hasKey) "已保存 Key" else "无 Key",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    McaButton(
+                        onClick = { editingIndex = index },
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                    ) { Text("编辑") }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        McaButton(
+            onClick = { creating = true },
+            style = McaButtonStyle.Primary,
+            size = McaButtonSize.CardAction,
+            enabled = status.running && sources != null,
+        ) { Text("新增源") }
+    }
+    val list = sources.orEmpty()
+    if (creating || editingIndex != null) {
+        val index = editingIndex
+        val original = index?.let { list.getOrNull(it) }
+        RemoteQuotaEditDialog(
+            status = status,
+            source = original,
+            allSources = list,
+            index = index ?: list.size,
+            isNew = original == null,
+            onDismiss = {
+                creating = false
+                editingIndex = null
+            },
+            onSaved = {
+                sources = it
+                creating = false
+                editingIndex = null
+                error = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun RemoteQuotaEditDialog(
+    status: GatewayStatus,
+    source: RemoteQuotaSourceRow?,
+    allSources: List<RemoteQuotaSourceRow>,
+    index: Int,
+    isNew: Boolean,
+    onDismiss: () -> Unit,
+    onSaved: (List<RemoteQuotaSourceRow>) -> Unit,
+) {
+    val client = remember { SettingsApiClient() }
+    val scope = rememberCoroutineScope()
+    var name by remember(source?.url) { mutableStateOf(source?.name.orEmpty()) }
+    var url by remember(source?.url) { mutableStateOf(source?.url.orEmpty()) }
+    var key by remember(source?.url) { mutableStateOf("") }
+    var enabled by remember(source?.url) { mutableStateOf(source?.enabled ?: true) }
+    var saving by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var confirmProvider by remember { mutableStateOf(false) }
+    val current = RemoteQuotaDraft(name = name, url = url, key = key, enabled = enabled)
+    fun draftsWithCurrent(): List<RemoteQuotaDraft> {
+        val rows = allSources.map { RemoteQuotaDraft(it.name, it.url, "", it.enabled) }.toMutableList()
+        if (isNew || index >= rows.size) rows.add(current) else rows[index] = current
+        return rows
+    }
+    McaDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = {
+            Text(
+                text = if (isNew) "新增远程额度源" else "编辑远程额度源",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                RemoteQuotaField("名称", name, { name = it })
+                RemoteQuotaField("地址", url, { url = it })
+                RemoteQuotaField(
+                    label = "访问 Key（留空即不改动）",
+                    value = key,
+                    onChange = { key = it },
+                    password = true,
+                )
+                if (source?.hasKey == true) {
+                    Text(
+                        text = "该源已有保存的 Key；留空保存会沿用旧 Key。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (source != null && key.isBlank() &&
+                    (name.trim() != source.name || url.trim().trimEnd('/') != source.url)
+                ) {
+                    Text(
+                        text = "名称或地址已改且 Key 留空：服务端按旧 name+url 匹配，旧 Key 不会沿用，" +
+                            "这条会变成无 Key。请重新填写 Key。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = enabled, onCheckedChange = { enabled = it })
+                    Spacer(Modifier.width(8.dp))
+                    Text("启用", style = MaterialTheme.typography.bodySmall)
+                }
+                if (message != null) {
+                    Text(
+                        text = message ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (message?.startsWith("连接成功") == true) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                McaButton(
+                    onClick = {
+                        if (!testing) {
+                            testing = true
+                            scope.launch {
+                                message = try {
+                                    withContext(Dispatchers.IO) {
+                                        client.testRemoteQuota(status, name, url, key)
+                                    }.message
+                                } catch (e: ManagementApiException) {
+                                    e.message
+                                } catch (_: Exception) {
+                                    "测试连接失败，请重试"
+                                } finally {
+                                    testing = false
+                                }
+                            }
+                        }
+                    },
+                    style = McaButtonStyle.Outlined,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !testing && url.isNotBlank(),
+                ) { Text(if (testing) "测试中…" else "测试连接") }
+                McaButton(
+                    onClick = { confirmProvider = true },
+                    style = McaButtonStyle.Outlined,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !saving && !isNew && (source?.url ?: "").isNotBlank(),
+                ) { Text("注册为 provider") }
+            }
+        },
+        confirmButton = {
+            McaButton(
+                onClick = {
+                    if (!saving && url.isNotBlank()) {
+                        saving = true
+                        scope.launch {
+                            try {
+                                val next = withContext(Dispatchers.IO) {
+                                    client.saveRemoteQuotas(status, draftsWithCurrent())
+                                }
+                                onSaved(next)
+                            } catch (e: ManagementApiException) {
+                                message = e.message
+                            } catch (_: Exception) {
+                                message = "保存远程额度源失败，请重试"
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    }
+                },
+                style = McaButtonStyle.Primary,
+                enabled = !saving && url.isNotBlank(),
+            ) { Text(if (saving) "保存中…" else "保存") }
+        },
+        dismissButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined, enabled = !saving) {
+                Text("取消")
+            }
+        },
+    )
+    if (confirmProvider) {
+        McaDialog(
+            onDismissRequest = { confirmProvider = false },
+            title = { Text("注册为 provider？", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "会把「${name.ifBlank { "远程实例" }}」注册成本机 openai-compat 上游，" +
+                        "使用该实例已保存的访问 Key；不会改动远程实例。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        confirmProvider = false
+                        scope.launch {
+                            message = try {
+                                withContext(Dispatchers.IO) {
+                                    client.useRemoteQuotaAsProvider(
+                                        status,
+                                        source?.name ?: name,
+                                        source?.url ?: url,
+                                    )
+                                }.message
+                            } catch (e: ManagementApiException) {
+                                e.message
+                            } catch (_: Exception) {
+                                "注册 provider 失败，请重试"
+                            }
+                        }
+                    },
+                    style = McaButtonStyle.Primary,
+                ) { Text("确认注册") }
+            },
+            dismissButton = {
+                McaButton(onClick = { confirmProvider = false }, style = McaButtonStyle.Outlined) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun RemoteQuotaField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    password: Boolean = false,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(shape = McaShape.CardAction, color = MaterialTheme.colorScheme.surface, border = McaHairline.stroke()) {
+            BasicTextField(
+                value = value,
+                onValueChange = onChange,
+                singleLine = true,
+                visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .wrapContentHeight(Alignment.CenterVertically)
+                    .padding(horizontal = 12.dp),
+            )
+        }
     }
 }

@@ -69,9 +69,13 @@ class ProfilesApiTest {
     @Test
     fun malformedBodyIsExplicitError() {
         for (body in listOf("not json", "", "{}")) {
-            assertTrue(runCatching { parseProfiles(body) }.exceptionOrNull() is ManagementApiException)
+            val error = runCatching { parseProfiles(body) }.exceptionOrNull()
+            assertTrue(
+                "body=<$body> 应抛 ManagementApiException，实际=${error?.javaClass?.name ?: "没有抛异常（被当成合法回包了）"}",
+                error is ManagementApiException,
+            )
         }
         // 空数组是合法回包（就是"没有档案"）。
-        assertTrue(parseProfiles("[]").isEmpty())
+        assertTrue("[] 是合法回包，应解析成空列表", parseProfiles("[]").isEmpty())
     }
 }
