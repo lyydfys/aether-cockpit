@@ -140,6 +140,7 @@ class AetherGatewayService : Service() {
 
     private fun startAsForeground(status: GatewayStatus) {
         val notification = buildNotification(status)
+        // Manifest: android:foregroundServiceType="specialUse". The runtime argument must match it.
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {

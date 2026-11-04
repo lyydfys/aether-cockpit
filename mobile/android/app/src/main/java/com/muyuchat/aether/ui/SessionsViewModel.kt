@@ -8,11 +8,14 @@ import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.SessionContentSearch
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.SessionDetailApiClient
 import com.muyuchat.aether.runtime.SessionSearchApiClient
 import com.muyuchat.aether.runtime.SessionStats
 import com.muyuchat.aether.runtime.SessionStatsApiClient
+import com.muyuchat.aether.runtime.SessionTranscriptPart
 import com.muyuchat.aether.runtime.SessionUsage
 import com.muyuchat.aether.runtime.SessionUsageApiClient
+import com.muyuchat.aether.runtime.SessionUsageView
 import com.muyuchat.aether.runtime.SessionList
 import com.muyuchat.aether.runtime.SessionRow
 import com.muyuchat.aether.runtime.SessionsApiClient
@@ -56,6 +59,34 @@ sealed interface SessionUsageUiState {
 
 /** 桌面的时间范围控件就是这三档（`sessions.js:263`）。 */
 internal val SESSION_USAGE_PERIODS: List<Int> = listOf(1, 7, 30)
+
+/**
+ * 单个会话详情（桌面 `sessions.js:403-478` 的详情抽屉）。
+ *
+ * 数据来自 `GET /api/sessions/one?key=…` 与 `GET /api/sessions/transcript?…`：
+ * 用量拿不到不算失败（桌面 `.catch(() => {})` 吞掉，`sessions.js:457`），正文拿不到才算失败。
+ */
+sealed interface SessionDetailUiState {
+    data object Idle : SessionDetailUiState
+    data class Loading(val sessionKey: String) : SessionDetailUiState
+    data class Ready(
+        val sessionKey: String,
+        /** 用量视图；`null` 表示这条会话没有可用量数据（或取用量的请求失败了）。 */
+        val usage: SessionUsageView?,
+        val parts: List<SessionTranscriptPart>,
+        /** `file` = 从会话文件读到；`gateway` = 网关自己的会话没有落文件。 */
+        val source: String,
+        val cut: Boolean,
+    ) : SessionDetailUiState
+    data class Failed(val sessionKey: String, val code: String, val message: String) : SessionDetailUiState
+}
+
+/** 「复制 Markdown」的一次性结果：页面拿它写剪贴板，写完调用 dismissSessionMarkdown 丢掉。 */
+sealed interface SessionMarkdownUiState {
+    data object Idle : SessionMarkdownUiState
+    data class Ready(val sessionKey: String, val markdown: String) : SessionMarkdownUiState
+    data class Failed(val sessionKey: String, val code: String, val message: String) : SessionMarkdownUiState
+}
 
 /**
  * 会话页状态。**只读**：不改 Agent 的记录，也不做任何"同步"。
@@ -237,5 +268,100 @@ class SessionsViewModel(application: Application) : AndroidViewModel(application
                 SessionsUiState.Failed("unknown", "读取会话失败，请重试")
             }
         }
+    }
+
+    // ——— 会话详情 / 复制 Markdown（桌面 sessions.js:403-478） ———
+
+    private val detailClient = SessionDetailApiClient()
+    private val _detail = MutableStateFlow<SessionDetailUiState>(SessionDetailUiState.Idle)
+    val detail: StateFlow<SessionDetailUiState> = _detail.asStateFlow()
+    private var detailJob: Job? = null
+
+    private val _markdown = MutableStateFlow<SessionMarkdownUiState>(SessionMarkdownUiState.Idle)
+    val markdown: StateFlow<SessionMarkdownUiState> = _markdown.asStateFlow()
+
+    /**
+     * 打开一条会话：用量与正文各取一次。
+     *
+     * 用量失败只让用量区空着（桌面也是这样，`sessions.js:457` 吞掉错误），
+     * 正文失败才是整个详情失败——因为详情的主体是正文。
+     */
+    fun openSessionDetail(agent: String, id: String) {
+        if (agent.isBlank() || id.isBlank()) {
+            return
+        }
+        detailJob?.cancel()
+        val sessionKey = "$agent:$id"
+        val status = repository.status.value
+        if (!status.running) {
+            _detail.value = SessionDetailUiState.Failed(sessionKey, "gateway_not_running", "网关未启动")
+            return
+        }
+        _detail.value = SessionDetailUiState.Loading(sessionKey)
+        detailJob = viewModelScope.launch {
+            val transcript = try {
+                withContext(Dispatchers.IO) { detailClient.fetchTranscript(status, agent, id) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _detail.value = SessionDetailUiState.Failed(sessionKey, e.code, e.message)
+                return@launch
+            } catch (_: Exception) {
+                _detail.value = SessionDetailUiState.Failed(sessionKey, "unknown", "读取会话正文失败，请重试")
+                return@launch
+            }
+            val usage = try {
+                withContext(Dispatchers.IO) { detailClient.fetchSession(status, agent, id) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            _detail.value = SessionDetailUiState.Ready(
+                sessionKey = sessionKey,
+                usage = usage,
+                parts = transcript.parts,
+                source = transcript.source,
+                cut = transcript.cut,
+            )
+        }
+    }
+
+    fun dismissSessionDetail() {
+        detailJob?.cancel()
+        _detail.value = SessionDetailUiState.Idle
+    }
+
+    /** 桌面是「下载 Markdown」（`sessions.js:412`）；手机上取回原文交给页面复制。 */
+    fun loadSessionMarkdown(agent: String, id: String) {
+        if (agent.isBlank() || id.isBlank()) {
+            return
+        }
+        val sessionKey = "$agent:$id"
+        val status = repository.status.value
+        if (!status.running) {
+            _markdown.value = SessionMarkdownUiState.Failed(sessionKey, "gateway_not_running", "网关未启动")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val text = withContext(Dispatchers.IO) { detailClient.fetchMarkdown(status, agent, id) }
+                if (text.isBlank()) {
+                    _markdown.value = SessionMarkdownUiState.Failed(sessionKey, "empty", "这个会话没有可导出的正文")
+                } else {
+                    _markdown.value = SessionMarkdownUiState.Ready(sessionKey, text)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _markdown.value = SessionMarkdownUiState.Failed(sessionKey, e.code, e.message)
+            } catch (_: Exception) {
+                _markdown.value = SessionMarkdownUiState.Failed(sessionKey, "unknown", "读取 Markdown 失败，请重试")
+            }
+        }
+    }
+
+    fun dismissSessionMarkdown() {
+        _markdown.value = SessionMarkdownUiState.Idle
     }
 }

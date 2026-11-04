@@ -1,5 +1,6 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,7 +28,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,11 +41,14 @@ import com.muyuchat.aether.runtime.sessionStatsLine
 import com.muyuchat.aether.runtime.sessionStatsTokensLine
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.SessionRow
+import com.muyuchat.aether.runtime.SessionTranscriptPart
 import com.muyuchat.aether.runtime.SessionUsage
 import com.muyuchat.aether.runtime.SessionUsageDay
 import com.muyuchat.aether.runtime.SessionUsageTotals
+import com.muyuchat.aether.runtime.SessionUsageView
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
+import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 
@@ -66,6 +73,14 @@ internal fun SessionsPage(
     contentSearch: SessionContentUiState = SessionContentUiState.Idle,
     onSearchContent: () -> Unit = {},
     onDismissContentSearch: () -> Unit = {},
+    /** 会话详情（桌面 `sessions.js:403` 的详情抽屉）；为 null 时行不可点，避免点了没反应的死入口。 */
+    detail: SessionDetailUiState = SessionDetailUiState.Idle,
+    onOpenSession: ((SessionRow) -> Unit)? = null,
+    onCloseDetail: () -> Unit = {},
+    /** 「复制 Markdown」（桌面是「下载 Markdown」，`sessions.js:412`）。 */
+    markdown: SessionMarkdownUiState = SessionMarkdownUiState.Idle,
+    onLoadMarkdown: (agent: String, id: String) -> Unit = { _, _ -> },
+    onMarkdownCopied: () -> Unit = {},
     onBack: () -> Unit,
     onOpenOverview: () -> Unit,
     modifier: Modifier = Modifier,
@@ -311,15 +326,235 @@ internal fun SessionsPage(
                         )
                     }
                     items(state.sessions.size) { index ->
-                        SessionRowCard(state.sessions[index])
+                        val row = state.sessions[index]
+                        SessionRowCard(
+                            row = row,
+                            onClick = onOpenSession?.let { open -> { open(row) } },
+                        )
                     }
                 }
             }
         }
         }
     }
+
+    // 会话详情抽屉（桌面 sessions.js:403-478）：手机端用对话框，正文区可滚动。
+    SessionsDetailDialog(
+        detail = detail,
+        markdown = markdown,
+        onLoadMarkdown = onLoadMarkdown,
+        onMarkdownCopied = onMarkdownCopied,
+        onClose = onCloseDetail,
+    )
 }
 
+/**
+ * 会话详情对话框：用量 chips + 正文片段 + 两个真能用的动作
+ * （复制恢复命令、复制 Markdown）。
+ */
+@Composable
+private fun SessionsDetailDialog(
+    detail: SessionDetailUiState,
+    markdown: SessionMarkdownUiState,
+    onLoadMarkdown: (agent: String, id: String) -> Unit,
+    onMarkdownCopied: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    // Markdown 取回来就写剪贴板，然后让 VM 丢掉这份一次性结果（避免重复写）。
+    LaunchedEffect(markdown) {
+        if (markdown is SessionMarkdownUiState.Ready) {
+            clipboard.setText(AnnotatedString(markdown.markdown))
+            onMarkdownCopied()
+        }
+    }
+    if (detail is SessionDetailUiState.Idle) {
+        return
+    }
+    val sessionKey = when (detail) {
+        is SessionDetailUiState.Loading -> detail.sessionKey
+        is SessionDetailUiState.Ready -> detail.sessionKey
+        is SessionDetailUiState.Failed -> detail.sessionKey
+        SessionDetailUiState.Idle -> ""
+    }
+    McaDialog(
+        onDismissRequest = onClose,
+        title = {
+            Text(
+                text = "会话 · ${sessionDetailTitle(detail)}",
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            Column {
+                when (detail) {
+                    SessionDetailUiState.Idle -> Unit
+                    is SessionDetailUiState.Loading -> Text(
+                        text = "正在读取会话正文…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    is SessionDetailUiState.Failed -> {
+                        Text(
+                            text = if (detail.code == "gateway_not_running") {
+                                "网关未启动，启动本地网关后可读这条会话。"
+                            } else {
+                                "${detail.message}（错误码：${detail.code}）"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "下一步：回到列表确认这条会话还在（会话文件可能已被清理），或换一个 Agent 筛选再试。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    is SessionDetailUiState.Ready -> {
+                        detail.usage?.let { usage ->
+                            Text(
+                                text = sessionDetailUsageLine(usage),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            if (usage.models.isNotEmpty()) {
+                                Text(
+                                    text = "模型：${usage.models.joinToString(" · ") { it.model }}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        if (detail.parts.isEmpty()) {
+                            val copy = sessionDetailEmptyCopy(detail.source)
+                            Text(
+                                text = copy.first,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = copy.second,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                                items(detail.parts.size) { index ->
+                                    val part = detail.parts[index]
+                                    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                                        Text(
+                                            text = sessionTranscriptRoleLine(part),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Text(
+                                            text = sessionTranscriptBody(part),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = sessionTranscriptFooter(detail.parts.size, detail.cut),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (markdown is SessionMarkdownUiState.Failed) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "${markdown.message}（错误码：${markdown.code}）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+                // 两个动作：复制恢复命令（桌面 sessions.js:422）、复制 Markdown（桌面是下载，:412）
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val usage = (detail as? SessionDetailUiState.Ready)?.usage
+                    if (usage != null && usage.resume.isNotBlank()) {
+                        McaButton(
+                            onClick = { clipboard.setText(AnnotatedString(usage.resume)) },
+                            style = McaButtonStyle.Outlined,
+                        ) { Text("复制恢复命令") }
+                    }
+                    if (detail is SessionDetailUiState.Ready) {
+                        McaButton(
+                            onClick = {
+                                val agent = sessionKey.substringBefore(":", "")
+                                val id = sessionKey.substringAfter(":", "")
+                                if (agent.isNotBlank() && id.isNotBlank()) {
+                                    onLoadMarkdown(agent, id)
+                                }
+                            },
+                            style = McaButtonStyle.Outlined,
+                        ) { Text(if (markdown is SessionMarkdownUiState.Ready) "已复制" else "复制 Markdown") }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            McaButton(onClick = onClose, style = McaButtonStyle.Outlined) { Text("关闭") }
+        },
+    )
+}
+
+/** 详情标题：优先会话标题，其次 id。 */
+internal fun sessionDetailTitle(detail: SessionDetailUiState): String = when (detail) {
+    is SessionDetailUiState.Ready -> detail.usage?.title?.ifBlank { detail.usage.id }
+        ?: detail.sessionKey.substringAfter(":", detail.sessionKey)
+    is SessionDetailUiState.Loading -> detail.sessionKey.substringAfter(":", detail.sessionKey)
+    is SessionDetailUiState.Failed -> detail.sessionKey.substringAfter(":", detail.sessionKey)
+    SessionDetailUiState.Idle -> ""
+}
+
+/** 用量一行（桌面 `sessions.js:449-454` 的六个 chip，压成一行）。 */
+internal fun sessionDetailUsageLine(usage: SessionUsageView): String = buildString {
+    append("合计 ${sessionUsageBigLabel(usage.totalTokens)} Token")
+    append(" · 输入 ${sessionUsageBigLabel(usage.inputWithCache)}")
+    append(" · 缓存 ${sessionUsageBigLabel(usage.cacheRead)}")
+    append(" · 输出 ${sessionUsageBigLabel(usage.output)}")
+    append(" · ")
+    append(if (usage.unpriced) "部分未计价" else "估算 ${sessionUsageCostLabel(usage.cost, 0L)}")
+    append(" · ${usage.requests} 次请求")
+}
+
+/**
+ * 正文空态文案（桌面 `sessions.js:462-464`）：
+ * `source == gateway` 表示网关自己的会话没有落文件，另一种是文件空/格式不同。
+ */
+internal fun sessionDetailEmptyCopy(source: String): Pair<String, String> = if (source == "gateway") {
+    "这里没有可读的正文" to "网关自己的会话没有落文件；下一步可以在桌面端的会话目录里确认这条记录是否存在。"
+} else {
+    "这里没有可读的正文" to "会话文件为空或格式不同；下一步用「复制 Markdown」看能不能拿到导出内容。"
+}
+
+/** 一条片段的小标题：角色 + 时间（桌面 `sessions.js:471`）。 */
+internal fun sessionTranscriptRoleLine(part: SessionTranscriptPart): String =
+    if (part.at > 0L) {
+        "${part.role} · ${sessionAgeLabel(part.at, System.currentTimeMillis())}"
+    } else {
+        part.role
+    }
+
+/** 单条正文截断：桌面每条 6000 字（`sessions.js:472`）。 */
+internal fun sessionTranscriptBody(part: SessionTranscriptPart, limit: Int = 6000): String =
+    part.text.trim().take(limit)
+
+/** 正文脚注：条数与是否被服务端截断。 */
+internal fun sessionTranscriptFooter(count: Int, cut: Boolean): String = buildString {
+    append("共 $count 段")
+    if (cut) {
+        append(" · 服务端已截断，完整内容请用「复制 Markdown」")
+    }
+}
 /** 会话页的两档视图（桌面 `sessions.js:119`：会话列表 / 会话用量）。 */
 internal enum class SessionView {
     LIST,
@@ -551,8 +786,14 @@ internal fun sessionStatsMetaLine(row: SessionRow, nowMs: Long): String =
     "${sessionAgeLabel(row.lastAt, nowMs)} · ${row.requests} 请求 · ${row.messages} 消息"
 
 @Composable
-private fun SessionRowCard(row: SessionRow) {
-    DeepCard {
+private fun SessionRowCard(row: SessionRow, onClick: (() -> Unit)? = null) {
+    DeepCard(
+        modifier = if (onClick != null) {
+            Modifier.clickable(onClick = onClick)
+        } else {
+            Modifier
+        },
+    ) {
         Text(
             text = row.title.ifBlank { row.id.ifBlank { row.key } },
             style = MaterialTheme.typography.titleMedium,

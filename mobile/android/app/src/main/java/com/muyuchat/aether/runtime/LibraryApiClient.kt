@@ -29,9 +29,28 @@ data class LibraryEntry(
     val name: String,
     val kind: LibraryKind,
     val updatedAt: Long,
+    /**
+     * MCP 服务器上被停用的工具名（`library_api.go:284-288`）。
+     *
+     * 只对 `kind == MCP` 有意义：桌面在详情抽屉里用它做「已停用 N 个工具」的初始状态
+     * （`library.js:491`）。其它类型恒为空。
+     */
+    val disabledTools: List<String> = emptyList(),
 )
 
 data class LibrarySnapshot(val entries: List<LibraryEntry>)
+
+/**
+ * 一个 MCP 服务器的工具清单（`mcp_check.go` 的 `mcpCheckResult`）。
+ *
+ * `why`/`detail` 是服务端给出的"为什么没有工具"（未登录、连不上、超时…），
+ * 桌面就是用它渲染那句提示（`library.js:509`），手机端照抄。
+ */
+data class McpToolList(
+    val tools: List<String>,
+    val why: String,
+    val detail: String,
+)
 
 /**
  * 资源库只读投影 + 删除。
@@ -55,6 +74,24 @@ class LibraryApiClient(
 
     fun deleteEntry(status: GatewayStatus, kind: LibraryKind, id: String) {
         request(status, "DELETE", libraryDeletePath(kind, id), null)
+    }
+
+    /**
+     * 读某个 MCP 服务器的工具清单：`POST /api/library/mcp/check {names:[name], fresh:true}`
+     * （`gateway.go:1002` → `mcp_check.go:168+`）。桌面点「读取工具清单」时调的同一个端点
+     * （`library.js:505`）。
+     */
+    fun fetchMcpTools(status: GatewayStatus, name: String): McpToolList =
+        parseMcpToolList(request(status, "POST", "/api/library/mcp/check", buildMcpCheckJson(name)), name)
+
+    /**
+     * 保存工具开关：`POST /api/library/servers/tools {name, names:[停用的工具名]}`
+     * （`gateway.go:1050` → `mcp_tools.go:33+`，桌面 `library.js:496`）。
+     *
+     * 只改本机资源库里这条 MCP 的 `DisabledTools`（`UpdateMCPDisabledTools`），不写桌面 Agent 目录。
+     */
+    fun saveMcpDisabledTools(status: GatewayStatus, name: String, disabled: List<String>) {
+        request(status, "POST", "/api/library/servers/tools", buildMcpToolsJson(name, disabled))
     }
 
     private fun request(status: GatewayStatus, method: String, path: String, body: String?): String {
@@ -147,11 +184,64 @@ private fun libraryRows(array: JSONArray?, kind: LibraryKind): List<LibraryEntry
             return@mapNotNull null
         }
         val name = item.optString("name").trim().ifBlank { item.optString("title").trim() }
+        val disabledTools = if (kind == LibraryKind.MCP) {
+            item.optJSONArray("disabledTools")?.let { array ->
+                (0 until array.length()).mapNotNull { i ->
+                    array.optString(i).trim().takeIf { it.isNotEmpty() }
+                }
+            }.orEmpty()
+        } else {
+            emptyList()
+        }
         LibraryEntry(
             id = id,
             name = name.ifBlank { id },
             kind = kind,
             updatedAt = item.optLong("updated_at", item.optLong("created_at", 0L)),
+            disabledTools = disabledTools,
         )
     }
+}
+
+/** `{"names":[name],"fresh":true}`（桌面 `library.js:505` 逐字一致）。 */
+internal fun buildMcpCheckJson(name: String): String {
+    val array = JSONArray()
+    array.put(name.trim())
+    return JSONObject()
+        .put("names", array)
+        .put("fresh", true)
+        .toString()
+}
+
+/** `{"name":name,"names":[停用的工具]}`：去空、去重、保序（服务端也会再清一次）。 */
+internal fun buildMcpToolsJson(name: String, disabled: List<String>): String {
+    val array = JSONArray()
+    disabled.map { it.trim() }.filter { it.isNotEmpty() }.distinct().forEach { array.put(it) }
+    return JSONObject()
+        .put("name", name.trim())
+        .put("names", array)
+        .toString()
+}
+
+/**
+ * 解析 `mcp/check` 的回包：桌面按 `r.servers[name] || r[name] || {}` 取（`library.js:506`），
+ * 这里两种形态都兼容；`toolList` 缺省为空数组。
+ */
+internal fun parseMcpToolList(body: String, name: String): McpToolList {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "读取 MCP 工具清单返回的数据格式不正确")
+    }
+    val result = root.optJSONObject("servers")?.optJSONObject(name) ?: root.optJSONObject(name)
+    val tools = result?.optJSONArray("toolList")?.let { array ->
+        (0 until array.length()).mapNotNull { index ->
+            array.optString(index).trim().takeIf { it.isNotEmpty() }
+        }
+    }.orEmpty()
+    return McpToolList(
+        tools = tools,
+        why = result?.optString("why").orEmpty().trim(),
+        detail = result?.optString("detail").orEmpty().trim(),
+    )
 }

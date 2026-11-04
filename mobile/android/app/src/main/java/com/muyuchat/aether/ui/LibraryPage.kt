@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -42,6 +43,7 @@ import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
+import com.muyuchat.core.designsystem.McaSwitch
 
 /**
  * 资源库页：列出沙盒库里的条目，并能删除。
@@ -75,6 +77,12 @@ internal fun LibraryPage(
     onCancelMcpSignin: () -> Unit = {},
     onSignOutMcp: (String) -> Unit = {},
     onDismissMcpAuth: () -> Unit = {},
+    /** MCP 工具开关（桌面 `library.js:490-511`）；为 null 时不出「工具」按钮。 */
+    mcpTools: McpToolsUiState = McpToolsUiState.Idle,
+    onLoadMcpTools: ((String, List<String>) -> Unit)? = null,
+    onToggleMcpTool: (String) -> Unit = {},
+    onSaveMcpTools: () -> Unit = {},
+    onDismissMcpTools: () -> Unit = {},
     onBack: () -> Unit,
     onOpenOverview: () -> Unit,
     modifier: Modifier = Modifier,
@@ -82,6 +90,7 @@ internal fun LibraryPage(
     var pendingDelete by remember { mutableStateOf<LibraryEntry?>(null) }
     var showCreate by remember { mutableStateOf(false) }
     var mcpTarget by remember { mutableStateOf<String?>(null) }
+    var toolsTarget by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { onRefresh() }
     // 登录流程结束（成功/失败）时把弹窗关掉，失败原因留在 flow 状态里给下一次打开看不如直接弹掉——
     // 所以只在 Done 时自动关，失败保留弹窗显示原因。
@@ -230,6 +239,13 @@ internal fun LibraryPage(
                                 mcpTarget = entry.name
                                 onStartMcpSignin?.invoke(entry.name)
                             },
+                            mcpToolsEnabled = onLoadMcpTools != null &&
+                                entry.kind == LibraryKind.MCP &&
+                                mcpTools !is McpToolsUiState.Loading,
+                            onMcpTools = {
+                                toolsTarget = entry.name
+                                onLoadMcpTools?.invoke(entry.name, entry.disabledTools)
+                            },
                         )
                     }
                 }
@@ -247,6 +263,20 @@ internal fun LibraryPage(
             onDismiss = {
                 mcpTarget = null
                 onDismissMcpAuth()
+            },
+        )
+    }
+
+    // MCP 工具开关（桌面 library.js:490-511）
+    if (toolsTarget != null) {
+        McpToolsDialog(
+            target = toolsTarget!!,
+            state = mcpTools,
+            onToggle = onToggleMcpTool,
+            onSave = onSaveMcpTools,
+            onDismiss = {
+                toolsTarget = null
+                onDismissMcpTools()
             },
         )
     }
@@ -328,6 +358,8 @@ private fun LibraryRow(
     onDelete: () -> Unit,
     mcpSigninEnabled: Boolean = false,
     onMcpSignin: () -> Unit = {},
+    mcpToolsEnabled: Boolean = false,
+    onMcpTools: () -> Unit = {},
 ) {
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -341,12 +373,23 @@ private fun LibraryRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = entry.kind.label,
+                    text = entry.kind.label + if (entry.disabledTools.isNotEmpty()) {
+                        " · 停用 ${entry.disabledTools.size} 个工具"
+                    } else {
+                        ""
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Spacer(Modifier.width(8.dp))
+            if (mcpToolsEnabled) {
+                McaButton(
+                    onClick = onMcpTools,
+                    style = McaButtonStyle.Outlined,
+                ) { Text("工具") }
+                Spacer(Modifier.width(8.dp))
+            }
             if (mcpSigninEnabled) {
                 McaButton(
                     onClick = onMcpSignin,
@@ -361,6 +404,94 @@ private fun LibraryRow(
             ) { Text(if (deleting) "删除中…" else "删除") }
         }
     }
+}
+
+/**
+ * MCP 工具开关弹窗（桌面 `library.js:490-511`）：先读工具清单，再逐项开关，最后保存。
+ *
+ * 桌面的文案：没有工具时用服务端的 `why`/`detail` 解释（`:509`）；这里照抄。
+ */
+@Composable
+private fun McpToolsDialog(
+    target: String,
+    state: McpToolsUiState,
+    onToggle: (String) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("工具开关 · $target", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                when (state) {
+                    McpToolsUiState.Idle, is McpToolsUiState.Loading -> Text(
+                        text = "正在读取工具清单…（需要这条 MCP 已登录）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    is McpToolsUiState.Failed -> Text(
+                        text = "${state.message}（错误码：${state.code}）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    is McpToolsUiState.Ready -> {
+                        if (state.tools.isEmpty()) {
+                            Text(
+                                text = if (state.why.isNotBlank()) {
+                                    "没有读到工具（${state.why}${if (state.detail.isNotBlank()) "：${state.detail}" else ""}）"
+                                } else {
+                                    "服务器没有返回工具清单。"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Text(
+                                text = if (state.disabled.isEmpty()) {
+                                    "未停用任何工具"
+                                } else {
+                                    "已停用 ${state.disabled.size} 个工具"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                                items(state.tools.size) { index ->
+                                    val tool = state.tools[index]
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = tool,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        McaSwitch(
+                                            checked = tool !in state.disabled,
+                                            onCheckedChange = { onToggle(tool) },
+                                            contentDescription = "启用 $tool",
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            McaButton(onClick = onSave, style = McaButtonStyle.Primary) {
+                                Text("保存工具开关")
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
+        },
+    )
 }
 
 /**

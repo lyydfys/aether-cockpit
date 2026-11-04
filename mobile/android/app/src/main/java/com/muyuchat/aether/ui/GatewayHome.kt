@@ -369,6 +369,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val librarySaveProblems by libraryViewModel.saveProblems.collectAsStateWithLifecycle()
                 val libraryNotice by libraryViewModel.notice.collectAsStateWithLifecycle()
                 val libraryActionError by libraryViewModel.actionError.collectAsStateWithLifecycle()
+                val libraryMcpAuth by libraryViewModel.mcpAuth.collectAsStateWithLifecycle()
+                val libraryMcpTools by libraryViewModel.mcpTools.collectAsStateWithLifecycle()
                 LibraryPage(
                     status = state.status,
                     state = libraryState,
@@ -385,6 +387,16 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     saveProblems = librarySaveProblems,
                     onCreate = libraryViewModel::create,
                     onClearSaveProblems = libraryViewModel::clearSaveProblems,
+                    mcpAuth = libraryMcpAuth,
+                    onStartMcpSignin = libraryViewModel::startMcpSignin,
+                    onCancelMcpSignin = libraryViewModel::cancelMcpSignin,
+                    onSignOutMcp = libraryViewModel::signOutMcp,
+                    onDismissMcpAuth = libraryViewModel::dismissMcpAuth,
+                    mcpTools = libraryMcpTools,
+                    onLoadMcpTools = libraryViewModel::loadMcpTools,
+                    onToggleMcpTool = libraryViewModel::toggleMcpTool,
+                    onSaveMcpTools = libraryViewModel::saveMcpTools,
+                    onDismissMcpTools = libraryViewModel::dismissMcpTools,
                     onBack = { showLibrary = false },
                     onOpenOverview = {
                         showLibrary = false
@@ -445,6 +457,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val sessionQuery by sessionsViewModel.query.collectAsStateWithLifecycle()
                 val sessionsContentSearch by sessionsViewModel.contentSearch.collectAsStateWithLifecycle()
                 val sessionsStats by sessionsViewModel.stats.collectAsStateWithLifecycle()
+                val sessionsDetail by sessionsViewModel.detail.collectAsStateWithLifecycle()
+                val sessionsMarkdown by sessionsViewModel.markdown.collectAsStateWithLifecycle()
                 SessionsPage(
                     status = state.status,
                     state = sessionsState,
@@ -458,6 +472,12 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     contentSearch = sessionsContentSearch,
                     onSearchContent = sessionsViewModel::searchContent,
                     onDismissContentSearch = sessionsViewModel::dismissContentSearch,
+                    detail = sessionsDetail,
+                    onOpenSession = { row -> sessionsViewModel.openSessionDetail(row.agent, row.id) },
+                    onCloseDetail = sessionsViewModel::dismissSessionDetail,
+                    markdown = sessionsMarkdown,
+                    onLoadMarkdown = sessionsViewModel::loadSessionMarkdown,
+                    onMarkdownCopied = sessionsViewModel::dismissSessionMarkdown,
                     onBack = { showSessions = false },
                     onOpenOverview = {
                         showSessions = false

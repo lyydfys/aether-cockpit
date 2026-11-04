@@ -321,6 +321,97 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         mcpPollJob?.cancel()
         _mcpAuth.value = McpAuthUiState.Idle
     }
+
+    // ——— MCP 工具开关（桌面 library.js:490-511） ———
+
+    private val _mcpTools = MutableStateFlow<McpToolsUiState>(McpToolsUiState.Idle)
+    val mcpTools: StateFlow<McpToolsUiState> = _mcpTools.asStateFlow()
+
+    /** 读工具清单（桌面「读取工具清单」，`library.js:501-505`）。 */
+    fun loadMcpTools(name: String, knownDisabled: List<String>) {
+        if (name.isBlank()) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _mcpTools.value = McpToolsUiState.Failed(name, "gateway_not_running", "网关未启动")
+            return
+        }
+        _mcpTools.value = McpToolsUiState.Loading(name)
+        viewModelScope.launch {
+            try {
+                val list = withContext(Dispatchers.IO) { client.fetchMcpTools(status, name) }
+                _mcpTools.value = McpToolsUiState.Ready(
+                    name = name,
+                    tools = list.tools,
+                    disabled = knownDisabled.toSet(),
+                    why = list.why,
+                    detail = list.detail,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _mcpTools.value = McpToolsUiState.Failed(name, e.code, e.message)
+            } catch (_: Exception) {
+                _mcpTools.value = McpToolsUiState.Failed(name, "unknown", "读取工具清单失败，请重试")
+            }
+        }
+    }
+
+    fun toggleMcpTool(tool: String) {
+        val current = _mcpTools.value as? McpToolsUiState.Ready ?: return
+        val disabled = if (tool in current.disabled) current.disabled - tool else current.disabled + tool
+        _mcpTools.value = current.copy(disabled = disabled)
+    }
+
+    /** 保存（桌面「保存工具开关」，`library.js:494-497`）：只写本机库里的 `DisabledTools`。 */
+    fun saveMcpTools() {
+        val current = _mcpTools.value as? McpToolsUiState.Ready ?: return
+        val status = repository.status.value
+        if (!status.running) {
+            _actionError.value = "网关未启动"
+            return
+        }
+        _actionError.value = null
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    client.saveMcpDisabledTools(status, current.name, current.disabled.toList())
+                }
+                _notice.value = if (current.disabled.isEmpty()) {
+                    "已保存「${current.name}」：所有工具都启用"
+                } else {
+                    "已保存「${current.name}」：停用 ${current.disabled.size} 个工具"
+                }
+                _mcpTools.value = McpToolsUiState.Idle
+                refresh()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _actionError.value = e.message
+            } catch (_: Exception) {
+                _actionError.value = "保存工具开关失败，请重试"
+            }
+        }
+    }
+
+    fun dismissMcpTools() {
+        _mcpTools.value = McpToolsUiState.Idle
+    }
+}
+
+/** MCP 工具开关的页面状态（桌面 `library.js:490-511`）。 */
+sealed interface McpToolsUiState {
+    data object Idle : McpToolsUiState
+    data class Loading(val name: String) : McpToolsUiState
+    data class Ready(
+        val name: String,
+        val tools: List<String>,
+        val disabled: Set<String>,
+        val why: String,
+        val detail: String,
+    ) : McpToolsUiState
+    data class Failed(val name: String, val code: String, val message: String) : McpToolsUiState
 }
 
 /**
