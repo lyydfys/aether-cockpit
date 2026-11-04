@@ -95,6 +95,9 @@ func (m *Manager) SetStorePath(path string, tr *transport.Factory) error {
 	m.persist.mu.Unlock()
 	// 加载过程会走 Add()，把 dirty 置位；这里复位，避免启动即触发一次无意义的回写。
 	atomic.StoreInt32(&m.dirty, 0)
+	// 亲和表也要恢复：不然一重启所有会话都重新选号，上游 prompt cache 全部作废。
+	// 失败不影响启动（亲和只是优化项）。
+	_ = m.LoadSticky()
 	m.persist.mu.Lock()
 	migrated := m.persist.migrated
 	m.persist.migrated = false

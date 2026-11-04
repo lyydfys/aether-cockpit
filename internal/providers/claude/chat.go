@@ -359,7 +359,84 @@ func buildRequestBody(req *ir.UnifiedChatRequest, model string, thinking bool) m
 			body["top_p"] = *req.TopP
 		}
 	}
+	// 自动补缓存断点：客户端（尤其是 OpenAI 格式的）通常不会自己标，
+	// 不标就等于每次全价重算 prompt —— 长上下文下这是实打实的钱。
+	ensureCacheBreakpoints(body)
 	return body
+}
+
+// ensureCacheBreakpoints 在没有客户端断点时，补上 Anthropic 的 prompt 缓存标记。
+//
+// Anthropic 的缓存规则：最多 4 个断点，命中范围是"断点之前的所有内容"。
+// 最划算的两个位置是：
+//  1. system 末尾——系统提示词通常最大且跨轮不变；
+//  2. 最后一条 user 消息的最后一个块——多轮对话里这能让整段历史都吃上缓存。
+//
+// 客户端已经自己标了（Anthropic 原生客户端会标）就一个都不动：
+// 我们不知道它想缓存到哪，越俎代庖会把它的 4 个名额挤掉。
+func ensureCacheBreakpoints(body map[string]any) {
+	if body == nil || hasAnyCacheControl(body) {
+		return
+	}
+	ttl := map[string]any{"type": "ephemeral"}
+	if sys, ok := body["system"].([]any); ok && len(sys) > 0 {
+		if block, ok := sys[len(sys)-1].(map[string]any); ok {
+			block["cache_control"] = ttl
+		}
+	}
+	msgs, _ := body["messages"].([]any)
+	// 从后往前找第一条 user 消息。
+	for i := len(msgs) - 1; i >= 0; i-- {
+		msg, ok := msgs[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		if role, _ := msg["role"].(string); role != "user" {
+			continue
+		}
+		blocks, ok := msg["content"].([]any)
+		if !ok || len(blocks) == 0 {
+			continue
+		}
+		if block, ok := blocks[len(blocks)-1].(map[string]any); ok {
+			block["cache_control"] = ttl
+		}
+		return
+	}
+}
+
+// hasAnyCacheControl 判断请求体里是否已经有缓存断点。
+func hasAnyCacheControl(body map[string]any) bool {
+	if sys, ok := body["system"].([]any); ok {
+		for _, b := range sys {
+			if block, ok := b.(map[string]any); ok && block["cache_control"] != nil {
+				return true
+			}
+		}
+	}
+	if tools, ok := body["tools"].([]any); ok {
+		for _, t := range tools {
+			if block, ok := t.(map[string]any); ok && block["cache_control"] != nil {
+				return true
+			}
+		}
+	}
+	if msgs, ok := body["messages"].([]any); ok {
+		for _, m := range msgs {
+			msg, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			if blocks, ok := msg["content"].([]any); ok {
+				for _, b := range blocks {
+					if block, ok := b.(map[string]any); ok && block["cache_control"] != nil {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // buildSystem 把 Instructions 与残留的 system 角色消息合并成 system 块数组。

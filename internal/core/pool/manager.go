@@ -37,6 +37,8 @@ type Manager struct {
 	sunk map[string]bool
 	// dirty 标记账号集合发生变化，需要落盘。
 	dirty int32
+	// stickySavedNs 是亲和表上次落盘的时间（纳秒），用于节流写盘。
+	stickySavedNs atomic.Int64
 	// persist 账号持久化。
 	persist persistence
 }
@@ -638,7 +640,6 @@ func (m *Manager) BindSticky(sessionKey, accountID string) {
 	}
 	now := time.Now()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.sticky[sessionKey] = stickyBind{
 		accountID: accountID,
 		boundAt:   now,
@@ -652,6 +653,9 @@ func (m *Manager) BindSticky(sessionKey, accountID string) {
 			}
 		}
 	}
+	m.mu.Unlock()
+	// 落盘放在解锁之后：saveSticky 要拿读锁，持写锁时调用会死锁。
+	m.flushSticky()
 }
 
 // NoteStickyCache 记录某会话上一次的 prompt-cache 读写量，并按缓存价值调整亲和时长。
@@ -663,9 +667,9 @@ func (m *Manager) NoteStickyCache(sessionKey string, cachedTokens int) {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	b, ok := m.sticky[sessionKey]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
 	b.cacheTokens = cachedTokens
@@ -675,6 +679,9 @@ func (m *Manager) NoteStickyCache(sessionKey string, cachedTokens int) {
 		}
 	}
 	m.sticky[sessionKey] = b
+	m.mu.Unlock()
+	// 缓存量影响 TTL，落盘让重启后仍然沿用同一判断。
+	m.flushSticky()
 }
 
 // StickyAccount 查询会话已绑定的账号。

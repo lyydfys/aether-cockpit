@@ -16,7 +16,7 @@
   "info": {
     "companyName": "Aether Cockpit",
     "productName": "Aether Cockpit",
-    "productVersion": "0.1.25",
+    "productVersion": "0.1.26",
     "copyright": "(c) 2026 Aether Cockpit contributors",
     "comments": "本地 AI 算力聚合网关：把多个 AI 产品的额度收敛成 OpenAI / Anthropic 兼容端点。"
   }
