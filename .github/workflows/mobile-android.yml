@@ -11,6 +11,7 @@ on:
       - "scripts/build-android-mobilebridge.sh"
       - "scripts/check-mobile-stage0.sh"
       - "scripts/check-mobile-stage1.sh"
+      - "scripts/check-mobile-instrumented.sh"
       - ".github/workflows/mobile-android.yml"
   push:
     branches:
@@ -24,6 +25,7 @@ on:
       - "scripts/build-android-mobilebridge.sh"
       - "scripts/check-mobile-stage0.sh"
       - "scripts/check-mobile-stage1.sh"
+      - "scripts/check-mobile-instrumented.sh"
       - ".github/workflows/mobile-android.yml"
   workflow_dispatch:
 
@@ -68,13 +70,30 @@ jobs:
           echo "ANDROID_NDK_VERSION=29.0.13113456" >> "$GITHUB_ENV"
 
       - name: Make scripts executable
-        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh scripts/check-mobile-stage1.sh
+        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh scripts/check-mobile-stage1.sh scripts/check-mobile-release.sh scripts/check-mobile-apk-contents.sh scripts/check-mobile-theme-contract.sh scripts/check-mobile-api-contract.sh
+
+      - name: Run theme contract gate
+        run: bash scripts/check-mobile-theme-contract.sh
+
+      - name: Run mobile API contract gate
+        run: bash scripts/check-mobile-api-contract.sh
 
       - name: Run Stage 0 gate
         run: bash scripts/check-mobile-stage0.sh --ci
 
       - name: Run Stage 1 gate
         run: bash scripts/check-mobile-stage1.sh
+
+      # Stage 7 发布门禁第一步：release 变体必须能构建，且 APK 的
+      # applicationId/versionCode/versionName/minSdk/targetSdk 与源码一致、且不可调试。
+      # 这里不校验签名（仓库没有 keystore，门禁也不该自造一个）。
+      - name: Run release build gate
+        run: bash scripts/check-mobile-release.sh
+
+      # Stage 7 发布门禁第二步：产物内容。只允许 arm64-v8a、桥接库必须齐全、
+      # release 不带调试符号。体积只报告不设阈值（避免为了数字删功能）。
+      - name: Run APK contents gate
+        run: bash scripts/check-mobile-apk-contents.sh --no-build
 
       - name: Upload Stage 0 artifacts
         if: success()
@@ -134,10 +153,26 @@ jobs:
           echo "ADB=$ADB" >> "$GITHUB_ENV"
 
       - name: Make scripts executable
-        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh scripts/check-mobile-stage1.sh
+        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh scripts/check-mobile-stage1.sh scripts/check-mobile-instrumented.sh scripts/check-mobile-release-smoke.sh
 
       - name: Run Stage 0 gate against the device
         run: bash scripts/check-mobile-stage0.sh --device "${{ steps.device.outputs.serial }}"
+
+      # The Stage 0 step above proves only one NativeBridge method through bare
+      # `am instrument`. This step runs every androidTest class through
+      # `:app:connectedDebugAndroidTest` and grades the Gradle JUnit XML
+      # (tests > 0, no failures/errors/skips, all three classes present), so an
+      # empty or silently-skipped report cannot pass. Same self-hosted arm64
+      # device/serial; it stays out of the hosted runner on purpose.
+      - name: Run instrumented test gate (all androidTest classes)
+        run: bash scripts/check-mobile-instrumented.sh --device "${{ steps.device.outputs.serial }}"
+
+      # Stage 7 发布门禁第三步：release 变体装机冒烟。
+      # 用 -PaetherSmokeSigning=true 把 debug keystore 挂到 release 上（默认不开），
+      # 验证"release 装得上、打得开、不崩、装的是这一版"。产物不可发布。
+      # 只能在有设备的 self-hosted runner 上跑，托管 runner 没有设备。
+      - name: Run release smoke gate (debug-signed release)
+        run: bash scripts/check-mobile-release-smoke.sh --device "${{ steps.device.outputs.serial }}"
 
       - name: Upload gate log
         if: always()
