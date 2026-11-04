@@ -40,9 +40,24 @@ data class RoutingGroup(
     val memberCount: Int get() = memberInfo.size
 }
 
+/**
+ * 一个**组模板**（`templatesView`）：`模板/{kind}`，不是已保存的组。
+ * 手机端只读展示——套用模板要写配置，留在桌面端。
+ */
+data class RoutingTemplate(
+    val kind: String,
+    val name: String,
+    val routing: String,
+    val memberCount: Int,
+    /** 成员不够时服务端给的"还缺什么"：providers / cheap。 */
+    val need: String,
+    val of: String,
+)
+
 data class RoutingOverview(
     val groups: List<RoutingGroup>,
     val models: List<RoutingCatalogModel>,
+    val templates: List<RoutingTemplate> = emptyList(),
 ) {
     val modelCount: Int get() = models.size
 }
@@ -236,7 +251,51 @@ internal fun parseRouting(body: String): RoutingOverview {
     return RoutingOverview(
         groups = groups,
         models = parseRoutingCatalog(root.optJSONArray("models")),
+        templates = parseRoutingTemplates(root.optJSONArray("templates")),
     )
+}
+
+/**
+ * `deciders` / `pools` 在服务端是**硬编码空数组**（groups_api.go 里 `[]any{}`），
+ * 所以这里没有对应模型——不解析一个永远为空的字段，避免做出"空壳页面"。
+ */
+private fun parseRoutingTemplates(array: JSONArray?): List<RoutingTemplate> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val row = array.optJSONObject(index) ?: return@mapNotNull null
+        val group = row.optJSONObject("group") ?: return@mapNotNull null
+        val kind = row.optString("kind").trim().ifBlank { group.optString("id").trim() }
+        val name = group.optString("name").trim()
+        if (kind.isEmpty() && name.isEmpty()) {
+            return@mapNotNull null
+        }
+        val members = group.optJSONArray("members")
+        RoutingTemplate(
+            kind = kind,
+            name = name.ifBlank { kind },
+            routing = group.optString("routing").trim(),
+            memberCount = members?.length() ?: 0,
+            need = row.optString("need").trim(),
+            of = row.optString("of").trim(),
+        )
+    }
+}
+
+/** 一行说明：模板名 + 成员数；成员不够时说明"还缺什么"。 */
+internal fun routingTemplateLine(template: RoutingTemplate): String {
+    val head = when {
+        template.memberCount >= 2 -> "${template.name} · ${template.memberCount} 个成员"
+        template.memberCount == 1 -> "${template.name} · 仅 1 个成员"
+        else -> "${template.name} · 还没有成员"
+    }
+    val missing = when (template.need) {
+        "providers" -> if (template.of.isBlank()) " · 还需要更多渠道" else " · 仅 ${template.of} 可用"
+        "cheap" -> " · 还没有便宜渠道"
+        else -> ""
+    }
+    return head + missing
 }
 
 /** Parses the `models` array: `id` is `provider/upstreamModel` (groups_api.go:403-406). */
