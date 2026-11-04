@@ -1,5 +1,17 @@
 # 更新日志
 
+## 0.1.21（2026-11-05）
+
+### MCP 桥补齐对话与目录工具
+
+- 新增 `aether_chat`：用网关里的任意模型对话（自动选号、计费、脱敏），支持 `prompt` 或标准 `messages` 数组、`system`、`model`、`max_tokens`、`temperature`；返回值是**助手文本 + token 用量摘要**而不是原始 JSON（工具结果是给模型读的）。
+- 新增 `aether_models`：列出当前可用模型与归属渠道。
+- 至此 `aether-mcp` 有四个工具（chat / models / image / video），Agent 不必再自己拼 HTTP 请求；`docs/CLI.md` 同步更新。
+
+### 复核说明：脱敏的 PERSON / ADDRESS 已存在
+
+上一轮评估里「脱敏只剩 PERSON / ADDRESS」与当前代码不符：`redact.go` 已有 `person_labeled`（姓名：xxx）、`person_intro`（自我介绍里的名字）、`address_labeled`（地址：xxx）、`address_cn`（中文结构化地址）四类规则，ENTITY 白名单里也包含 `PERSON` / `ADDRESS`。真正还没做的是「无标签的裸人名/裸地址」识别，那需要本地分类器，不是正则能覆盖的。
+
 ## 0.1.20（2026-11-05）
 
 ### 网络层补齐三个缺口

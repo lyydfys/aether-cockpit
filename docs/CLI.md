@@ -46,14 +46,19 @@ aether-cockpit-cli usage --days 1 --csv >> /var/log/aether-usage.csv
 
 ## 二、MCP 桥（`aether-mcp`）
 
-网关有 `/v1/images/*`、`/v1/videos/*` 这些 HTTP 端点，但 agent 不会自己拼 HTTP 请求——
-它们只会调工具。`aether-mcp` 就是这层包装：一个 stdio MCP server，由**客户端**拉起，
-把网关的媒体能力暴露成两个工具：
+网关有 `/v1/chat/completions`、`/v1/models`、`/v1/images/*`、`/v1/videos/*` 这些 HTTP 端点，
+但 agent 不会自己拼 HTTP 请求——它们只会调工具。`aether-mcp` 就是这层包装：一个 stdio
+MCP server，由**客户端**拉起，把网关能力暴露成四个工具：
 
 | 工具 | 说明 |
 | --- | --- |
+| `aether_chat` | 用网关里的任意模型对话（自动选号、计费、脱敏）。参数：`prompt` 或 `messages`（二选一）、`system`、`model`、`max_tokens`、`temperature`。返回助手文本 + token 用量 |
+| `aether_models` | 列出当前可用模型与归属渠道（走 `/v1/models`） |
 | `aether_image` | 文生图。参数：`prompt`（必填）、`model`、`size`、`n` |
 | `aether_video` | 文生视频（异步任务）。参数：`prompt`（必填）、`model` |
+
+> `aether_chat` 的返回值是**纯文本 + 用量摘要**，不是原始 JSON：工具结果是给模型读的，
+> 塞整段 JSON 只会白烧上下文。需要原始结构时直接调 HTTP 端点。
 
 ### 接到 Claude Code
 

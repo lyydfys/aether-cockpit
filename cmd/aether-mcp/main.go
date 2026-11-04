@@ -154,6 +154,8 @@ func (s *server) handle(req rpcRequest) rpcResponse {
 // toolSpecs 声明可用工具。
 func toolSpecs() []tool {
 	return []tool{
+		chatToolSpec(),
+		modelsToolSpec(),
 		{
 			Name:        "aether_image",
 			Description: "用本机 Aether Cockpit 网关生成图片。返回图片 URL 或 base64。",
@@ -185,16 +187,31 @@ func toolSpecs() []tool {
 
 // callTool 执行工具调用：转成对网关的 HTTP 请求。
 func (s *server) callTool(name string, args json.RawMessage) (string, error) {
+	// 目录类工具没有参数，先处理掉，避免下面要求 prompt。
+	if name == "aether_models" {
+		return s.callModels()
+	}
 	var in struct {
 		Prompt string `json:"prompt"`
 		Model  string `json:"model"`
 		Size   string `json:"size"`
 		N      int    `json:"n"`
+		// 对话工具用到的字段：与媒体工具共用一次解析，避免两套入参结构。
+		Messages    []chatMessage `json:"messages"`
+		System      string        `json:"system"`
+		MaxTokens   int           `json:"max_tokens"`
+		Temperature float64       `json:"temperature"`
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &in); err != nil {
 			return "", fmt.Errorf("参数解析失败: %w", err)
 		}
+	}
+	if name == "aether_chat" {
+		return s.callChat(chatArgs{
+			Messages: in.Messages, Prompt: in.Prompt, System: in.System,
+			Model: in.Model, MaxTokens: in.MaxTokens, Temperature: in.Temperature,
+		})
 	}
 	if strings.TrimSpace(in.Prompt) == "" {
 		return "", fmt.Errorf("prompt 不能为空")
