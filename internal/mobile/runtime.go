@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"aether-cockpit/internal/core/apppaths"
 	"aether-cockpit/internal/core/gateway"
 	"aether-cockpit/internal/core/logging"
+	"aether-cockpit/internal/core/scheduler"
 )
 
 const (
@@ -99,6 +101,7 @@ type Runtime struct {
 	paths     apppaths.Paths
 	closeLog  func()
 	gw        *gateway.Gateway
+	sched     *scheduler.Scheduler
 	stopUsage func()
 	adminKey  string
 	callerKey string
@@ -190,12 +193,17 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	}
 
 	gw := gateway.New(gateway.Config{
-		Platform:          &gateway.PlatformCapabilities{},
-		CredentialKey:     accountKey,
-		LifecycleContext:  context.Background(),
-		AdminSessionKey:   adminKey,
-		RequireCallerKey:  true,
-		CallerKey:         callerKey,
+		Platform:         &gateway.PlatformCapabilities{},
+		CredentialKey:    accountKey,
+		LifecycleContext: context.Background(),
+		AdminSessionKey:  adminKey,
+		RequireCallerKey: true,
+		CallerKey:        callerKey,
+		// Addr 必须是**真实监听地址**（回环 + 系统分配的端口）。
+		// 不传的话 g.cfg.Addr 是空串，`isPublicListen("")` 会把空串当成"监听所有网卡"，
+		// 于是自检里出现「监听所有网卡但未设置 API Key」的假错误，/api/settings 的
+		// addr 与 /api/runtime 的 publicAddr 也会是空的。
+		Addr:              ln.Addr().String(),
 		SettingsPath:      paths.SettingsPath,
 		AccountStorePath:  paths.AccountsPath,
 		SnapshotPath:      paths.SnapshotPath,
@@ -214,6 +222,19 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		}
 		return nil, &StartError{Code: "account_store_failed", Err: err}
 	}
+
+	// 签到调度器：桌面端在 main.go / desktop.go 里接线，移动端以前漏了这一步，
+	// 导致 `GET /api/scheduler` 恒 `enabled:false`、`POST /api/scheduler/run` 恒 503
+	// ——也就是"签到"在手机端等于不存在。
+	//
+	// 与桌面端同一套 wiring（同一个构造函数、同一份 Options），差别只有一点：
+	// 状态文件必须落在**应用沙箱**内（paths.DataDir），不能跟着 apppaths.Base() 走，
+	// 否则 Android 上会写到不可写的相对路径。
+	schedOpts := scheduler.DefaultOptions()
+	schedOpts.StatePath = filepath.Join(paths.DataDir, "checkin.json")
+	sched := scheduler.New(schedOpts, gw.Pool(), nil)
+	gw.SetScheduler(sched)
+	sched.Start()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -240,6 +261,7 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		paths:     paths,
 		closeLog:  closeLog,
 		gw:        gw,
+		sched:     sched,
 		stopUsage: gw.StartUsageAutoSave(15 * time.Second),
 		adminKey:  adminKey,
 		callerKey: callerKey,
@@ -293,10 +315,16 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	done := r.done
 	stopDone := r.stopDone
 	gw := r.gw
+	sched := r.sched
 	stopUsage := r.stopUsage
 	r.stopUsage = nil
 	r.mu.Unlock()
 
+	// 先停调度器再关服务：否则它可能在监听器关闭后仍在跑签到请求，
+	// 且 Stop 之后还会往 checkin.json 里写状态。
+	if sched != nil {
+		sched.Stop()
+	}
 	err := server.Shutdown(ctx)
 	if err != nil {
 		_ = server.Close()
