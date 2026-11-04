@@ -17,7 +17,10 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
@@ -106,6 +109,7 @@ object GatewayOverlayController {
         val compose = ComposeView(context).apply {
             setViewTreeLifecycleOwner(treeOwner)
             setViewTreeSavedStateRegistryOwner(treeOwner)
+            setViewTreeViewModelStoreOwner(treeOwner)
             setContent {
                 val status by GatewayServiceController.status.collectAsState()
                 GatewaySystemOverlayBubble(
@@ -182,6 +186,12 @@ object GatewayOverlayController {
         }
 
         val touchRoot = OverlayTouchRoot(context)
+        // Owner 必须挂在 WindowManager 真正 add 的根视图上；只挂在 ComposeView 上时，
+        // Compose 从 ComposeView 向上找会先撞到没有 owner 的 OverlayTouchRoot 并崩。
+        touchRoot.setViewTreeLifecycleOwner(treeOwner)
+        touchRoot.setViewTreeSavedStateRegistryOwner(treeOwner)
+        touchRoot.setViewTreeViewModelStoreOwner(treeOwner)
+        touchRoot.content = compose
         touchRoot.addView(
             compose,
             FrameLayout.LayoutParams(
@@ -259,6 +269,7 @@ object GatewayOverlayController {
             _visible.value = true
             true
         } catch (_: Exception) {
+            touchRoot.content = null
             treeOwner.destroy()
             runCatching { compose.disposeComposition() }
             false
@@ -294,18 +305,32 @@ object GatewayOverlayController {
 /**
  * 把 overlay 的触摸全部拦截到自己的 OnTouchListener：
  * ComposeView 子层不再消费事件，拖动才能稳定生效。
+ *
+ * 它也是 WindowManager 真正 add 的根视图：Lifecycle/SavedState/ViewModelStore owner
+ * 都挂在它身上；detach 时顺手释放 Compose composition。
  */
 private class OverlayTouchRoot(context: Context) : FrameLayout(context) {
+    var content: ComposeView? = null
+
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        val current = content
+        content = null
+        runCatching { current?.disposeComposition() }
+    }
 }
 
-/** ComposeView 在 WindowManager 里也需要 Lifecycle/SavedState owner；否则组合会抛异常。 */
-private class OverlayViewTreeOwner : LifecycleOwner, SavedStateRegistryOwner {
+/** ComposeView 在 WindowManager 里也需要 Lifecycle/SavedState/ViewModelStore owner。 */
+private class OverlayViewTreeOwner : LifecycleOwner, SavedStateRegistryOwner, ViewModelStoreOwner {
     private val registry = LifecycleRegistry(this)
     private val savedState = SavedStateRegistryController.create(this)
+    private val store = ViewModelStore()
 
     override val lifecycle: Lifecycle get() = registry
     override val savedStateRegistry: SavedStateRegistry get() = savedState.savedStateRegistry
+    override val viewModelStore: ViewModelStore get() = store
 
     fun create() {
         savedState.performRestore(null)
@@ -318,5 +343,6 @@ private class OverlayViewTreeOwner : LifecycleOwner, SavedStateRegistryOwner {
 
     fun destroy() {
         registry.currentState = Lifecycle.State.DESTROYED
+        store.clear()
     }
 }
