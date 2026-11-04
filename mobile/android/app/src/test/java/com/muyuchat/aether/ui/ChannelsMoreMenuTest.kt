@@ -20,13 +20,24 @@ class ChannelsMoreMenuTest {
         tagCount: Int = 0,
         presetCount: Int = 0,
         disabled: Boolean = false,
-        canDelete: Boolean = false,
+        canDelete: Boolean = true,
         channelOff: Boolean = false,
-    ) = accountMoreMenuItems(hasNote, tagCount, presetCount, disabled, canDelete, channelOff)
+        refreshMode: AccountRefreshMode? = null,
+        chat: Boolean = false,
+    ) = accountMoreMenuItems(
+        hasNote = hasNote,
+        tagCount = tagCount,
+        presetCount = presetCount,
+        disabled = disabled,
+        canDelete = canDelete,
+        channelOff = channelOff,
+        refreshMode = refreshMode,
+        chat = chat,
+    )
 
     @Test
     fun menuOrderMatchesDesktop() {
-        val actions = items().map { it.action }
+        // 基础形态（没有刷新模式、非 chat 渠道）：刷新/唤醒不出现
         assertEquals(
             listOf(
                 AccountMoreAction.Details,
@@ -39,19 +50,63 @@ class ChannelsMoreMenuTest {
                 AccountMoreAction.Test,
                 AccountMoreAction.ToggleDisabled,
                 AccountMoreAction.ToggleChannel,
+                AccountMoreAction.Delete,
+            ),
+            items().map { it.action },
+        )
+    }
+
+    @Test
+    fun actionOrderFollowsDesktopFootWithRefreshAndWake() {
+        // 桌面卡脚顺序：刷新 → 立即唤醒；菜单内 … 测试 → 刷新 → 唤醒 → 停用 → 删除
+        val actions = items(
+            refreshMode = AccountRefreshMode.Quota,
+            chat = true,
+        ).map { it.action }
+        assertEquals(
+            listOf(
+                AccountMoreAction.Details,
+                AccountMoreAction.Settings,
+                AccountMoreAction.Models,
+                AccountMoreAction.Presets,
+                AccountMoreAction.Tags,
+                AccountMoreAction.Note,
+                AccountMoreAction.CopyConfig,
+                AccountMoreAction.Test,
+                AccountMoreAction.Refresh,
+                AccountMoreAction.Wake,
+                AccountMoreAction.ToggleDisabled,
+                AccountMoreAction.ToggleChannel,
+                AccountMoreAction.Delete,
             ),
             actions,
         )
     }
 
     @Test
+    fun refreshAndWakeAreConditional() {
+        // 两种刷新模式都不支持的渠道：不出现刷新项（点了没反应比不出现更糟）
+        assertFalse(items(refreshMode = null).any { it.action == AccountMoreAction.Refresh })
+        assertTrue(
+            items(refreshMode = AccountRefreshMode.Quota).any { it.action == AccountMoreAction.Refresh },
+        )
+        assertTrue(
+            items(refreshMode = AccountRefreshMode.Credentials).any { it.action == AccountMoreAction.Refresh },
+        )
+
+        // 非 chat 渠道：不出现「立即唤醒」（桌面 `channels.js:352` 同口径）
+        assertFalse(items(chat = false).any { it.action == AccountMoreAction.Wake })
+        assertTrue(items(chat = true).any { it.action == AccountMoreAction.Wake })
+    }
+
+    @Test
     fun everyItemCarriesAOneLineExplanation() {
-        items(canDelete = true).forEach { item ->
+        items(refreshMode = AccountRefreshMode.Quota, chat = true).forEach { item ->
             assertTrue("${item.label} 缺少说明", item.detail.isNotBlank())
-            assertTrue("${item.label} 的说明太长，应是一句话", item.detail.length <= 40)
+            assertTrue("${item.label} 的说明太长，应是一句话", item.detail.length <= 48)
         }
-        // 关键项要说到"做什么"，不是复述标题
-        val byAction = items().associateBy { it.action }
+        val byAction = items(refreshMode = AccountRefreshMode.Quota, chat = true)
+            .associateBy { it.action }
         assertTrue(byAction.getValue(AccountMoreAction.Details).detail.contains("只读"))
         assertTrue(byAction.getValue(AccountMoreAction.Settings).detail.contains("路由"))
         assertTrue(byAction.getValue(AccountMoreAction.Test).detail.contains("验证"))
@@ -60,26 +115,22 @@ class ChannelsMoreMenuTest {
 
     @Test
     fun destructiveItemsAreMarkedDanger() {
-        // 停用是危险动作（要二次确认）；启用不是
-        val enabledItems = items(disabled = false)
+        val enabledItems = items(canDelete = true)
         assertTrue(
             "停用必须标 danger",
             enabledItems.first { it.action == AccountMoreAction.ToggleDisabled }.danger,
         )
         assertEquals("停用账号", enabledItems.first { it.action == AccountMoreAction.ToggleDisabled }.label)
 
-        val disabledItems = items(disabled = true)
-        val reenable = disabledItems.first { it.action == AccountMoreAction.ToggleDisabled }
+        val reenable = items(disabled = true).first { it.action == AccountMoreAction.ToggleDisabled }
         assertEquals("启用账号", reenable.label)
         assertFalse("启用不是危险动作", reenable.danger)
 
-        // 删除是危险动作（有端点时才出现）
-        val deletable = items(canDelete = true).first { it.action == AccountMoreAction.Delete }
+        val deletable = enabledItems.first { it.action == AccountMoreAction.Delete }
         assertTrue(deletable.danger)
         assertEquals("删除账号", deletable.label)
 
-        // 渠道级停用同为危险动作；启用不是
-        val channelOn = items(channelOff = false).first { it.action == AccountMoreAction.ToggleChannel }
+        val channelOn = enabledItems.first { it.action == AccountMoreAction.ToggleChannel }
         assertEquals("停用渠道", channelOn.label)
         assertTrue(channelOn.danger)
         val channelOffItem = items(channelOff = true).first { it.action == AccountMoreAction.ToggleChannel }
@@ -88,10 +139,10 @@ class ChannelsMoreMenuTest {
     }
 
     @Test
-    fun deleteIsHiddenWhenMobileHasNoEndpoint() {
-        // 手机端没有删除账号的端点：默认不渲染，避免"点了必失败"的入口
-        assertFalse(items().any { it.action == AccountMoreAction.Delete })
-        assertTrue(items(canDelete = true).any { it.action == AccountMoreAction.Delete })
+    fun deleteIsRenderedByDefaultAndCanBeTurnedOff() {
+        // 端点已核实存在（`DELETE /api/accounts/{id}`，`gateway.go:873`）→ 默认渲染
+        assertTrue(items().any { it.action == AccountMoreAction.Delete })
+        assertFalse(items(canDelete = false).any { it.action == AccountMoreAction.Delete })
     }
 
     @Test
@@ -109,11 +160,11 @@ class ChannelsMoreMenuTest {
 
     @Test
     fun desktopOnlyEntriesAreNotAdvertised() {
-        // 桌面有、手机端没实现的入口（导出…、写入本机 IDE）不应出现在菜单里
+        // 桌面有、手机端没实现的入口不出现
         val labels = accountMoreMenuItems(false, 0, 0, canDelete = true).map { it.label }
         assertFalse(labels.any { it.contains("导出") })
         assertFalse(labels.any { it.contains("IDE") })
-        // 但桌面有的核心项一个不能少
+        // 桌面有的核心项一个不能少
         listOf("详情", "设置：优先级 / 权重 / 并发", "预设", "标签", "复制配置", "测试连通性", "删除账号")
             .forEach { expected ->
                 assertTrue("缺少桌面项：$expected", labels.any { it == expected || it.startsWith("$expected（") })

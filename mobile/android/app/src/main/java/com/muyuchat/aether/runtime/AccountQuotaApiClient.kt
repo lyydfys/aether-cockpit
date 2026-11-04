@@ -419,8 +419,7 @@ class AccountQuotaApiClient(
     }
 
     /** 备注：`POST /api/accounts/{id}/note`（`accounts_api.go:46-69`）。**空字符串 = 清空备注**。 */
-    fun setAccountNote(status: GatewayStatus, accountId: String, note: String): String {
-        val guard = guardOf(status)
+    fun setAccountNote(status: GatewayStatus, accountId: String, note: String): String {        val guard = guardOf(status)
         if (guard != null) {
             throw guard
         }
@@ -433,6 +432,48 @@ class AccountQuotaApiClient(
             timeoutMs = readTimeoutMs,
         )
         return parseNoteAck(response)
+    }
+
+    /**
+     * 删除账号：`DELETE /api/accounts/{id}`（`gateway.go:873`；桌面 `channels.js:315`）。
+     *
+     * 只移除本机记录，渠道本身不动（桌面确认框原话）。服务端成功回 200，失败回 `{error}`。
+     */
+    fun deleteAccount(status: GatewayStatus, accountId: String) {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateAccountId(accountId)?.let { code -> throw ManagementApiException(code, "账号 id 不合法") }
+        request(
+            status = status,
+            method = "DELETE",
+            path = accountPath(accountId),
+            body = null,
+            timeoutMs = readTimeoutMs,
+        )
+    }
+
+    /**
+     * 立即唤醒：`POST /api/wake/run {"account_id":…}`（桌面 `channels.js:427`）。
+     *
+     * 语义（桌面 tooltip 原话）：「发一个最小请求，提前触发额度重置」。
+     * 仅 `capabilities.chat` 为真的渠道显示该动作，调用方负责判定。
+     */
+    fun wakeAccount(status: GatewayStatus, accountId: String) {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateAccountId(accountId)?.let { code -> throw ManagementApiException(code, "账号 id 不合法") }
+        request(
+            status = status,
+            method = "POST",
+            path = wakeRunPath(),
+            body = buildWakeRunJson(accountId),
+            // 唤醒要真发一次上游请求，给足超时（与额度读取同档）。
+            timeoutMs = readTimeoutMs,
+        )
     }
 
     /** 预设列表：`GET /api/presets`（`request_presets.go:340-343`）。 */
@@ -472,8 +513,7 @@ class AccountQuotaApiClient(
     }
 
     /** 网关没跑 / 没有会话凭据时一次请求都不发。 */
-    private fun guardOf(status: GatewayStatus): ManagementApiException? = when {
-        !status.running || status.addr.isBlank() -> ManagementApiException("gateway_not_running", "网关未启动")
+    private fun guardOf(status: GatewayStatus): ManagementApiException? = when {        !status.running || status.addr.isBlank() -> ManagementApiException("gateway_not_running", "网关未启动")
         status.adminSession.isBlank() -> ManagementApiException("gateway_not_running", "网关未启动")
         else -> null
     }
@@ -537,6 +577,17 @@ class AccountQuotaApiClient(
 /** 账号 id 直接进路径段，必须先编码（id 里可能有 `/` 或空格以外的怪字符）。 */
 internal fun accountSettingsPath(accountId: String): String =
     "/api/accounts/${encodeAccountSegment(accountId)}/settings"
+
+/** 删除账号路径（`DELETE /api/accounts/{id}`，`gateway.go:873`）。 */
+internal fun accountPath(accountId: String): String =
+    "/api/accounts/${encodeAccountSegment(accountId)}"
+
+/** 立即唤醒路径（`POST /api/wake/run`，桌面 `channels.js:427`）。 */
+internal fun wakeRunPath(): String = "/api/wake/run"
+
+/** 立即唤醒请求体：`{"account_id":"…"}`。 */
+internal fun buildWakeRunJson(accountId: String): String =
+    JSONObject().put("account_id", accountId).toString()
 
 /** 批量端点路径（`gateway.go:1073` `POST /api/accounts/batch`）。 */
 internal fun accountsBatchPath(): String = "/api/accounts/batch"

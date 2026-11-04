@@ -1820,10 +1820,55 @@ internal enum class AccountMoreAction {
     Note,
     CopyConfig,
     Test,
+    Refresh,
+    Wake,
     ToggleDisabled,
     ToggleChannel,
     Delete,
 }
+
+/* ==========================================================================
+ * 刷新动作的两种模式（桌面 `capabilities.js:1-5` 的移植）
+ *
+ * 同一个端点 `POST /api/accounts/{id}/refresh`，但文案与成功提示不同：
+ * 额度型（渠道有 quota 能力或有自定义余额）→「刷新额度」/「额度已刷新」；
+ * 凭据型（渠道声明 refresh）→「刷新凭据」/「凭据已刷新」。
+ * ========================================================================== */
+
+/** 刷新模式：额度型优先，其次凭据型；null = 这个渠道两种都不支持。 */
+internal enum class AccountRefreshMode { Quota, Credentials }
+
+internal fun accountRefreshMode(
+    capabilities: Map<String, Boolean>,
+    hasCustomQuota: Boolean = false,
+): AccountRefreshMode? = when {
+    capabilities["quota"] == true || hasCustomQuota -> AccountRefreshMode.Quota
+    capabilities["refresh"] == true -> AccountRefreshMode.Credentials
+    else -> null
+}
+
+/** 刷新按钮文案（桌面 `channels.js:335`：`refreshMode === 'quota' ? '刷新额度' : '刷新凭据'`）。 */
+internal fun accountRefreshLabel(mode: AccountRefreshMode): String = when (mode) {
+    AccountRefreshMode.Quota -> "刷新额度"
+    AccountRefreshMode.Credentials -> "刷新凭据"
+}
+
+/** 刷新成功提示（桌面 `channels.js:343/348`）。 */
+internal fun accountRefreshSuccessNote(mode: AccountRefreshMode): String = when (mode) {
+    AccountRefreshMode.Quota -> "额度已刷新"
+    AccountRefreshMode.Credentials -> "凭据已刷新"
+}
+
+/** 立即唤醒的文案：桌面 tooltip 原话「发一个最小请求，提前触发额度重置」。 */
+internal fun accountWakeHint(): String = "发一个最小请求，提前触发额度重置"
+
+/** 立即唤醒的按钮文案。 */
+internal fun accountWakeLabel(): String = "立即唤醒"
+
+/** 删除确认的标题与说明：桌面 `channels.js:314` 原话。 */
+internal fun accountDeleteConfirmTitle(label: String): String = "删除账号「$label」？"
+
+internal fun accountDeleteConfirmBody(): String = "只移除本机记录，渠道本身不动。"
 
 /** 一项菜单：文案 + 一句话说明 + 是否危险（危险项要二次确认）。 */
 internal data class AccountMoreItem(
@@ -1836,9 +1881,12 @@ internal data class AccountMoreItem(
 /**
  * 账号卡「更多」菜单的完整表（纯函数，便于单测与"以后加项只改这里"）。
  *
- * @param canDelete 手机端目前**没有**删除账号的端点（`ChannelsAction` 里没有删除，
- *   桌面 `DELETE accounts/{id}` 未接入），所以默认不渲染该项——不给点了必失败的入口。
- *   等端点接上后这里传 true 即可，页面不用改。
+ * 顺序对齐桌面卡脚（`channels.js:303-318`）：… 测试连通性 → 刷新 → 立即唤醒 → 停用 → 删除。
+ *
+ * @param canDelete 删除账号端点**已核实存在**（`DELETE /api/accounts/{id}`，`gateway.go:873`），
+ *   默认 true；保留开关是为了将来"只读演示"场景能整项关掉。
+ * @param refreshMode 额度型/凭据型决定按钮文案；null = 该渠道两种都不支持，不渲染该项。
+ * @param chat 只有 `capabilities.chat` 为真才显示「立即唤醒」（桌面 `channels.js:352` 同口径）。
  * @param disabled 账号当前是否已停用：决定危险项显示「停用账号」还是「启用账号」。
  */
 internal fun accountMoreMenuItems(
@@ -1846,8 +1894,10 @@ internal fun accountMoreMenuItems(
     tagCount: Int,
     presetCount: Int,
     disabled: Boolean = false,
-    canDelete: Boolean = false,
+    canDelete: Boolean = true,
     channelOff: Boolean = false,
+    refreshMode: AccountRefreshMode? = null,
+    chat: Boolean = false,
 ): List<AccountMoreItem> {
     val items = mutableListOf(
         AccountMoreItem(
@@ -1890,20 +1940,41 @@ internal fun accountMoreMenuItems(
             label = "测试连通性",
             detail = "发一个最小请求验证 Key 现在还能用",
         ),
-        AccountMoreItem(
-            action = AccountMoreAction.ToggleDisabled,
-            label = if (disabled) "启用账号" else "停用账号",
-            detail = if (disabled) "恢复参与路由" else "停用后不再参与路由，凭据保留",
-            // 停用是写操作，用危险色 + 二次确认；启用不算危险。
-            danger = !disabled,
-        ),
-        // 渠道级开关（桌面 `acct-acts` 里的那个 toggle）：整条渠道退出/恢复路由。
-        AccountMoreItem(
-            action = AccountMoreAction.ToggleChannel,
-            label = if (channelOff) "启用渠道" else "停用渠道",
-            detail = if (channelOff) "恢复这个渠道的所有账号" else "整个渠道退出路由，所有账号一起停",
-            danger = !channelOff,
-        ),
+    )
+    // 刷新：额度型 / 凭据型文案不同（桌面 `capabilities.js:1-5` + `channels.js:335`），
+    // 两种都不支持的渠道不出现（不给点了没反应的项）。
+    refreshMode?.let { mode ->
+        items += AccountMoreItem(
+            action = AccountMoreAction.Refresh,
+            label = accountRefreshLabel(mode),
+            detail = if (mode == AccountRefreshMode.Quota) {
+                "重新向渠道读一次剩余额度"
+            } else {
+                "重新续期账号凭据（Token / 授权）"
+            },
+        )
+    }
+    // 立即唤醒：只有 chat 渠道才有意义（桌面 `channels.js:352` 的判定同此）。
+    if (chat) {
+        items += AccountMoreItem(
+            action = AccountMoreAction.Wake,
+            label = accountWakeLabel(),
+            detail = accountWakeHint(),
+        )
+    }
+    items += AccountMoreItem(
+        action = AccountMoreAction.ToggleDisabled,
+        label = if (disabled) "启用账号" else "停用账号",
+        detail = if (disabled) "恢复参与路由" else "停用后不再参与路由，凭据保留",
+        // 停用是写操作，用危险色 + 二次确认；启用不算危险。
+        danger = !disabled,
+    )
+    // 渠道级开关（桌面 `acct-acts` 里的那个 toggle）：整条渠道退出/恢复路由。
+    items += AccountMoreItem(
+        action = AccountMoreAction.ToggleChannel,
+        label = if (channelOff) "启用渠道" else "停用渠道",
+        detail = if (channelOff) "恢复这个渠道的所有账号" else "整个渠道退出路由，所有账号一起停",
+        danger = !channelOff,
     )
     if (canDelete) {
         items += AccountMoreItem(
@@ -2148,6 +2219,7 @@ private fun AccountSheets(
         return
     }
     var confirmDisable by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val savingKind = (edit as? AccountEditUiState.Saving)?.takeIf { it.accountId == row.accountId }?.kind
     McaDialog(
         onDismissRequest = onClose,
@@ -2179,6 +2251,8 @@ private fun AccountSheets(
                         presetCount = presetCount,
                         disabled = row.disabled,
                         channelOff = provider?.off == true,
+                        refreshMode = provider?.let { accountRefreshMode(it.capabilities) },
+                        chat = provider?.chat == true,
                     )
                     items.forEach { item ->
                         val color = if (item.danger) {
@@ -2207,9 +2281,19 @@ private fun AccountSheets(
                                             onClose()
                                             onTest()
                                         }
+                                        AccountMoreAction.Refresh -> {
+                                            // 同一个端点（`POST /api/accounts/{id}/refresh`），
+                                            // 文案已由 mode 决定（刷新额度 / 刷新凭据）。
+                                            onClose()
+                                            onAction(ChannelsAction.ReadAccountQuota(row.accountId))
+                                        }
+                                        AccountMoreAction.Wake -> {
+                                            onClose()
+                                            onAction(ChannelsAction.WakeAccount(row.accountId))
+                                        }
                                         AccountMoreAction.ToggleDisabled -> confirmDisable = true
                                         AccountMoreAction.ToggleChannel -> onConfirmToggleChannel()
-                                        AccountMoreAction.Delete -> Unit // 手机端没有该端点，表里不会出现
+                                        AccountMoreAction.Delete -> confirmDelete = true
                                     }
                                 }
                                 .padding(horizontal = 8.dp, vertical = 10.dp),
@@ -2315,6 +2399,37 @@ private fun AccountSheets(
             },
             dismissButton = {
                 McaButton(onClick = { confirmDisable = false }, style = McaButtonStyle.Outlined) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
+    // 删除二次确认：文案逐字对齐桌面 `channels.js:314`
+    //（标题「删除账号「X」？」/ 说明「只移除本机记录，渠道本身不动。」/ 危险色确认按钮）。
+    if (confirmDelete) {
+        McaDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(accountDeleteConfirmTitle(row.label), fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = accountDeleteConfirmBody(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        confirmDelete = false
+                        onClose()
+                        onAction(ChannelsAction.DeleteAccount(row.accountId))
+                    },
+                    style = McaButtonStyle.Primary,
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                McaButton(onClick = { confirmDelete = false }, style = McaButtonStyle.Outlined) {
                     Text("取消")
                 }
             },

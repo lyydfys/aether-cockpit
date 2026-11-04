@@ -97,6 +97,12 @@ enum class AccountActionKind {
 
     /** 单账号「读一次额度」（`POST /api/accounts/{id}/refresh`）。 */
     QUOTA,
+
+    /** 立即唤醒（`POST /api/wake/run`；桌面 `channels.js:427`）。 */
+    WAKE,
+
+    /** 删除账号（`DELETE /api/accounts/{id}`；桌面 `channels.js:315`）。 */
+    DELETE,
 }
 
 /**
@@ -170,6 +176,12 @@ sealed interface ChannelsAction {
 
     /** 单账号读一次额度：只用这一个账号的 id，不牵动别的卡片。 */
     data class ReadAccountQuota(val accountId: String) : ChannelsAction
+
+    /** 立即唤醒：`POST /api/wake/run`，发一个最小请求提前触发额度重置。 */
+    data class WakeAccount(val accountId: String) : ChannelsAction
+
+    /** 删除账号：`DELETE /api/accounts/{id}`，只移除本机记录。 */
+    data class DeleteAccount(val accountId: String) : ChannelsAction
 
     /** 账号详情/设置：只把改动过的字段带上去（服务端缺省=不修改）。 */
     data class UpdateAccountDetails(val accountId: String, val patch: AccountSettingsPatch) : ChannelsAction
@@ -543,6 +555,8 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             is ChannelsAction.SetAccountDisabled -> setAccountDisabled(action.accountId, action.disabled)
             is ChannelsAction.CheckinAccount -> checkinAccount(action.accountId)
             is ChannelsAction.ReadAccountQuota -> readAccountQuota(action.accountId)
+            is ChannelsAction.WakeAccount -> wakeAccount(action.accountId)
+            is ChannelsAction.DeleteAccount -> deleteAccount(action.accountId)
             is ChannelsAction.UpdateAccountDetails -> updateAccountDetails(action.accountId, action.patch)
             is ChannelsAction.SetAccountTags -> setAccountTags(action.accountId, action.tags)
             is ChannelsAction.SetAccountNote -> setAccountNote(action.accountId, action.note)
@@ -820,6 +834,102 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                     AccountActionKind.QUOTA,
                 )
             }
+        }
+    }
+
+    /**
+     * 立即唤醒：`POST /api/wake/run {"account_id":…}`（桌面 `channels.js:427`）。
+     *
+     * 服务端不返回账号快照，所以成功后重拉一次账号（额度读数会变）。
+     * 失败进 [AccountActionKind.WAKE]，卡片按通用红字显示，不误标成"读取失败"。
+     */
+    fun wakeAccount(accountId: String) {
+        if (accountId.isBlank() || accountAction.value is AccountActionUiState.Busy) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            accountAction.value = AccountActionUiState.Failed(
+                accountId,
+                "gateway_not_running",
+                "网关未启动",
+                AccountActionKind.WAKE,
+            )
+            return
+        }
+        accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.WAKE)
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { accountsClient.wakeAccount(status, accountId) }
+                accountAction.value = AccountActionUiState.Idle
+                reloadAccountRows(status)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message, AccountActionKind.WAKE)
+            } catch (_: Exception) {
+                accountAction.value = AccountActionUiState.Failed(
+                    accountId,
+                    "unknown",
+                    "唤醒失败，请重试",
+                    AccountActionKind.WAKE,
+                )
+            }
+        }
+    }
+
+    /**
+     * 删除账号：`DELETE /api/accounts/{id}`（桌面 `channels.js:313-317`）。
+     *
+     * 成功后从列表里移除该行（不整页重拉，避免滚动位置跳）；失败保留行并给通用红字。
+     * 二次确认由页面负责——这里只执行，不重复问。
+     */
+    fun deleteAccount(accountId: String) {
+        if (accountId.isBlank() || accountAction.value is AccountActionUiState.Busy) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            accountAction.value = AccountActionUiState.Failed(
+                accountId,
+                "gateway_not_running",
+                "网关未启动",
+                AccountActionKind.DELETE,
+            )
+            return
+        }
+        accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.DELETE)
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { accountsClient.deleteAccount(status, accountId) }
+                lockCurrentRows()
+                accountsOverride.value = currentAccountRows().filterNot { it.accountId == accountId }
+                accountAction.value = AccountActionUiState.Idle
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message, AccountActionKind.DELETE)
+            } catch (_: Exception) {
+                accountAction.value = AccountActionUiState.Failed(
+                    accountId,
+                    "unknown",
+                    "删除失败，请重试",
+                    AccountActionKind.DELETE,
+                )
+            }
+        }
+    }
+
+    /** 唤醒后重拉账号行：服务端没有回快照，只能重新取一次（失败静默，不覆盖已有数据）。 */
+    private suspend fun reloadAccountRows(status: GatewayStatus) {
+        try {
+            val rows = withContext(Dispatchers.IO) { accountsClient.fetchAccounts(status) }
+            lockCurrentRows()
+            accountsOverride.value = rows
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 拉不到就保持现状：唤醒已经成功，别用失败提示误导用户。
         }
     }
 
