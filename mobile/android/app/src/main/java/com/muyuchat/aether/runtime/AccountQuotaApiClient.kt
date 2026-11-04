@@ -1,5 +1,6 @@
 package com.muyuchat.aether.runtime
 
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
@@ -7,6 +8,7 @@ import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * 订阅窗口读数（`internal/provider/contract.go:209-225` `QuotaWindow`）。
@@ -66,6 +68,36 @@ data class AccountQuotaRow(
 )
 
 /**
+ * `POST /api/accounts/batch` 里的一条结果（`accounts_api.go:155-159` `batchResult`：
+ * `{id, ok, error?}`，成功时 `error` 被 omitempty 省掉）。
+ */
+data class AccountBatchEntry(
+    val id: String,
+    val ok: Boolean,
+    val error: String,
+)
+
+/**
+ * 一次批量动作的真实回包汇总。
+ *
+ * [results] 是逐条真相（成功/失败都在里面），页面的「成功 N / 失败 M」只能从它数出来；
+ * [updatedRows] 只用于启停（settings 回包带账号快照），[checkins] 只用于签到回包里的今日卡。
+ */
+data class AccountBatchOutcome(
+    val results: List<AccountBatchEntry>,
+    val updatedRows: List<AccountQuotaRow> = emptyList(),
+    val checkins: Map<String, AccountCheckin> = emptyMap(),
+) {
+    val ok: Int get() = results.count { it.ok }
+    val failed: Int get() = results.count { !it.ok }
+    val total: Int get() = results.size
+
+    /** 第一个失败原因（服务端原文）；全成功时为空串。 */
+    val firstError: String
+        get() = results.firstOrNull { !it.ok && it.error.isNotBlank() }?.error.orEmpty()
+}
+
+/**
  * 账号与额度客户端。
  *
  * 复用管理面的口径（与 [ManagementApiClient] 同一套）：HTTP 只打 `http://<addr>`，
@@ -83,6 +115,8 @@ class AccountQuotaApiClient(
     private val readTimeoutMs: Int = 8_000,
     /** 签到要打上游，服务端给 90s 预算（`admin.go:578`），读超时必须比它长。 */
     private val checkinReadTimeoutMs: Int = 100_000,
+    /** 批量刷新由服务端逐条串行执行（`accounts_api.go:186-189` 每条还 sleep 1s+），要给足时间。 */
+    private val batchReadTimeoutMs: Int = 120_000,
 ) {
     fun fetchAccounts(status: GatewayStatus): List<AccountQuotaRow> {
         val guard = guardOf(status)
@@ -133,6 +167,88 @@ class AccountQuotaApiClient(
             timeoutMs = checkinReadTimeoutMs,
         )
         return parseCheckinAck(response)
+    }
+
+    /**
+     * 批量刷新额度：走**真批量端点** `POST /api/accounts/batch` `{"action":"refresh","ids":[…]}`
+     * （`accounts_api.go:185-225`，服务端逐条执行并回 `{"results":[…],"ok":N,"total":M}`）。
+     */
+    fun batchRefresh(status: GatewayStatus, ids: List<String>): AccountBatchOutcome {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateBatchIds(ids)?.let { code -> throw ManagementApiException(code, "批量刷新没有可执行的账号") }
+        val response = request(
+            status = status,
+            method = "POST",
+            path = accountsBatchPath(),
+            body = buildAccountBatchJson(BATCH_ACTION_REFRESH, ids),
+            timeoutMs = batchReadTimeoutMs,
+        )
+        return parseAccountBatch(response)
+    }
+
+    /**
+     * 批量启用/停用：服务端**没有**批量启停端点（`handleAccountBatch` 只认 delete/refresh/ready），
+     * 所以这里按 id **顺序**逐个打 `POST /api/accounts/{id}/settings`，逐条记真实结果，
+     * 并把每次回包的账号快照带回，供卡片就地更新。
+     */
+    fun batchSetDisabled(
+        status: GatewayStatus,
+        ids: List<String>,
+        disabled: Boolean,
+    ): AccountBatchOutcome {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateBatchIds(ids)?.let { code -> throw ManagementApiException(code, "批量操作没有可执行的账号") }
+        val results = ArrayList<AccountBatchEntry>(ids.size)
+        val rows = ArrayList<AccountQuotaRow>(ids.size)
+        for (id in ids) {
+            try {
+                rows += setDisabled(status, id, disabled)
+                results += AccountBatchEntry(id = id, ok = true, error = "")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                results += AccountBatchEntry(id = id, ok = false, error = e.message)
+            } catch (_: Exception) {
+                results += AccountBatchEntry(id = id, ok = false, error = "未知错误")
+            }
+        }
+        return AccountBatchOutcome(results = results, updatedRows = rows)
+    }
+
+    /**
+     * 批量签到：同样没有批量端点，按 id 顺序逐个打 `POST /api/accounts/{id}/checkin`。
+     * 调用方负责只传 `checkin_supported` 的账号；这里对每个 id 都如实计一次结果。
+     */
+    fun batchCheckin(status: GatewayStatus, ids: List<String>): AccountBatchOutcome {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateBatchIds(ids)?.let { code -> throw ManagementApiException(code, "批量签到没有可执行的账号") }
+        val results = ArrayList<AccountBatchEntry>(ids.size)
+        val checkins = LinkedHashMap<String, AccountCheckin>()
+        for (id in ids) {
+            try {
+                val ack = checkin(status, id)
+                results += AccountBatchEntry(id = id, ok = true, error = "")
+                if (ack != null) {
+                    checkins[id] = ack
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                results += AccountBatchEntry(id = id, ok = false, error = e.message)
+            } catch (_: Exception) {
+                results += AccountBatchEntry(id = id, ok = false, error = "未知错误")
+            }
+        }
+        return AccountBatchOutcome(results = results, checkins = checkins)
     }
 
     /** 网关没跑 / 没有会话凭据时一次请求都不发。 */
@@ -202,6 +318,30 @@ class AccountQuotaApiClient(
 internal fun accountSettingsPath(accountId: String): String =
     "/api/accounts/${encodeAccountSegment(accountId)}/settings"
 
+/** 批量端点路径（`gateway.go:1073` `POST /api/accounts/batch`）。 */
+internal fun accountsBatchPath(): String = "/api/accounts/batch"
+
+/** 服务端只认 delete / refresh / ready；本 App 只用 refresh（另外两个会删账号/重置状态，不在移动端做）。 */
+internal fun buildAccountBatchJson(action: String, ids: List<String>): String {
+    val json = JSONObject()
+    json.put("action", action)
+    json.put("ids", JSONArray(ids))
+    return json.toString()
+}
+
+internal const val BATCH_ACTION_REFRESH = "refresh"
+
+/** 空列表或含非法 id 时在发请求前就拒掉，避免打一轮空批量。 */
+internal fun validateBatchIds(ids: List<String>): String? {
+    if (ids.isEmpty()) {
+        return "batch_ids_empty"
+    }
+    for (id in ids) {
+        validateAccountId(id)?.let { return it }
+    }
+    return null
+}
+
 internal fun accountCheckinPath(accountId: String): String =
     "/api/accounts/${encodeAccountSegment(accountId)}/checkin"
 
@@ -246,9 +386,42 @@ internal fun parseAccounts(body: String): List<AccountQuotaRow> {
     return rows
 }
 
+/**
+ * `POST /api/accounts/batch` → `{"results":[{id,ok,error?}],"ok":N,"total":M}`。
+ *
+ * 自校验：results 的条数必须等于回包里的 `total`、其中 ok 的条数必须等于回包里的 `ok`。
+ * 对不上说明这不是完整回包，宁可报 `invalid_response` 也不拿它去凑「成功 N」。
+ */
+internal fun parseAccountBatch(body: String): AccountBatchOutcome {
+    val root = objectOrThrow(body, "批量操作")
+    val array = root.optJSONArray("results")
+        ?: throw ManagementApiException("invalid_response", "批量操作缺少 results 字段")
+    val results = (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id").trim()
+        if (id.isEmpty()) {
+            return@mapNotNull null
+        }
+        AccountBatchEntry(
+            id = id,
+            ok = item.optBoolean("ok", false),
+            error = item.optString("error").trim().take(200),
+        )
+    }
+    if (results.size != array.length()) {
+        throw ManagementApiException("invalid_response", "批量结果里有无法解析的条目")
+    }
+    if (root.has("total") && root.optInt("total", -1) != results.size) {
+        throw ManagementApiException("invalid_response", "批量结果的条数与 total 不一致")
+    }
+    if (root.has("ok") && root.optInt("ok", -1) != results.count { it.ok }) {
+        throw ManagementApiException("invalid_response", "批量结果的成功数与 ok 不一致")
+    }
+    return AccountBatchOutcome(results = results)
+}
+
 /** `POST /api/accounts/{id}/settings` → `{"account":<snapshot>}`。 */
-internal fun parseAccountSnapshot(body: String): AccountQuotaRow {
-    val root = objectOrThrow(body, "账号设置")
+internal fun parseAccountSnapshot(body: String): AccountQuotaRow {    val root = objectOrThrow(body, "账号设置")
     val account = root.optJSONObject("account")
         ?: throw ManagementApiException("invalid_response", "账号设置没有返回账号快照")
     return parseAccountObject(account)

@@ -1,6 +1,9 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -49,12 +53,14 @@ import com.muyuchat.aether.runtime.channelToggleLabel
 import com.muyuchat.aether.runtime.providerModelsPreview
 import com.muyuchat.aether.runtime.providerModelsSummary
 import com.muyuchat.core.designsystem.McaButton
+import com.muyuchat.core.designsystem.McaChip
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
+import com.muyuchat.core.designsystem.McaIcons
 import com.muyuchat.core.designsystem.McaShape
 import com.muyuchat.core.designsystem.McaSwitch
 import com.muyuchat.core.designsystem.McaTonal
@@ -94,41 +100,74 @@ internal fun ChannelsPage(
     modifier: Modifier = Modifier,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf(AccountFilter.ALL) }
+    var selecting by rememberSaveable { mutableStateOf(false) }
+    // 选中项存成 List（Bundle 可保存）；N 很小，查表用 contains 足够。
+    var selectedIds by rememberSaveable { mutableStateOf(listOf<String>()) }
     val ready = state as? ChannelsUiState.Ready
+    val batchState = ready?.batch ?: BatchUiState.Idle
+    val batchRunning = batchState is BatchUiState.Running
+    val accounts = ready?.accounts.orEmpty()
+    val filtered = filterAccountRows(accounts, filter, query)
+    val visibleSelected = visibleSelection(selectedIds, filtered)
+    val checkinTargets = batchCheckinTargets(filtered, visibleSelected)
+    val allSelected = allVisibleSelected(visibleSelected, filtered)
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { MobileHeader(status) }
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        // 与桌面端同名的页面标题：桌面导航写「账号与额度」，
-                        // 副标题也照抄桌面端的原句，避免两端对同一页有两种说法。
-                        text = "账号与额度",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "账号、模型与余量，一眼看到底",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                McaIconButton(
-                    contentDescription = "刷新账号与额度",
-                    onClick = { onAction(ChannelsAction.Refresh) },
-                    enabled = state is ChannelsUiState.Ready || state is ChannelsUiState.Failed,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_refresh),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
+        if (selecting) {
+            item {
+                SelectionBar(
+                    selectedCount = visibleSelected.size,
+                    totalVisible = filtered.size,
+                    allSelected = allSelected,
+                    onToggleAll = {
+                        selectedIds = if (allSelected) {
+                            selectedIds - filtered.map { it.accountId }.toSet()
+                        } else {
+                            (selectedIds + filtered.map { it.accountId }).distinct()
+                        }
+                    },
+                    onCancel = {
+                        selecting = false
+                        selectedIds = emptyList()
+                    },
+                )
+            }
+        } else {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            // 与桌面端同名的页面标题：桌面导航写「账号与额度」，
+                            // 副标题也照抄桌面端的原句，避免两端对同一页有两种说法。
+                            text = "账号与额度",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Text(
+                            text = "账号、模型与余量，一眼看到底",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    McaIconButton(
+                        contentDescription = "刷新账号与额度",
+                        onClick = { onAction(ChannelsAction.Refresh) },
+                        enabled = state is ChannelsUiState.Ready || state is ChannelsUiState.Failed,
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_refresh),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(McaIconSize.Optical.Action),
+                        )
+                    }
                 }
             }
         }
@@ -150,9 +189,8 @@ internal fun ChannelsPage(
                 }
             }
             is ChannelsUiState.Ready -> {
-                val accounts = state.accounts
-                item { AccountsHeadline(state.providers, accounts) }
-                if (accounts.isEmpty()) {
+                item { AccountsHeadline(state.providers, state.accounts) }
+                if (state.accounts.isEmpty()) {
                     item {
                         StateCard(
                             title = "还没有账号",
@@ -163,14 +201,45 @@ internal fun ChannelsPage(
                     }
                 } else {
                     item {
+                        AccountFilterChips(
+                            selected = filter,
+                            onSelect = { filter = it },
+                            enabled = !batchRunning,
+                        )
+                    }
+                    item {
                         SearchField(query = query, onQueryChange = { query = it }, placeholder = "搜索账号或渠道")
                     }
-                    val filtered = filterAccounts(accounts, query)
+                    if (selecting) {
+                        item {
+                            BatchActionRow(
+                                selectedCount = visibleSelected.size,
+                                checkinCount = checkinTargets.size,
+                                running = batchRunning,
+                                onRefresh = { onAction(ChannelsAction.BatchRefresh(visibleSelected)) },
+                                onEnable = { onAction(ChannelsAction.BatchSetDisabled(visibleSelected, disabled = false)) },
+                                onDisable = { onAction(ChannelsAction.BatchSetDisabled(visibleSelected, disabled = true)) },
+                                onCheckin = { onAction(ChannelsAction.BatchCheckin(checkinTargets)) },
+                            )
+                        }
+                    }
+                    if (batchState !is BatchUiState.Idle) {
+                        item {
+                            BatchResultCard(
+                                state = batchState,
+                                onDismiss = { onAction(ChannelsAction.DismissBatch) },
+                            )
+                        }
+                    }
                     if (filtered.isEmpty()) {
                         item {
                             StateCard(
                                 title = "没有匹配的账号",
-                                detail = "换个关键词试试；也可以清空搜索框看全部账号。",
+                                detail = if (query.isNotBlank() || filter != AccountFilter.ALL) {
+                                    "换个关键词，或把筛选切回「全部」。"
+                                } else {
+                                    "换个关键词试试；也可以清空搜索框看全部账号。"
+                                },
                             )
                         }
                     } else {
@@ -184,6 +253,17 @@ internal fun ChannelsPage(
                                 probing = probing == row.providerId,
                                 toggling = toggling == row.providerId,
                                 modelsState = models[row.providerId],
+                                selectionMode = selecting,
+                                selected = row.accountId in visibleSelected,
+                                onToggleSelected = {
+                                    selectedIds = toggleSelection(selectedIds, row.accountId)
+                                },
+                                onLongPress = {
+                                    selecting = true
+                                    if (row.accountId !in selectedIds) {
+                                        selectedIds = (selectedIds + row.accountId).distinct()
+                                    }
+                                },
                                 onSetDisabled = { disabled ->
                                     onAction(ChannelsAction.SetAccountDisabled(row.accountId, disabled))
                                 },
@@ -249,6 +329,243 @@ internal fun ChannelsPage(
     }
 }
 
+/** 选择态顶栏：已选 N / 全选 / 取消。 */
+@Composable
+private fun SelectionBar(
+    selectedCount: Int,
+    totalVisible: Int,
+    allSelected: Boolean,
+    onToggleAll: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        // 两行而不是一行长文案：1.3× 字号下「已选 12 / 12」+ 四个字的按钮会把顶栏挤爆。
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "已选 $selectedCount",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "共 $totalVisible 个",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        McaButton(
+            onClick = onToggleAll,
+            style = McaButtonStyle.Text,
+            size = McaButtonSize.CardAction,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            enabled = totalVisible > 0,
+        ) { Text(if (allSelected) "取消全选" else "全选") }
+        Spacer(Modifier.width(4.dp))
+        McaButton(
+            onClick = onCancel,
+            style = McaButtonStyle.Text,
+            size = McaButtonSize.CardAction,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+        ) {
+            Text("取消")
+        }
+    }
+}
+
+/** 筛选芯片：横向滚动一行，1.3× 下不换行、不压扁。 */
+@Composable
+private fun AccountFilterChips(
+    selected: AccountFilter,
+    onSelect: (AccountFilter) -> Unit,
+    enabled: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AccountFilter.entries.forEach { option ->
+            McaChip(
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                label = { Text(accountFilterLabel(option)) },
+                enabled = enabled,
+            )
+        }
+    }
+}
+
+/**
+ * 批量动作行。
+ *
+ * 文案在禁用时**不变**（靠透明度表达），避免把用户的选择误读成"功能不存在"。
+ */
+@Composable
+private fun BatchActionRow(
+    selectedCount: Int,
+    checkinCount: Int,
+    running: Boolean,
+    onRefresh: () -> Unit,
+    onEnable: () -> Unit,
+    onDisable: () -> Unit,
+    onCheckin: () -> Unit,
+) {
+    val canRun = selectedCount > 0 && !running
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            McaButton(
+                onClick = onRefresh,
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                enabled = canRun,
+            ) { Text(batchKindLabel(BatchKind.REFRESH)) }
+            McaButton(
+                onClick = onEnable,
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                enabled = canRun,
+            ) { Text(batchKindLabel(BatchKind.ENABLE)) }
+            McaButton(
+                onClick = onDisable,
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                enabled = canRun,
+            ) { Text(batchKindLabel(BatchKind.DISABLE)) }
+            McaButton(
+                onClick = onCheckin,
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                enabled = canRun && checkinCount > 0,
+            ) { Text(batchKindLabel(BatchKind.CHECKIN)) }
+        }
+        if (!running && selectedCount > 0 && checkinCount == 0) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = batchCheckinEmptyHint(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** 批量结果卡：只显示回包数出来的成功/失败与第一个失败原因。 */
+@Composable
+private fun BatchResultCard(state: BatchUiState, onDismiss: () -> Unit) {
+    if (state is BatchUiState.Idle) {
+        return
+    }
+    Surface(
+        shape = McaShape.Sheet,
+        color = McaTonal.fill(),
+        border = McaHairline.stroke(),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            when (state) {
+                is BatchUiState.Running -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(McaIconSize.S),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "正在${batchKindLabel(state.kind)}：${state.total} 个账号…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                is BatchUiState.Done -> {
+                    Text(
+                        text = batchKindLabel(state.kind),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = batchSummaryText(
+                            kind = state.kind,
+                            ok = state.ok,
+                            failed = state.failed,
+                            total = state.total,
+                            firstError = state.firstError,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (state.failed > 0) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                is BatchUiState.Failed -> {
+                    Text(
+                        text = "${batchKindLabel(state.kind)}失败",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "${state.message}（错误码：${state.code}）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                BatchUiState.Idle -> Unit
+            }
+            Spacer(Modifier.height(8.dp))
+            McaButton(
+                onClick = onDismiss,
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+            ) { Text("关闭") }
+        }
+    }
+}
+
+/** 选择态的勾选标记（MCA 没有 Checkbox 组件，用 Surface + McaIcons.Check 自绘结构）。 */
+@Composable
+private fun SelectionMark(selected: Boolean) {
+    Surface(
+        modifier = Modifier.size(McaIconSize.L),
+        shape = McaShape.Capsule,
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            McaTonal.badgeFill()
+        },
+        border = McaHairline.stroke(),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (selected) {
+                Icon(
+                    imageVector = McaIcons.Check,
+                    contentDescription = "已选中",
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(McaIconSize.Xs),
+                )
+            }
+        }
+    }
+}
+
 /** 页面级小结：只报可数的真实数字，不做"健康度"之类的推断。 */
 @Composable
 private fun AccountsHeadline(providers: List<ProviderSummary>, accounts: List<AccountQuotaRow>) {
@@ -292,6 +609,7 @@ private fun SectionHeader(title: String, note: String) {
  * 签到入口（仅 `checkin_supported`）。`quota_supported == false` 时写
  * 「该渠道不提供额度数据」并且**不画 0% 的空条**。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AccountQuotaCard(
     row: AccountQuotaRow,
@@ -301,6 +619,10 @@ private fun AccountQuotaCard(
     probing: Boolean,
     toggling: Boolean,
     modelsState: ProviderModelsUiState?,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelected: () -> Unit = {},
+    onLongPress: () -> Unit = {},
     onSetDisabled: (Boolean) -> Unit,
     onCheckin: () -> Unit,
     onLoadModels: () -> Unit,
@@ -322,6 +644,11 @@ private fun AccountQuotaCard(
     }
 
     Surface(
+        // 长按进入选择态；已在选择态时点卡片就是勾选/取消勾选。
+        modifier = Modifier.combinedClickable(
+            onClick = { if (selectionMode) onToggleSelected() },
+            onLongClick = onLongPress,
+        ),
         shape = McaShape.Sheet,
         color = McaTonal.fill(),
         border = McaHairline.stroke(),
@@ -329,6 +656,10 @@ private fun AccountQuotaCard(
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             // 名称 + 启用开关
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (selectionMode) {
+                    SelectionMark(selected = selected)
+                    Spacer(Modifier.width(12.dp))
+                }
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = row.label,
@@ -431,46 +762,49 @@ private fun AccountQuotaCard(
                 )
             }
 
-            // 三个动作排成一行：模型 / 渠道启停 / 测试
-            Spacer(Modifier.height(12.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // 三个按钮的左右内边距压到 8dp：1.3× 字号下「查看模型 · 停用渠道 · 测试」
-                // 用默认 16dp 会顶到卡片右边缘（360dp 屏），压到 8dp 后仍留 30dp 余量。
-                McaButton(
-                    onClick = onLoadModels,
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    enabled = provider != null && modelsState !is ProviderModelsUiState.Loading,
+            // 三个动作排成一行：模型 / 渠道启停 / 测试。
+            // 选择态下整行隐藏：这时候点卡片是勾选，误触渠道启停的代价太大。
+            if (!selectionMode) {
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(if (modelsState is ProviderModelsUiState.Loading) "读取中…" else "查看模型")
-                }
-                McaButton(
-                    onClick = { confirmToggle = true },
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    enabled = provider != null && !toggling,
-                ) {
-                    Text(
-                        when {
-                            toggling -> "切换中…"
-                            provider?.off == true -> "启用渠道"
-                            else -> "停用渠道"
-                        },
-                    )
-                }
-                McaButton(
-                    onClick = onTest,
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    enabled = provider != null && !probing,
-                ) {
-                    Text(if (probing) "探测中…" else "测试")
+                    // 三个按钮的左右内边距压到 8dp：1.3× 字号下「查看模型 · 停用渠道 · 测试」
+                    // 用默认 16dp 会顶到卡片右边缘（360dp 屏），压到 8dp 后仍留 30dp 余量。
+                    McaButton(
+                        onClick = onLoadModels,
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        enabled = provider != null && modelsState !is ProviderModelsUiState.Loading,
+                    ) {
+                        Text(if (modelsState is ProviderModelsUiState.Loading) "读取中…" else "查看模型")
+                    }
+                    McaButton(
+                        onClick = { confirmToggle = true },
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        enabled = provider != null && !toggling,
+                    ) {
+                        Text(
+                            when {
+                                toggling -> "切换中…"
+                                provider?.off == true -> "启用渠道"
+                                else -> "停用渠道"
+                            },
+                        )
+                    }
+                    McaButton(
+                        onClick = onTest,
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        enabled = provider != null && !probing,
+                    ) {
+                        Text(if (probing) "探测中…" else "测试")
+                    }
                 }
             }
         }
@@ -748,6 +1082,101 @@ private fun ProviderModelsDialog(
 }
 
 // ——— 纯展示计算（都能单测，不碰 Compose 运行时） ———
+
+// ——— 筛选与批量选择的纯逻辑（都能单测，不碰 Compose 运行时） ———
+
+/** 筛选芯片的四种口径；声明顺序即芯片顺序。 */
+internal enum class AccountFilter {
+    ALL,
+    ENABLED,
+    DISABLED,
+    WITH_QUOTA,
+}
+
+internal fun accountFilterLabel(filter: AccountFilter): String = when (filter) {
+    AccountFilter.ALL -> "全部"
+    AccountFilter.ENABLED -> "仅启用"
+    AccountFilter.DISABLED -> "仅停用"
+    AccountFilter.WITH_QUOTA -> "有额度窗口"
+}
+
+/**
+ * 先按芯片过一遍，再叠加搜索框（两个条件同时生效，顺序不影响结果）。
+ *
+ * 「有额度窗口」只认**真的带回窗口读数**的账号：`quota_supported && windows.isNotEmpty()`
+ * ——只有 `total/used` 的积分制账号不算"有额度窗口"（它有额度，但没有窗口）。
+ */
+internal fun filterAccountRows(
+    accounts: List<AccountQuotaRow>,
+    filter: AccountFilter,
+    query: String,
+): List<AccountQuotaRow> {
+    val byChip = accounts.filter { row ->
+        when (filter) {
+            AccountFilter.ALL -> true
+            AccountFilter.ENABLED -> !row.disabled
+            AccountFilter.DISABLED -> row.disabled
+            AccountFilter.WITH_QUOTA -> row.quotaSupported && row.quotaWindows.isNotEmpty()
+        }
+    }
+    return filterAccounts(byChip, query)
+}
+
+/** 选择只对**当前可见**的行生效：筛选把某些行隐藏后，"已选 N"和批量动作都跟着收缩。 */
+internal fun visibleSelection(selectedIds: List<String>, rows: List<AccountQuotaRow>): List<String> {
+    val visible = rows.map { it.accountId }.toSet()
+    return selectedIds.filter { it in visible }
+}
+
+internal fun toggleSelection(selectedIds: List<String>, accountId: String): List<String> =
+    if (accountId in selectedIds) {
+        selectedIds - accountId
+    } else {
+        (selectedIds + accountId).distinct()
+    }
+
+internal fun allVisibleSelected(selectedIds: List<String>, rows: List<AccountQuotaRow>): Boolean =
+    rows.isNotEmpty() && rows.all { it.accountId in selectedIds }
+
+/** 一键签到只对 `checkin_supported` 的账号发请求；一个都没有时返回空列表（页面据此禁用按钮）。 */
+internal fun batchCheckinTargets(
+    rows: List<AccountQuotaRow>,
+    selectedIds: List<String>,
+): List<String> {
+    val chosen = visibleSelection(selectedIds, rows).toSet()
+    return rows.filter { it.accountId in chosen && it.checkinSupported }.map { it.accountId }
+}
+
+internal fun batchCheckinEmptyHint(): String =
+    "所选账号都不支持签到：这些渠道没有签到能力，不会发任何请求。"
+
+internal fun batchKindLabel(kind: BatchKind): String = when (kind) {
+    BatchKind.REFRESH -> "刷新额度"
+    BatchKind.ENABLE -> "批量启用"
+    BatchKind.DISABLE -> "批量停用"
+    BatchKind.CHECKIN -> "一键签到"
+}
+
+/**
+ * 批量结果文案。计数**全部来自逐条回包**；即使全成功也只写「成功 N / 总数」，
+ * 不写"全部成功"这种无法核实的断言。
+ */
+internal fun batchSummaryText(
+    kind: BatchKind,
+    ok: Int,
+    failed: Int,
+    total: Int,
+    firstError: String,
+): String {
+    val label = batchKindLabel(kind)
+    val reason = if (firstError.isBlank()) "" else "（第一个失败原因：$firstError）"
+    return when {
+        total <= 0 -> "$label：没有可执行的账号"
+        failed <= 0 -> "$label：成功 $ok / $total"
+        ok <= 0 -> "$label：失败 $failed / $total$reason"
+        else -> "$label：成功 $ok / $total，失败 $failed$reason"
+    }
+}
 
 /** 窗口剩余百分比：契约里 `used` 已是 0-100 的百分比（`contract.go:211`）。 */
 internal fun windowRemainingPercent(window: AccountQuotaWindow): Int =

@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.muyuchat.aether.runtime.ACCOUNT_BUNDLE_MAX_BYTES
 import com.muyuchat.aether.runtime.AccountBundleException
 import com.muyuchat.aether.runtime.AccountBundlePreview
+import com.muyuchat.aether.runtime.AccountCheckin
 import com.muyuchat.aether.runtime.AccountQuotaApiClient
 import com.muyuchat.aether.runtime.AccountQuotaRow
 import com.muyuchat.aether.runtime.BundleImportResult
@@ -30,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
@@ -53,6 +55,7 @@ sealed interface ChannelsUiState {
         val providers: List<ProviderSummary>,
         val accounts: List<AccountQuotaRow> = emptyList(),
         val accountAction: AccountActionUiState = AccountActionUiState.Idle,
+        val batch: BatchUiState = BatchUiState.Idle,
     ) : ChannelsUiState
 
     data class Failed(val code: String, val message: String) : ChannelsUiState
@@ -70,6 +73,34 @@ enum class AccountActionKind {
     CHECKIN,
 }
 
+/**
+ * 批量动作类别。**端点不同，别混**：
+ * - [REFRESH] 走真批量端点 `POST /api/accounts/batch`（`action:"refresh"`）；
+ * - [ENABLE]/[DISABLE] 服务端没有批量启停，逐个打 `POST /api/accounts/{id}/settings`；
+ * - [CHECKIN] 服务端没有批量签到，逐个打 `POST /api/accounts/{id}/checkin`。
+ */
+enum class BatchKind {
+    REFRESH,
+    ENABLE,
+    DISABLE,
+    CHECKIN,
+}
+
+/** 批量动作进行/结果的真实计数（全部来自逐条回包，不推断、不美化）。 */
+sealed interface BatchUiState {
+    data object Idle : BatchUiState
+    data class Running(val kind: BatchKind, val total: Int) : BatchUiState
+    data class Done(
+        val kind: BatchKind,
+        val ok: Int,
+        val failed: Int,
+        val total: Int,
+        val firstError: String,
+    ) : BatchUiState
+
+    data class Failed(val kind: BatchKind, val code: String, val message: String) : BatchUiState
+}
+
 sealed interface ChannelsAction {
     data object Refresh : ChannelsAction
 
@@ -77,6 +108,11 @@ sealed interface ChannelsAction {
     data class SetAccountDisabled(val accountId: String, val disabled: Boolean) : ChannelsAction
 
     data class CheckinAccount(val accountId: String) : ChannelsAction
+
+    data class BatchRefresh(val ids: List<String>) : ChannelsAction
+    data class BatchSetDisabled(val ids: List<String>, val disabled: Boolean) : ChannelsAction
+    data class BatchCheckin(val ids: List<String>) : ChannelsAction
+    data object DismissBatch : ChannelsAction
 }
 
 /** Local-only bundle preview; nothing is written to the account pool. */
@@ -131,17 +167,35 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     private val accountsOverride = MutableStateFlow<List<AccountQuotaRow>?>(null)
     private val accountAction = MutableStateFlow<AccountActionUiState>(AccountActionUiState.Idle)
 
+    /** 批量动作的进行/结果态；页面据此显示「成功 N / 失败 M（原因）」。 */
+    private val batch = MutableStateFlow<BatchUiState>(BatchUiState.Idle)
+    private var batchJob: Job? = null
+
     private data class ChannelsInput(
         val status: GatewayStatus,
         val providers: List<ProviderSummary>?,
         val accounts: List<AccountQuotaRow>?,
         val action: AccountActionUiState,
+        val batch: BatchUiState,
     )
+
+    /** 四个"就地状态"先合成一路：`combine` 的强类型重载最多 5 个 flow。 */
+    private data class CachedInputs(
+        val providers: List<ProviderSummary>?,
+        val accounts: List<AccountQuotaRow>?,
+        val action: AccountActionUiState,
+        val batch: BatchUiState,
+    )
+
+    private val cachedInputs: Flow<CachedInputs> =
+        combine(providerOverride, accountsOverride, accountAction, batch) { providers, accounts, action, batchState ->
+            CachedInputs(providers, accounts, action, batchState)
+        }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val state: StateFlow<ChannelsUiState> =
-        combine(repository.status, refresh, providerOverride, accountsOverride, accountAction) { status, _, providers, accounts, action ->
-            ChannelsInput(status, providers, accounts, action)
+        combine(repository.status, refresh, cachedInputs) { status, _, cached ->
+            ChannelsInput(status, cached.providers, cached.accounts, cached.action, cached.batch)
         }
             .flatMapLatest { input ->
             flow {
@@ -153,7 +207,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 val cachedProviders = input.providers
                 val cachedAccounts = input.accounts
                 if (cachedProviders != null && cachedAccounts != null) {
-                    emit(ChannelsUiState.Ready(cachedProviders, cachedAccounts, input.action))
+                    emit(ChannelsUiState.Ready(cachedProviders, cachedAccounts, input.action, input.batch))
                     return@flow
                 }
                 emit(ChannelsUiState.Loading)
@@ -163,7 +217,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                         val a = cachedAccounts ?: accountsClient.fetchAccounts(input.status)
                         p to a
                     }
-                    emit(ChannelsUiState.Ready(providers, accounts, input.action))
+                    emit(ChannelsUiState.Ready(providers, accounts, input.action, input.batch))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: ManagementApiException) {
@@ -336,7 +390,72 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             ChannelsAction.Refresh -> invalidate()
             is ChannelsAction.SetAccountDisabled -> setAccountDisabled(action.accountId, action.disabled)
             is ChannelsAction.CheckinAccount -> checkinAccount(action.accountId)
+            is ChannelsAction.BatchRefresh -> runBatch(BatchKind.REFRESH, action.ids)
+            is ChannelsAction.BatchSetDisabled ->
+                runBatch(if (action.disabled) BatchKind.DISABLE else BatchKind.ENABLE, action.ids)
+            is ChannelsAction.BatchCheckin -> runBatch(BatchKind.CHECKIN, action.ids)
+            ChannelsAction.DismissBatch -> dismissBatch()
         }
+    }
+
+    /**
+     * 批量动作总入口。
+     *
+     * 三条路径的端点是**不同**的，见 [BatchKind]；结果只从逐条回包数出来，
+     * 全成功也不写"全部成功"，永远显示「成功 N / 总数」。
+     */
+    fun runBatch(kind: BatchKind, ids: List<String>) {
+        if (ids.isEmpty() || batch.value is BatchUiState.Running) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            batch.value = BatchUiState.Failed(kind, "gateway_not_running", "网关未启动")
+            return
+        }
+        batchJob?.cancel()
+        batch.value = BatchUiState.Running(kind, ids.size)
+        batchJob = viewModelScope.launch {
+            try {
+                val outcome = withContext(Dispatchers.IO) {
+                    when (kind) {
+                        BatchKind.REFRESH -> accountsClient.batchRefresh(status, ids)
+                        BatchKind.ENABLE -> accountsClient.batchSetDisabled(status, ids, disabled = false)
+                        BatchKind.DISABLE -> accountsClient.batchSetDisabled(status, ids, disabled = true)
+                        BatchKind.CHECKIN -> accountsClient.batchCheckin(status, ids)
+                    }
+                }
+                if (outcome.updatedRows.isNotEmpty()) {
+                    mergeAccountRows(outcome.updatedRows)
+                }
+                if (outcome.checkins.isNotEmpty()) {
+                    mergeCheckinRows(outcome.checkins)
+                }
+                if (kind == BatchKind.REFRESH) {
+                    // 额度读数变了但批量回包不带新值：重拉账号列表（渠道列表留在 override，不整页重建）。
+                    refetchAccounts()
+                }
+                batch.value = BatchUiState.Done(
+                    kind = kind,
+                    ok = outcome.ok,
+                    failed = outcome.failed,
+                    total = outcome.total,
+                    firstError = outcome.firstError,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                batch.value = BatchUiState.Failed(kind, e.code, e.message)
+            } catch (_: Exception) {
+                batch.value = BatchUiState.Failed(kind, "unknown", "批量操作失败，请重试")
+            }
+        }
+    }
+
+    fun dismissBatch() {
+        batchJob?.cancel()
+        batchJob = null
+        batch.value = BatchUiState.Idle
     }
 
     /** 丢掉所有就地缓存，下次真实拉取（导入账号/登录成功后必须走这条，否则新账号不出现）。 */
@@ -435,15 +554,33 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun mergeAccountRow(updated: AccountQuotaRow) {
+        mergeAccountRows(listOf(updated))
+    }
+
+    /** 批量启停的逐条回包快照一次性合并；只替换命中的行，其余原样保留。 */
+    private fun mergeAccountRows(updated: List<AccountQuotaRow>) {
         lockCurrentRows()
         val rows = accountsOverride.value.orEmpty()
         if (rows.isEmpty()) {
-            // 手上没有可比对的行：让它去重拉，而不是把列表替换成一条。
+            // 手上没有可比对的行：让它去重拉，而不是把列表替换成几条。
+            refetchAccounts()
+            return
+        }
+        val byId = updated.associateBy { it.accountId }
+        accountsOverride.value = rows.map { row -> byId[row.accountId] ?: row }
+    }
+
+    /** 批量签到回包里的今日卡逐条合并。 */
+    private fun mergeCheckinRows(checkins: Map<String, AccountCheckin>) {
+        lockCurrentRows()
+        val rows = accountsOverride.value.orEmpty()
+        if (rows.isEmpty()) {
             refetchAccounts()
             return
         }
         accountsOverride.value = rows.map { row ->
-            if (row.accountId == updated.accountId) updated else row
+            val ack = checkins[row.accountId]
+            if (ack == null) row else row.copy(checkin = ack)
         }
     }
 
