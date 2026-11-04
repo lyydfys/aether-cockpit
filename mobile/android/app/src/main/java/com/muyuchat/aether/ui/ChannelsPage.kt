@@ -768,6 +768,28 @@ private fun SectionHeader(title: String, note: String) {
  *
  * 「读取额度」是单账号动作：走 `POST /api/accounts/{id}/refresh`，成功用回包快照就地重画。
  */
+/**
+ * 「仅账号/额度」被动标签：给 `chat == false` 的渠道（cursor / windsurf / zed）用。
+ *
+ * 尺寸上刻意压到 labelSmall + 1dp 垂直内边距，并且**不做可点击**（它不是筛选 chip）：
+ * 位置跟在渠道名后面，不抢账号主标题。
+ */
+@Composable
+private fun ChatUnsupportedTag() {
+    Surface(
+        shape = McaShape.Badge,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = McaHairline.stroke(),
+    ) {
+        Text(
+            text = "仅账号/额度",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AccountQuotaCard(
@@ -862,13 +884,22 @@ private fun AccountQuotaCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = provider?.name ?: row.providerId,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = provider?.name ?: row.providerId,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        // 只有账号/额度能力的渠道（cursor / windsurf / zed）：提前说清不能对话转发，
+                        // 别等用户发请求才撞 503/400。标签跟在渠道名后面，不抢主标题位置。
+                        if (provider?.chat == false) {
+                            Spacer(Modifier.width(6.dp))
+                            ChatUnsupportedTag()
+                        }
+                    }
                 }
                 if (row.disabled) {
                     Text(

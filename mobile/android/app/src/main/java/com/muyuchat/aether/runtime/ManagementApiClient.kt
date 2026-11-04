@@ -45,6 +45,14 @@ data class ProviderSummary(
      * 只留 id 字符串——完整模型清单不在这里解析，避免把大对象带进 UI 状态。
      */
     val modelIds: List<String> = emptyList(),
+    /**
+     * 是否支持**对话转发**（`GET /api/providers` 的 `chat` 字段，值来自 `Capabilities.Chat`）。
+     *
+     * 默认 **true**：老服务端没有这个字段时，绝不能把所有渠道都误标成「仅账号/额度」。
+     * `cursor` / `windsurf` / `zed` 三家为 false——它们只有账号 / 额度 / 登录能力，
+     * 上游协议私有，转发已评估判定不做；界面要提前说清，别等用户发请求撞 503/400。
+     */
+    val chat: Boolean = true,
 )
 
 /** 渠道自定义登录表单的一项（对应 `provider.FormFieldSchema`）。 */
@@ -347,6 +355,8 @@ internal fun parseProviders(body: String): List<ProviderSummary> {
             authFormSchema = parseAuthFormSchema(item.optJSONArray("auth_form_schema")),
             hasOAuth = item.optBoolean("oauth", false),
             modelIds = parseModelIds(item.optJSONArray("models")),
+            // 缺失 / null / 非布尔值一律按 true：老服务端不认这个字段时不能把渠道标成不可对话。
+            chat = item.optBoolean("chat", true),
         )
     }
     return out

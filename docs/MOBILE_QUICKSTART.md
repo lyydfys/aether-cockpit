@@ -210,3 +210,95 @@ adb logcat -d -s AetherQuotaRead
 | 只有 `start …` | 请求发出去了但没有任何回包/异常 → 真卡住，查网关是否在跑 |
 | `start …` + `ok … readAt=无` | 回包正常但这次没读到额度 → **上游问题，不是 App 问题** |
 | `start …` + `fail … code=… type=…` | 客户端侧失败，`code` 是 `network_error` / `status_5xx`，`type` 是异常类型名 |
+
+## 8. 自定义 spec 渠道（自己写 JSON 加一个渠道）
+
+手机网关和桌面一样会在启动时加载 **spec 渠道参数**：把 `*.json` 放进 spec 目录，就能在不重新编译 App 的前提下多出一个可路由的渠道（`base_url` / 端点路径 / 模型映射 / 请求头模板都可热改）。
+
+**代码依据**（想复核就看这三处）：`internal/mobile/runtime.go:216`（`SpecDir: paths.SpecDir`）→ `internal/core/gateway/gateway.go:582-595`（`spec.Default().LoadDir(cfg.SpecDir)` + `provider.ReconcileSpecChannels()`）；目录不存在是**安静 no-op**（`internal/core/spec/spec.go:245-253`），不会报错、不会拖慢启动。
+
+### 8.1 文件放哪
+
+真机上 spec 目录是 **App 沙箱内的 `files/aether/cache/spec/`**：
+
+```
+/data/data/com.muyuchat.aether/files/aether/cache/spec/
+```
+
+（对应 `GatewayServiceController.kt:45` 传给 Go 的 `cacheDir = <filesDir>/aether/cache`，`apppaths` 再拼 `spec`。App 私有目录，未 root 的手机只能用 `adb` 或下文第 3 条的方式写入。）
+
+```bash
+# 建目录 + 看现有文件（debug 包可直接 run-as，不需要 root）
+adb shell run-as com.muyuchat.aether mkdir -p files/aether/cache/spec
+adb shell run-as com.muyuchat.aether ls -l files/aether/cache/spec
+
+# 推一个 spec 进去
+adb push my-channel.json /data/local/tmp/my-channel.json
+adb shell run-as com.muyuchat.aether cp /data/local/tmp/my-channel.json files/aether/cache/spec/
+```
+
+另外两条不需要 adb 的路子：
+
+1. **从备份包恢复**：备份包里的 `specs` 会被写回同一个目录并自动重载（`internal/core/gateway/backup_api.go:358-374`），入口在「设置 → 备份」；
+2. 远程 spec（仅桌面/网关侧配置项 `spec_remote_url`，手机上默认未配置）。
+
+### 8.2 文件格式（最小可用示例）
+
+文件名随便取，**以 JSON 里的 `provider_id` 为准**（`internal/core/spec/spec.go:233-279`）。一条 spec 就是一个对象；也可以写成 `{"version":1,"specs":[...]}` 的聚合格式。
+
+```json
+{
+  "provider_id": "my-relay",
+  "spec_version": "1",
+  "base_url": "https://relay.example.com",
+  "models": {
+    "my-relay/gpt-4o-mini": "gpt-4o-mini"
+  },
+  "endpoints": {
+    "chat": "/v1/chat/completions"
+  },
+  "extra": {
+    "reverse_profile": {
+      "kind": "reverse",
+      "display_name": "我的中转",
+      "family": "openai",
+      "description": "自建中转，OpenAI 兼容"
+    }
+  }
+}
+```
+
+- `provider_id` 就是渠道 id（会出现在「接入渠道」列表里），**不能与内置渠道同名**（`internal/providers/reverse/spec_register.go:163-166` 会拒绝覆盖内置渠道）；
+- `extra.reverse_profile.kind` **必须显式写 `"reverse"`**（`internal/providers/reverse/spec_register.go:115-117`），否则这条 spec 只改参数、不注册成渠道；
+- `models` 的键是「对外名」（可带 `<渠道>/` 前缀），值是上游真实模型名——写了映射，这些模型才会出现在 `/v1/models`；
+- spec 只声明**渠道与路由**；账号与凭据仍然在 App 的「接入渠道 → 我的中转 → 接入」里录入。
+
+### 8.3 什么时候生效
+
+| 做法 | 生效时机 |
+|---|---|
+| `POST /api/specs/reload`（带 admin session） | **立即**：重扫目录 + 重建路由表（`internal/core/gateway/diag.go:23-38`、路由 `gateway.go:1100`） |
+| 重启 App（或让网关重启一次） | 下次启动加载（`gateway.go:582`） |
+| 从备份包恢复 | 自动 reload（`backup_api.go:374`） |
+
+### 8.4 排查
+
+```bash
+# 1) 网关到底认到几条 spec（含热更新状态）
+curl -s -H "Authorization: Bearer <admin-session>" http://127.0.0.1:<PORT>/api/specs
+
+# 2) 触发一次重载，看返回的 error（400/500 时原文就是原因）
+curl -s -X POST -H "Authorization: Bearer <admin-session>" http://127.0.0.1:<PORT>/api/specs/reload
+
+# 3) 网关日志（Go 侧）：加载失败的 WARN 在这里
+adb shell run-as com.muyuchat.aether cat no_backup/aether/logs/aether.log | tail -n 50
+```
+
+常见原因，按日志顺序查：
+
+| 现象 | 原因 |
+|---|---|
+| 日志有 `[WARN] spec 目录加载失败: …` | 目录里某个 `*.json` 读失败/解析失败，路径与错误原文都会打出来 |
+| `/api/specs` 的 `status.count` 不涨 | 文件没放对目录（对照 8.1 的绝对路径），或文件名后缀不是 `.json` |
+| count 涨了但渠道列表没有 | `extra.reverse_profile.kind` 不是 `"reverse"`，或 `provider_id` 与内置渠道同名（`internal/providers/reverse/spec_register.go:115-117` / `:163-166` 会拒绝注册） |
+| 渠道有了但请求 404/502 | `base_url` / `endpoints.chat` 写错；反代路径要写到上游真正接受的那个路径 |

@@ -76,6 +76,20 @@ class ChannelsLayoutOnboardTest {
     }
 
     @Test
+    fun accountOnlyChannelsSaySoBeforeUserSendsARequest() {
+        // cursor / windsurf / zed 只有账号/额度/登录能力：接入页要提前说清"不转发对话"，
+        // 别等用户发请求才撞 503/400。按钮不禁用——接入后能看额度，本身有意义。
+        val hint = onboardChatUnsupportedHint()
+        assertTrue("要点明只支持账号与额度", hint.contains("账号") && hint.contains("额度"))
+        assertTrue("要点明不支持对话转发", hint.contains("对话转发"))
+        assertTrue("措辞要说明是'暂不支持'而不是'禁止'", hint.contains("暂不支持"))
+
+        // 默认值：老构造点 / 老服务端没有 chat 字段时按"支持"处理。
+        assertTrue(provider("claude-sub").chat)
+        assertFalse(provider("cursor").copy(chat = false).chat)
+    }
+
+    @Test
     fun methodLabelTableCoversDesktopKeys() {
         // 桌面 onboard.js:11-26 的 14 个键一个不少（文案逐字相同）
         val expected = mapOf(

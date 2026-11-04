@@ -69,6 +69,42 @@ class ManagementApiClientTest {
     }
 
     @Test
+    fun chatFlagDefaultsToSupportedWhenServerOmitsIt() {
+        // 老服务端没有 chat 字段：绝不能把所有渠道误标成「仅账号/额度」。
+        val legacy = parseProviders("""{"providers":[{"id":"claude","display_name":"Claude"}]}""")
+        assertTrue("缺失 chat 必须按 true 处理", legacy.single().chat)
+        // 显式 true 也是支持。
+        val explicit = parseProviders("""{"providers":[{"id":"claude","chat":true}]}""")
+        assertTrue(explicit.single().chat)
+    }
+
+    @Test
+    fun chatFlagIsFalseForAccountOnlyChannels() {
+        // cursor / windsurf / zed：只有账号/额度/登录能力，没有对话转发。
+        val providers = parseProviders(
+            """
+            {"providers":[
+              {"id":"cursor","display_name":"Cursor","chat":false},
+              {"id":"windsurf","display_name":"Windsurf","chat":false},
+              {"id":"zed","display_name":"Zed","chat":false}
+            ]}
+            """.trimIndent(),
+        )
+        assertEquals(3, providers.size)
+        assertTrue("三家都必须是 chat=false", providers.none { it.chat })
+    }
+
+    @Test
+    fun chatFlagFallsBackToTrueOnMalformedValue() {
+        // 坏值（字符串 / null / 对象）不能把渠道标成不可对话：一律退回 true。
+        for (bad in listOf("\"false\"", "null", "{}", "0")) {
+            val body = """{"providers":[{"id":"claude","chat":$bad}]}"""
+            val provider = parseProviders(body).single()
+            assertTrue("chat=$bad 应退回 true", provider.chat)
+        }
+    }
+
+    @Test
     fun mapsAccountsFromKeyListWithoutSecrets() {
         val body = """
             {

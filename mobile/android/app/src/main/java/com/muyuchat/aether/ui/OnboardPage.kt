@@ -393,6 +393,15 @@ private fun OnboardProviderCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // 没有对话转发能力的渠道（`chat == false`，如 cursor / windsurf / zed）：
+                // 在描述下方补一句预期说明。**按钮仍然可点**——接入后能看账号与额度，是有意义的。
+                if (!provider.chat) {
+                    Text(
+                        text = onboardChatUnsupportedHint(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = onboardProviderMeta(provider, accountCount),
@@ -1332,6 +1341,15 @@ internal fun onboardProviderMeta(provider: ProviderSummary, accountCount: Int): 
     val labels = usable.map { onboardMethodLabel(it) } + "Token / JSON"
     return "已有 $accountCount 个账号 · 可用：" + labels.joinToString(" / ")
 }
+
+/**
+ * `chat == false` 渠道的预期说明（cursor / windsurf / zed：只有账号 / 额度 / 登录能力）。
+ *
+ * 放在渠道卡描述下方、**不禁用接入按钮**——接入后能看账号与额度，本身是有意义的；
+ * 这句话只是把"不会转发对话"提前讲清楚，别等用户发请求才撞 503/400。
+ */
+internal fun onboardChatUnsupportedHint(): String =
+    "该渠道目前仅支持账号与额度查看，暂不支持对话转发"
 
 /**
  * 搜索过滤：桌面 `paintGrid` 用 `display_name / family / id / description` 做子串匹配
