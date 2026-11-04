@@ -12,14 +12,11 @@ import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -27,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -67,19 +63,18 @@ import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaShape
 import kotlinx.coroutines.delay
 
-internal data class PendingTarget(
+/**
+ * 「这个入口在手机上还没有页面」时的说明内容。
+ *
+ * 桌面端每一个入口都是可用页面，所以手机端**不再为未接入项开整页占位**：
+ * 点到时用一条对话框说清"这里还没有、去哪儿看"，然后回到原页面。
+ */
+internal data class NotReadyNotice(
     val title: String,
-    val subtitle: String,
-    val stage: String,
-) {
-    companion object {
-        /** 未实现功能统一标的阶段，避免各处写死不同的"后续阶段"文案。 */
-        const val NEXT_STAGE: String = "后续阶段"
-    }
-}
+    val detail: String,
+)
 
 private enum class BundlePassphrasePurpose { PREVIEW, IMPORT }
 
@@ -88,9 +83,9 @@ private enum class BundlePassphrasePurpose { PREVIEW, IMPORT }
  * as the only wired workspace, and a searchable "更多" directory for the 17
  * Windows workspaces and 9 settings groups.
  *
- * Wired pages read the real controller status. Unwired entries open an explicit
- * stage placeholder; desktop-only entries stay disabled and are labelled
- * "仅 Windows" instead of pretending to work on the phone.
+ * Wired pages read the real controller status. 手机端每个入口要么进真实页面，要么标
+ * "仅 Windows" 说明（见 [DesktopOnlyPage]）；实在没有页面的入口只弹一条对话框说明，
+ * 不撑成一整页占位。
  */
 @Composable
 fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
@@ -98,7 +93,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var selectedTab by rememberSaveable { mutableStateOf(MobileTab.OVERVIEW) }
-    var pending by remember { mutableStateOf<PendingTarget?>(null) }
+    var notReady by remember { mutableStateOf<NotReadyNotice?>(null) }
     var showRouting by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showProbe by remember { mutableStateOf(false) }
@@ -150,9 +145,9 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         }
     }
 
-    BackHandler(enabled = pending != null || showRouting || showSettings || showProbe || showTotp || showSessions || showWake || showLibrary || showBackup || selectedTab != MobileTab.OVERVIEW) {
-        if (pending != null) {
-            pending = null
+    BackHandler(enabled = notReady != null || showRouting || showSettings || showProbe || showTotp || showSessions || showWake || showLibrary || showBackup || selectedTab != MobileTab.OVERVIEW) {
+        if (notReady != null) {
+            notReady = null
         } else if (showRouting) {
             showRouting = false
         } else if (showSettings) {
@@ -182,7 +177,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 selected = selectedTab,
                 onSelect = { tab ->
                     selectedTab = tab
-                    pending = null
+                    notReady = null
                     showRouting = false
                     showSettings = false
                     showProbe = false
@@ -198,14 +193,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         // safeDrawing 不含 IME inset：键盘弹出时页面底部输入框会被遮住，
         // 这里补一次 imePadding（对话框是独立 window，另有自己的处理）。
         val modifier = Modifier.padding(innerPadding).imePadding()
-        val target = pending
         when {
-            target != null -> PendingPage(
-                target = target,
-                status = state.status,
-                onBack = { pending = null },
-                modifier = modifier,
-            )
             showBackup -> {
                 val backupViewModel: BackupViewModel = viewModel()
                 val backupState by backupViewModel.state.collectAsStateWithLifecycle()
@@ -608,14 +596,14 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     modifier = modifier,
                 )
                 val purpose = askPassphrase
-                // 启停失败：必须让用户看到错误码，而不是"点了没反应"。
+                // 启停失败：必须让用户看到错误码，而不是点了没反应。
                 channelsToggleError?.let { (code, message) ->
                     McaDialog(
                         onDismissRequest = channelsViewModel::dismissToggleError,
                         title = { Text("切换渠道失败", fontWeight = FontWeight.Bold) },
                         text = {
                             Text(
-                                text = "$message（错误码：$code）",
+                                text = "$message（错误码：$code）。",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -719,10 +707,9 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                         WorkspaceAction.Plugins -> showPlugins = true
                         WorkspaceAction.Clients -> showClients = true
                         WorkspaceAction.DesktopOnly -> showDesktopOnly = true
-                        is WorkspaceAction.Pending -> pending = PendingTarget(
+                        is WorkspaceAction.Pending -> notReady = notReadyNoticeForWorkspace(
                             title = entry.title,
                             subtitle = entry.subtitle,
-                            stage = action.stage,
                         )
                     }
                 },
@@ -731,24 +718,37 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                         // 02/06 的内容就在设置页里，别再弹「后续阶段」——那是设置页有功能、目录不入口。
                         showSettings = true
                     } else {
-                        pending = PendingTarget(
-                            title = "${group.index} ${group.title}",
-                            subtitle = group.subtitle,
-                            stage = PendingTarget.NEXT_STAGE,
-                        )
+                        notReady = notReadyNoticeForSettingsGroup(group)
                     }
                 },
                 modifier = modifier,
             )
-            else -> PendingPage(
-                target = PendingTarget(
-                    title = selectedTab.label,
-                    subtitle = selectedTab.subtitle,
-                    stage = selectedTab.stage ?: "后续阶段",
-                ),
-                status = state.status,
-                onBack = { selectedTab = MobileTab.OVERVIEW },
-                modifier = modifier,
+            // 所有 MobileTab 都有上面的分支；这里只为穷尽性，正常运行不可达。
+            else -> Unit
+        }
+        notReady?.let { notice ->
+            // 不撑整页：桌面端没有占位页这种形态，手机端也不该有。
+            McaDialog(
+                onDismissRequest = { notReady = null },
+                title = {
+                    Text(
+                        text = notice.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                },
+                text = {
+                    Text(
+                        text = notice.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                confirmButton = {
+                    McaButton(onClick = { notReady = null }, style = McaButtonStyle.Primary) {
+                        Text("知道了")
+                    }
+                },
             )
         }
     }
@@ -838,86 +838,27 @@ internal fun statusAccent(status: GatewayStatus): Color = when (status.state) {
     GatewayState.STOPPED -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
 }
 
-@Composable
-private fun PendingPage(
-    target: PendingTarget,
-    status: GatewayStatus,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item { MobileHeader(status) }
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    text = "返回",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        item {
-            Text(
-                text = target.title,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                text = target.subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        item {
-            Surface(
-                shape = McaShape.Sheet,
-                color = MaterialTheme.colorScheme.primaryContainer,
-            ) {
-                Column(Modifier.padding(18.dp)) {
-                    Text(
-                        text = target.stage,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "该工作区尚未接入",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "将在 ${target.stage} 接入；当前版本不会执行任何操作，也不会伪造成功状态。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f),
-                    )
-                }
-            }
-        }
-        item {
-            Text(
-                text = "手机与 PC 的账号、会话和账本不会自动同步；WSL、Windows 客户端扫描、进程控制与隔离实例仅桌面端可用。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+/** 未接入的工作区入口：说清"这里没有手机页面"，并指到真正能用的地方。 */
+internal fun notReadyNoticeForWorkspace(title: String, subtitle: String): NotReadyNotice =
+    NotReadyNotice(
+        title = "「$title」还没有手机页面",
+        detail = "$subtitle。这一项在桌面端可用，手机端尚未移植；" +
+            "目录里标「已接入」的入口才是现在能打开的。",
+    )
+
+/** 未接入的设置分组：如实说"设置页里没有这一组"，并点出手机端真正能改的是哪几组。 */
+internal fun notReadyNoticeForSettingsGroup(group: SettingsGroup): NotReadyNotice {
+    val available = settingsGroups().filter { it.available }.joinToString("、") { it.title }
+    val scope = if (available.isEmpty()) {
+        "手机端设置页目前没有可改的分组"
+    } else {
+        "手机端设置页目前只有${available}"
     }
+    return NotReadyNotice(
+        title = "${group.index} ${group.title}",
+        detail = "${group.subtitle}。这一组今天不在手机端设置页里：$scope；" +
+            "这一组请到桌面端的设置里改。",
+    )
 }
 
 @Composable

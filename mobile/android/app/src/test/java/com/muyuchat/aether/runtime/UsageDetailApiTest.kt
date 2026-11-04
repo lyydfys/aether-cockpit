@@ -6,11 +6,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 用量细分的三个只读解析器。
+ * 用量细分的两个只读解析器。
  *
  * 结构全部按**真实响应**核对过（不是猜字段）：
  * - `GET /api/usage/heatmap` → `{days:[{date,calls,tokens,cost}], from, to}`
- * - `GET /api/usage/quotas/history?days=N` → `[{provider,user,lines:[{name,points:[{at,left,start?,resetsAt?}]}]}]`
  * - `GET /api/pricing` → `{currency,usd_cny,defaults:[{pattern,price:{input_per_m,output_per_m,cached_read_per_m,cached_write_per_m},source}],overrides:{...}}`
  */
 class UsageDetailApiTest {
@@ -44,36 +43,6 @@ class UsageDetailApiTest {
         assertTrue(!strip[1].placeholder)
         assertTrue(strip[0].placeholder)
         assertTrue(strip[2].placeholder)
-    }
-
-    @Test
-    fun parsesQuotaHistory() {
-        val list = parseQuotaHistory(
-            """[{"provider":"workbuddy-cn","user":"ly²","lines":[
-                 {"name":"5 hours","points":[
-                   {"at":"2026-10-27T16:38:03Z","left":100,"resetsAt":"2026-10-27T21:38:03Z"},
-                   {"at":"2026-10-27T17:07:34Z","left":75}]}]},
-               {"provider":"antigravity","user":"me","lines":[
-                 {"name":"weekly","points":[{"at":"2026-10-27T16:38:03Z","left":20,"start":"2026-10-27T00:00:00Z"}]}]}]""",
-        )
-        assertEquals(2, list.size)
-        assertEquals("workbuddy-cn", list[0].provider)
-        assertEquals("ly²", list[0].user)
-        assertEquals(2, list[0].lines[0].points.size)
-        assertEquals(100, list[0].lines[0].points[0].left)
-        assertEquals("2026-10-27T21:38:03Z", list[0].lines[0].points[0].resetsAt)
-        assertEquals(20, list[1].lines[0].points[0].left)
-    }
-
-    @Test
-    fun quotaLatestPointIsTheLastOne() {
-        val list = parseQuotaHistory(
-            """[{"provider":"p","user":"u","lines":[{"name":"5 hours","points":[
-                 {"at":"2026-10-27T16:00:00Z","left":90},
-                 {"at":"2026-10-27T17:00:00Z","left":40},
-                 {"at":"2026-10-27T18:00:00Z","left":35}]}]}]""",
-        )
-        assertEquals(35, list[0].lines[0].latest()?.left)
     }
 
     @Test
@@ -114,13 +83,11 @@ class UsageDetailApiTest {
     @Test
     fun emptyAndMalformedBodies() {
         assertTrue(parseUsageHeatmap("""{"days":[]}""").days.isEmpty())
-        assertTrue(parseQuotaHistory("[]").isEmpty())
         assertEquals("USD", parsePricing("""{}""").currency)
 
         for (body in listOf("not-json", "")) {
             for (call in listOf<() -> Any>(
                 { parseUsageHeatmap(body) },
-                { parseQuotaHistory(body) },
                 { parsePricing(body) },
             )) {
                 val error = runCatching { call() }.exceptionOrNull()

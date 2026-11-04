@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,10 +30,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayState
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.OverviewLinksState
+import com.muyuchat.aether.runtime.OverviewProviderLink
 import com.muyuchat.aether.runtime.OverviewStats
+import com.muyuchat.aether.runtime.formatUsageCost
+import com.muyuchat.aether.runtime.formatUsageCount
+import com.muyuchat.aether.runtime.overviewEndpoints
+import com.muyuchat.aether.runtime.overviewOnboardingSteps
 import com.muyuchat.aether.runtime.stateLabel
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
@@ -68,7 +77,11 @@ internal fun OverviewPage(
     stats: OverviewStats? = null,
     latestRequest: String? = null,
     modifier: Modifier = Modifier,
+    viewModel: OverviewViewModel = viewModel(),
 ) {
+    // 与 GatewayHome 共用同一个 ViewModelStoreOwner，因此拿到的是同一个 OverviewViewModel；
+    // 这样不必改 GatewayHome 的调用点，也能消费新增的 links 状态。
+    val links by viewModel.links.collectAsStateWithLifecycle()
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
@@ -96,6 +109,14 @@ internal fun OverviewPage(
             item { LatestRequestCard(latestRequest) }
         }
         item { ProtocolsCard(state.status) }
+        // 桌面端概览的两块（overview.js:181 三步接入 / :225 聚合链路），放在现有卡片之后。
+        // 两张卡之间 12dp；与上方卡片、下方说明之间由 LazyColumn 的 24dp 区块间距控制。
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OnboardingCard(status = state.status, links = links)
+                AggregationCard(status = state.status, links = links)
+            }
+        }
         item {
             Text(
                 text = "前台服务可能被系统或电池策略停止；此页状态即真实状态。",
@@ -439,6 +460,236 @@ private fun ProtocolRow(name: String, path: String, port: String) {
             },
             textAlign = TextAlign.End,
             maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 三步接入（桌面 `overview.js:181-186` 的标题/说明原样）：
+ * 每步的完成状态都来自真实状态——网关运行、渠道账号数、今日请求数。
+ */
+@Composable
+private fun OnboardingCard(status: GatewayStatus, links: OverviewLinksState?) {
+    val steps = overviewOnboardingSteps(
+        running = status.running,
+        linksLoaded = links != null,
+        accountsKnown = links?.providersLoaded == true,
+        accountCount = links?.totalAccounts,
+        usageKnown = links?.usageLoaded == true,
+        calls = links?.calls ?: 0L,
+    )
+    val doneCount = steps.count { it.done }
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("三步接入")
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "首次使用 · $doneCount/3 已完成",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        steps.forEachIndexed { index, step ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "${index + 1}",
+                    modifier = Modifier.width(18.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = step.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = step.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = step.status,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (step.done) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+            if (index != steps.lastIndex) {
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+}
+
+/**
+ * 聚合链路（桌面 `overview.js:225`）：入站 3 个端点 → 本机网关 → 上游渠道。
+ * 渠道行只展示 `/api/providers` 与 `/api/usage` 已核实字段；读不到时明说，不补 0 冒充。
+ */
+@Composable
+private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?) {
+    val baseUrl = if (status.running && status.addr.isNotBlank()) {
+        "http://${status.addr}"
+    } else {
+        ""
+    }
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("聚合链路")
+            Spacer(Modifier.weight(1f))
+            if (links?.providersLoaded == true) {
+                Text(
+                    text = "${links.providers.size} 个渠道 → 3 个端点",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        if (!status.running) {
+            Text(
+                text = "网关未启动：启动后这里会显示从入站到上游的链路。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@DeepCard
+        }
+        if (links == null) {
+            Text(
+                text = "正在读取链路…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@DeepCard
+        }
+        Text(
+            text = "入站端点",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            overviewEndpoints(baseUrl).forEach { endpoint ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = endpoint.label,
+                        modifier = Modifier.width(112.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = endpoint.url.ifEmpty { "启动后显示" },
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = if (endpoint.url.isEmpty()) FontFamily.Default else FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        RowHairline()
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "上游渠道",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        when {
+            !links.providersLoaded -> Text(
+                text = "读不到渠道列表：重新进入概览会再试一次。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            links.providers.isEmpty() -> Text(
+                text = "还没有可路由的渠道，先接入一个。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                links.providers.forEach { provider ->
+                    ProviderLinkRow(provider = provider, usageLoaded = links.usageLoaded)
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "端点随监听端口自动适配 · 客户端只需一个 base_url",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ProviderLinkRow(provider: OverviewProviderLink, usageLoaded: Boolean) {
+    val state = when {
+        provider.off -> "已停用"
+        provider.readyCount > 0 -> "可用"
+        else -> "无可用账号"
+    }
+    val stateColor = when {
+        provider.off -> MaterialTheme.colorScheme.onSurfaceVariant
+        provider.readyCount > 0 -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.error
+    }
+    val usage = if (usageLoaded) {
+        "今日 ${formatUsageCount(provider.calls)} 次 · 失败 ${formatUsageCount(provider.errors)} · " +
+            formatUsageCost(provider.cost)
+    } else {
+        "用量读不到"
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = provider.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${provider.accountCount} 账号 · ${provider.readyCount} 可用",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = usage,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            text = state,
+            style = MaterialTheme.typography.labelSmall,
+            color = stateColor,
         )
     }
 }

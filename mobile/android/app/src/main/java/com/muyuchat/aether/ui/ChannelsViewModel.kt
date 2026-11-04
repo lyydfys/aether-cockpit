@@ -12,6 +12,7 @@ import com.muyuchat.aether.runtime.AccountBundlePreview
 import com.muyuchat.aether.runtime.AccountCheckin
 import com.muyuchat.aether.runtime.AccountQuotaApiClient
 import com.muyuchat.aether.runtime.AccountQuotaRow
+import com.muyuchat.aether.runtime.AccountSettingsPatch
 import com.muyuchat.aether.runtime.BundleImportResult
 import com.muyuchat.aether.runtime.ChannelProbe
 import com.muyuchat.aether.runtime.ChannelToggleApiClient
@@ -22,6 +23,7 @@ import com.muyuchat.aether.runtime.ManagementApiClient
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.ProviderModels
 import com.muyuchat.aether.runtime.ProviderModelsApiClient
+import com.muyuchat.aether.runtime.PresetsView
 import com.muyuchat.aether.runtime.ProviderSummary
 import com.muyuchat.aether.runtime.QUOTA_UNSUPPORTED_COPY
 import com.muyuchat.aether.runtime.parseAccountBundle
@@ -62,6 +64,10 @@ sealed interface ChannelsUiState {
         val batch: BatchUiState = BatchUiState.Idle,
         /** 每个账号"上一次读取额度"的瞬态结果；只有 `quotaReadAt == 0` 时页面才用得上。 */
         val quotaReadOutcomes: Map<String, QuotaReadOutcome> = emptyMap(),
+        /** 账号详情/标签/备注/预设的进行态（失败贴在对话框里，不贴卡片）。 */
+        val accountEdit: AccountEditUiState = AccountEditUiState.Idle,
+        /** 预设列表的加载态。 */
+        val presets: PresetsUiState = PresetsUiState.Idle,
     ) : ChannelsUiState
 
     data class Failed(val code: String, val message: String) : ChannelsUiState
@@ -121,6 +127,39 @@ sealed interface BatchUiState {
     data class Failed(val kind: BatchKind, val code: String, val message: String) : BatchUiState
 }
 
+/**
+ * 账号级编辑动作（对齐桌面 channels.js 的账号详情/标签/备注/预设）。
+ *
+ * 与 [AccountActionKind] 分开：卡片动作的失败贴在卡片上，编辑动作的失败要贴在**对话框里**
+ * （用户正对着那个表单），所以用独立状态流与独立文案。
+ */
+enum class AccountEditKind {
+    DETAILS,
+    TAGS,
+    NOTE,
+    PRESETS,
+}
+
+/** 一次账号编辑的进行/失败态；成功后回到 [Idle]（卡片已用服务端回包就地更新）。 */
+sealed interface AccountEditUiState {
+    data object Idle : AccountEditUiState
+    data class Saving(val accountId: String, val kind: AccountEditKind) : AccountEditUiState
+    data class Failed(
+        val accountId: String,
+        val kind: AccountEditKind,
+        val code: String,
+        val message: String,
+    ) : AccountEditUiState
+}
+
+/** `GET /api/presets` 的加载态（预设弹窗打开时才拉一次）。 */
+sealed interface PresetsUiState {
+    data object Idle : PresetsUiState
+    data object Loading : PresetsUiState
+    data class Ready(val view: PresetsView) : PresetsUiState
+    data class Failed(val code: String, val message: String) : PresetsUiState
+}
+
 sealed interface ChannelsAction {
     data object Refresh : ChannelsAction
 
@@ -131,6 +170,21 @@ sealed interface ChannelsAction {
 
     /** 单账号读一次额度：只用这一个账号的 id，不牵动别的卡片。 */
     data class ReadAccountQuota(val accountId: String) : ChannelsAction
+
+    /** 账号详情/设置：只把改动过的字段带上去（服务端缺省=不修改）。 */
+    data class UpdateAccountDetails(val accountId: String, val patch: AccountSettingsPatch) : ChannelsAction
+
+    /** 标签：传完整列表，空列表 = 清空。 */
+    data class SetAccountTags(val accountId: String, val tags: List<String>) : ChannelsAction
+
+    /** 备注：空字符串 = 清空。 */
+    data class SetAccountNote(val accountId: String, val note: String) : ChannelsAction
+
+    /** 打开预设弹窗前拉一次 `GET /api/presets`。 */
+    data object LoadPresets : ChannelsAction
+
+    /** 把预设挂到渠道上；空 ids = 解绑该渠道全部预设。 */
+    data class AttachPresets(val providerId: String, val ids: List<String>) : ChannelsAction
 
     data class BatchRefresh(val ids: List<String>) : ChannelsAction
     data class BatchSetDisabled(val ids: List<String>, val disabled: Boolean) : ChannelsAction
@@ -218,6 +272,12 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
      * 不做时间戳推断、不落盘——重启或重进页面后自然消失，页面就退回"从未读过"。
      */
     private val quotaReadOutcomes = MutableStateFlow<Map<String, QuotaReadOutcome>>(emptyMap())
+
+    /** 账号编辑（详情/标签/备注/预设）的进行态；一次只允许一个编辑动作。 */
+    private val accountEdit = MutableStateFlow<AccountEditUiState>(AccountEditUiState.Idle)
+
+    /** 预设列表；打开弹窗时才拉。 */
+    private val presets = MutableStateFlow<PresetsUiState>(PresetsUiState.Idle)
     private data class ChannelsInput(
         val status: GatewayStatus,
         val providers: List<ProviderSummary>?,
@@ -225,6 +285,8 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         val action: AccountActionUiState,
         val batch: BatchUiState,
         val readOutcomes: Map<String, QuotaReadOutcome>,
+        val edit: AccountEditUiState,
+        val presets: PresetsUiState,
     )
 
     /** 五个"就地状态"先合成一路：`combine` 的强类型重载最多 5 个 flow。 */
@@ -236,15 +298,36 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         val readOutcomes: Map<String, QuotaReadOutcome>,
     )
 
+    /** 再叠上"编辑态/预设态"这一层（同样是 5 个 flow 上限内的 3 个）。 */
+    private data class EditInputs(
+        val cached: CachedInputs,
+        val edit: AccountEditUiState,
+        val presets: PresetsUiState,
+    )
+
     private val cachedInputs: Flow<CachedInputs> =
         combine(providerOverride, accountsOverride, accountAction, batch, quotaReadOutcomes) { providers, accounts, action, batchState, outcomes ->
             CachedInputs(providers, accounts, action, batchState, outcomes)
         }
 
+    private val editInputs: Flow<EditInputs> =
+        combine(cachedInputs, accountEdit, presets) { cached, edit, presetsState ->
+            EditInputs(cached, edit, presetsState)
+        }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val state: StateFlow<ChannelsUiState> =
-        combine(repository.status, refresh, cachedInputs) { status, _, cached ->
-            ChannelsInput(status, cached.providers, cached.accounts, cached.action, cached.batch, cached.readOutcomes)
+        combine(repository.status, refresh, editInputs) { status, _, inputs ->
+            ChannelsInput(
+                status = status,
+                providers = inputs.cached.providers,
+                accounts = inputs.cached.accounts,
+                action = inputs.cached.action,
+                batch = inputs.cached.batch,
+                readOutcomes = inputs.cached.readOutcomes,
+                edit = inputs.edit,
+                presets = inputs.presets,
+            )
         }
             .flatMapLatest { input ->
             flow {
@@ -263,6 +346,8 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                             input.action,
                             input.batch,
                             input.readOutcomes,
+                    input.edit,
+                    input.presets,
                         ),
                     )
                     return@flow
@@ -281,6 +366,8 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                             input.action,
                             input.batch,
                             input.readOutcomes,
+                            input.edit,
+                            input.presets,
                         ),
                     )
                 } catch (e: CancellationException) {
@@ -456,6 +543,11 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             is ChannelsAction.SetAccountDisabled -> setAccountDisabled(action.accountId, action.disabled)
             is ChannelsAction.CheckinAccount -> checkinAccount(action.accountId)
             is ChannelsAction.ReadAccountQuota -> readAccountQuota(action.accountId)
+            is ChannelsAction.UpdateAccountDetails -> updateAccountDetails(action.accountId, action.patch)
+            is ChannelsAction.SetAccountTags -> setAccountTags(action.accountId, action.tags)
+            is ChannelsAction.SetAccountNote -> setAccountNote(action.accountId, action.note)
+            ChannelsAction.LoadPresets -> loadPresets()
+            is ChannelsAction.AttachPresets -> attachPresets(action.providerId, action.ids)
             is ChannelsAction.BatchRefresh -> runBatch(BatchKind.REFRESH, action.ids)
             is ChannelsAction.BatchSetDisabled ->
                 runBatch(if (action.disabled) BatchKind.DISABLE else BatchKind.ENABLE, action.ids)
@@ -727,6 +819,131 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                     "读取额度失败，请重试",
                     AccountActionKind.QUOTA,
                 )
+            }
+        }
+    }
+
+    // ——— 账号详情 / 标签 / 备注 / 预设（对齐桌面 channels.js 的账号级入口） ———
+
+    /**
+     * 账号详情/设置：只把**改动过的字段**发给服务端（`AccountSettingsPatch` 里为 null 的一律不带）。
+     * 回包 `{"account":snapshot}` 直接替换那一行，卡片状态立刻一致。
+     */
+    fun updateAccountDetails(accountId: String, patch: AccountSettingsPatch) {
+        if (patch.isEmpty) {
+            accountEdit.value = AccountEditUiState.Failed(
+                accountId,
+                AccountEditKind.DETAILS,
+                "empty_patch",
+                "没有改动任何字段",
+            )
+            return
+        }
+        runAccountEdit(
+            accountId = accountId,
+            kind = AccountEditKind.DETAILS,
+            block = { status -> accountsClient.updateAccountSettings(status, accountId, patch) },
+            apply = { row -> mergeAccountRow(row) },
+        )
+    }
+
+    /** 标签：传完整列表（空列表 = 清空），成功用服务端回显的列表就地更新。 */
+    fun setAccountTags(accountId: String, tags: List<String>) {
+        runAccountEdit(
+            accountId = accountId,
+            kind = AccountEditKind.TAGS,
+            block = { status -> accountsClient.setAccountTags(status, accountId, tags) },
+            apply = { ack ->
+                currentAccountRows().firstOrNull { it.accountId == accountId }?.let { row ->
+                    mergeAccountRow(row.copy(tags = ack))
+                }
+            },
+        )
+    }
+
+    /** 备注：空字符串 = 清空（服务端 `SetNote` 直接覆盖，不区分"没改"）。 */
+    fun setAccountNote(accountId: String, note: String) {
+        runAccountEdit(
+            accountId = accountId,
+            kind = AccountEditKind.NOTE,
+            block = { status -> accountsClient.setAccountNote(status, accountId, note) },
+            apply = { ack ->
+                currentAccountRows().firstOrNull { it.accountId == accountId }?.let { row ->
+                    mergeAccountRow(row.copy(note = ack))
+                }
+            },
+        )
+    }
+
+    /** 挂载预设到渠道；`ids` 为空数组时服务端会解绑该渠道的全部预设。 */
+    fun attachPresets(providerId: String, ids: List<String>) {
+        runAccountEdit(
+            accountId = providerId,
+            kind = AccountEditKind.PRESETS,
+            block = { status -> accountsClient.attachProviderPresets(status, providerId, ids) },
+            apply = { view -> presets.value = PresetsUiState.Ready(view) },
+        )
+    }
+
+    /** 预设列表：打开预设弹窗时拉一次。 */
+    fun loadPresets() {
+        if (presets.value is PresetsUiState.Loading) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            presets.value = PresetsUiState.Failed("gateway_not_running", "网关未启动")
+            return
+        }
+        presets.value = PresetsUiState.Loading
+        viewModelScope.launch {
+            try {
+                val view = withContext(Dispatchers.IO) { accountsClient.fetchPresets(status) }
+                presets.value = PresetsUiState.Ready(view)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                presets.value = PresetsUiState.Failed(e.code, e.message)
+            } catch (_: Exception) {
+                presets.value = PresetsUiState.Failed("unknown", "读取预设失败，请重试")
+            }
+        }
+    }
+
+    /**
+     * 账号级编辑的公共壳：单飞（卡片动作或另一个编辑在进行时直接返回）；
+     * 失败只落到 [accountEdit]（对话框里显示），不污染卡片上的动作错误。
+     */
+    private fun <T> runAccountEdit(
+        accountId: String,
+        kind: AccountEditKind,
+        block: (GatewayStatus) -> T,
+        apply: (T) -> Unit,
+    ) {
+        if (
+            accountId.isBlank() ||
+            accountAction.value is AccountActionUiState.Busy ||
+            accountEdit.value is AccountEditUiState.Saving
+        ) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            accountEdit.value = AccountEditUiState.Failed(accountId, kind, "gateway_not_running", "网关未启动")
+            return
+        }
+        accountEdit.value = AccountEditUiState.Saving(accountId, kind)
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { block(status) }
+                apply(result)
+                accountEdit.value = AccountEditUiState.Idle
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                accountEdit.value = AccountEditUiState.Failed(accountId, kind, e.code, e.message)
+            } catch (_: Exception) {
+                accountEdit.value = AccountEditUiState.Failed(accountId, kind, "unknown", "保存失败，请重试")
             }
         }
     }

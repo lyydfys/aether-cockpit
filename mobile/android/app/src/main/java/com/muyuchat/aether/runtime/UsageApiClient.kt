@@ -24,6 +24,14 @@ data class UsageDayPoint(
     val cost: Double,
 )
 
+data class UsageProviderRow(
+    val id: String,
+    val name: String,
+    val calls: Long,
+    val errors: Long,
+    val cost: Double,
+)
+
 data class UsageSummary(
     val period: String,
     val calls: Long,
@@ -35,6 +43,8 @@ data class UsageSummary(
     val cost: Double,
     val models: List<UsageModelRow>,
     val series: List<UsageDayPoint>,
+    /** `/api/usage` 的 `providers` 数组；概览聚合链路按它汇总 calls/errors/cost。 */
+    val providers: List<UsageProviderRow> = emptyList(),
 )
 
 /** Read-only projection of `/api/usage`; no prompts or request bodies are mapped. */
@@ -132,6 +142,25 @@ internal fun parseUsage(body: String): UsageSummary {
             )
         }
     }
+    val providers = root.optJSONArray("providers")
+    val providerRows = if (providers == null) {
+        emptyList()
+    } else {
+        (0 until providers.length()).mapNotNull { index ->
+            val item = providers.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.optString("id").trim()
+            if (id.isEmpty()) {
+                return@mapNotNull null
+            }
+            UsageProviderRow(
+                id = id,
+                name = item.optString("name").trim().ifBlank { id },
+                calls = item.optLong("calls", 0L).coerceAtLeast(0L),
+                errors = item.optLong("errors", 0L).coerceAtLeast(0L),
+                cost = item.optDouble("cost", 0.0).coerceAtLeast(0.0),
+            )
+        }
+    }
     return UsageSummary(
         period = root.optString("period").trim(),
         calls = root.optLong("calls", 0L).coerceAtLeast(0L),
@@ -143,5 +172,6 @@ internal fun parseUsage(body: String): UsageSummary {
         cost = root.optDouble("cost", 0.0).coerceAtLeast(0.0),
         models = modelRows,
         series = points,
+        providers = providerRows,
     )
 }

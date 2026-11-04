@@ -8,8 +8,10 @@ import com.muyuchat.aether.runtime.latestRequestLine
 import com.muyuchat.aether.runtime.latestRequestUnavailableLine
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.ManagementApiClient
+import com.muyuchat.aether.runtime.OverviewLinksState
 import com.muyuchat.aether.runtime.OverviewStats
 import com.muyuchat.aether.runtime.UsageApiClient
+import com.muyuchat.aether.runtime.overviewLinks
 import com.muyuchat.aether.runtime.overviewStats
 import com.muyuchat.aether.runtime.GatewayStatus
 import kotlinx.coroutines.Dispatchers
@@ -93,6 +95,33 @@ class OverviewViewModel(application: Application) : AndroidViewModel(application
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * 概览新增的两块：三步接入的完成状态 + 聚合链路。
+     *
+     * 与 [stats] 共用 `statsTrigger` / 网关状态：网关一启动就重拉；渠道和用量分别失败，
+     * 一侧失败不会把另一侧判成空（[OverviewLinksState.providersLoaded] /
+     * [OverviewLinksState.usageLoaded] 分开表达）。
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val links: StateFlow<OverviewLinksState?> =
+        combine(repository.status, statsTrigger) { status, tick -> status to tick }
+            .flatMapLatest { (status, _) ->
+                flow {
+                    if (!status.running) {
+                        emit(OverviewLinksState())
+                        return@flow
+                    }
+                    val providers = runCatching {
+                        withContext(Dispatchers.IO) { managementClient.fetchProviders(status) }
+                    }.getOrNull()
+                    val usage = runCatching {
+                        withContext(Dispatchers.IO) { usageClient.fetchUsage(status, "today") }
+                    }.getOrNull()
+                    emit(overviewLinks(providers, usage))
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**
      * 「最近一次模型请求」：概览页用它回答"这台手机的网关到底被客户端用过没有"。

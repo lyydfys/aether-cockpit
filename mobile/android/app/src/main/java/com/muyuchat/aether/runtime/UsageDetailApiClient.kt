@@ -53,26 +53,6 @@ data class StripDay(
     val placeholder: Boolean,
 )
 
-data class QuotaPoint(
-    val at: String,
-    val left: Int,
-    val resetsAt: String,
-)
-
-data class QuotaLine(
-    val name: String,
-    val points: List<QuotaPoint>,
-) {
-    /** 最新一条；没有点时为 null（页面据此显示"无数据"而不是 0%）。 */
-    fun latest(): QuotaPoint? = points.lastOrNull()
-}
-
-data class QuotaHistoryAccount(
-    val provider: String,
-    val user: String,
-    val lines: List<QuotaLine>,
-)
-
 data class PriceRow(
     val pattern: String,
     val inputPerM: Double,
@@ -90,9 +70,9 @@ data class PricingCatalog(
 )
 
 /**
- * 用量细分的只读客户端：热力图 / 配额历史 / 价格表。
+ * 用量细分的只读客户端：热力图 / 价格表。
  *
- * 三个都是纯读接口，且**全部走管理会话**（caller key 读不到）。价格表在这里只读，
+ * 两个都是纯读接口，且**全部走管理会话**（caller key 读不到）。价格表在这里只读，
  * 编辑留在桌面端：改错单价会直接改掉账本口径，不该在手机上顺手改。
  */
 class UsageDetailApiClient(
@@ -101,9 +81,6 @@ class UsageDetailApiClient(
 ) {
     fun fetchHeatmap(status: GatewayStatus): UsageHeatmap =
         parseUsageHeatmap(get(status, "/api/usage/heatmap"))
-
-    fun fetchQuotaHistory(status: GatewayStatus, days: Int = 45): List<QuotaHistoryAccount> =
-        parseQuotaHistory(get(status, "/api/usage/quotas/history?days=${days.coerceIn(1, 90)}"))
 
     fun fetchPricing(status: GatewayStatus): PricingCatalog =
         parsePricing(get(status, "/api/pricing"))
@@ -174,44 +151,6 @@ internal fun parseUsageHeatmap(body: String): UsageHeatmap {
         )
     }
     return UsageHeatmap(days = days, from = root.optString("from"), to = root.optString("to"))
-}
-
-internal fun parseQuotaHistory(body: String): List<QuotaHistoryAccount> {
-    val array = try {
-        JSONArray(body.trim())
-    } catch (_: JSONException) {
-        throw ManagementApiException("invalid_response", "管理接口返回的配额历史格式不正确")
-    }
-    return (0 until array.length()).mapNotNull { index ->
-        val item = array.optJSONObject(index) ?: return@mapNotNull null
-        val provider = item.optString("provider").trim()
-        if (provider.isEmpty()) {
-            return@mapNotNull null
-        }
-        val linesArray = item.optJSONArray("lines") ?: JSONArray()
-        val lines = (0 until linesArray.length()).mapNotNull { lineIndex ->
-            val line = linesArray.optJSONObject(lineIndex) ?: return@mapNotNull null
-            val pointsArray = line.optJSONArray("points") ?: JSONArray()
-            val points = (0 until pointsArray.length()).mapNotNull { pointIndex ->
-                val point = pointsArray.optJSONObject(pointIndex) ?: return@mapNotNull null
-                val at = point.optString("at").trim()
-                if (at.isEmpty()) {
-                    return@mapNotNull null
-                }
-                QuotaPoint(
-                    at = at,
-                    left = point.optInt("left", 0).coerceIn(0, 100),
-                    resetsAt = point.optString("resetsAt").trim(),
-                )
-            }
-            QuotaLine(name = line.optString("name").trim().ifBlank { "默认周期" }, points = points)
-        }
-        QuotaHistoryAccount(
-            provider = provider,
-            user = item.optString("user").trim(),
-            lines = lines,
-        )
-    }
 }
 
 internal fun parsePricing(body: String): PricingCatalog {

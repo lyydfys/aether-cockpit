@@ -1,6 +1,7 @@
 package com.muyuchat.aether.ui
 
 import android.content.Intent
+import android.app.Application
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -35,23 +36,50 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
+import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.CallerKeySummary
+import com.muyuchat.aether.runtime.ManagementApiException
+import com.muyuchat.aether.runtime.MaskingApiClient
+import com.muyuchat.aether.runtime.MaskingPreview
+import com.muyuchat.aether.runtime.MaskingRecords
 import com.muyuchat.aether.runtime.RedactCustomRule
 import com.muyuchat.aether.runtime.RedactRule
 import com.muyuchat.aether.runtime.effectiveAction
+import com.muyuchat.aether.runtime.maskingHitSummary
+import com.muyuchat.aether.runtime.maskingPreviewBlockedNote
+import com.muyuchat.aether.runtime.maskingPreviewOffNote
+import com.muyuchat.aether.runtime.maskingRecordHitLabel
+import com.muyuchat.aether.runtime.maskingRecordSourceLine
+import com.muyuchat.aether.runtime.maskingRecordsEmptyDetail
+import com.muyuchat.aether.runtime.maskingTimestamp
+import com.muyuchat.aether.runtime.MaskingRecord
 import com.muyuchat.aether.runtime.validateRedactCustomRule
 import com.muyuchat.aether.runtime.SettingsSummary
 import com.muyuchat.core.designsystem.McaButton
+import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun SettingsPage(
@@ -1238,6 +1266,10 @@ private fun SettingsSections(
             )
             SettingsRow("白名单", "${settings.redactAllowCount} 条")
         }
+        // 桌面脱敏视图的两张卡（misc.js:444 试一试 / :460 最近的脱敏记录）。
+        // 两张卡自带 ViewModel，因此不需要在 GatewayHome 增参。
+        MaskingTryoutSection()
+        MaskingRecordsSection()
         SettingsSection("平台") {
             SettingsRow("本机运行形态", if (settings.desktopApp) "桌面端" else "Android 独立运行")
             SettingsRow("仅 Windows 能力", "不在手机端提供")
@@ -1371,4 +1403,333 @@ private fun SettingsErrorCard(code: String, message: String, onRetry: () -> Unit
         actionLabel = "重试",
         onAction = onRetry,
     )
+}
+
+/* ============================================================================
+ * 脱敏「试一试」+「最近的脱敏记录」
+ *
+ * 桌面出处：views/misc.js:444（card '试一试'）与 :460（card '最近的脱敏记录'）。
+ * 端点：POST /api/masking/preview（gateway.go:1157 → masking_api.go:439-456）、
+ *       GET  /api/masking/records（gateway.go:1154 → masking_api.go:270-337）。
+ *
+ * 两条硬边界：
+ * 1) 预览文本只在本机内存里走一趟：不写设置、不落盘、不进脱敏记录
+ *    （服务端 Preview() 明确"不记录、不写入内存映射"，redact.go:870-872）。
+ * 2) 记录只展示"命中几处 / 命中哪些类型"；原文、占位符原值、实际发出的文本一律不读
+ *    （masking_api.go:30 的口径，也符合架构文档"不展示请求正文"）。
+ * ========================================================================== */
+
+/** 预览输入上限：只防误粘贴整篇日志，服务端本身允许 1MB。 */
+private const val MaskingPreviewMaxChars = 4000
+
+sealed interface MaskingPreviewUiState {
+    data object Idle : MaskingPreviewUiState
+    data object Running : MaskingPreviewUiState
+    data class Ready(val preview: MaskingPreview) : MaskingPreviewUiState
+    data class Failed(val code: String, val message: String) : MaskingPreviewUiState
+}
+
+sealed interface MaskingRecordsUiState {
+    data object Idle : MaskingRecordsUiState
+    data object Loading : MaskingRecordsUiState
+    data class Ready(val records: MaskingRecords) : MaskingRecordsUiState
+    data class Failed(val code: String, val message: String) : MaskingRecordsUiState
+}
+
+/** 两张脱敏卡共用的状态（预览草稿 + 记录列表）。草稿只活在内存，不写任何设置。 */
+class MaskingToolsViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = GatewayRuntimeRepository(application)
+    private val client = MaskingApiClient()
+
+    private val _text = MutableStateFlow("")
+    val text: StateFlow<String> = _text.asStateFlow()
+
+    private val _preview = MutableStateFlow<MaskingPreviewUiState>(MaskingPreviewUiState.Idle)
+    val preview: StateFlow<MaskingPreviewUiState> = _preview.asStateFlow()
+
+    private val _records = MutableStateFlow<MaskingRecordsUiState>(MaskingRecordsUiState.Idle)
+    val records: StateFlow<MaskingRecordsUiState> = _records.asStateFlow()
+
+    fun setText(value: String) {
+        _text.value = value.take(MaskingPreviewMaxChars)
+    }
+
+    fun runPreview() {
+        val status = repository.status.value
+        if (!status.running) {
+            _preview.value = MaskingPreviewUiState.Failed("gateway_not_running", "网关未启动")
+            return
+        }
+        _preview.value = MaskingPreviewUiState.Running
+        viewModelScope.launch {
+            _preview.value = try {
+                MaskingPreviewUiState.Ready(
+                    withContext(Dispatchers.IO) { client.preview(status, _text.value) },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                MaskingPreviewUiState.Failed(e.code, e.message)
+            } catch (_: Exception) {
+                MaskingPreviewUiState.Failed("unknown", "预览失败，请重试")
+            }
+        }
+    }
+
+    fun loadRecords() {
+        val status = repository.status.value
+        if (!status.running) {
+            _records.value = MaskingRecordsUiState.Failed("gateway_not_running", "网关未启动")
+            return
+        }
+        if (_records.value !is MaskingRecordsUiState.Ready) {
+            _records.value = MaskingRecordsUiState.Loading
+        }
+        viewModelScope.launch {
+            _records.value = try {
+                MaskingRecordsUiState.Ready(withContext(Dispatchers.IO) { client.fetchRecords(status) })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                MaskingRecordsUiState.Failed(e.code, e.message)
+            } catch (_: Exception) {
+                MaskingRecordsUiState.Failed("unknown", "读取脱敏记录失败，请重试")
+            }
+        }
+    }
+}
+
+/** 试一试：输入 → 预览。整段文本只在本机内存与预览接口之间流动。 */
+@Composable
+internal fun MaskingTryoutSection(viewModel: MaskingToolsViewModel = viewModel()) {
+    val text by viewModel.text.collectAsStateWithLifecycle()
+    val preview by viewModel.preview.collectAsStateWithLifecycle()
+
+    SettingsSection("试一试") {
+        Text(
+            text = "只预览，不发请求：这段文本不会写进设置、不会落盘，也不会进入下面的脱敏记录。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Surface(
+            shape = McaShape.CardAction,
+            color = MaterialTheme.colorScheme.surface,
+            border = McaHairline.stroke(),
+        ) {
+            BasicTextField(
+                value = text,
+                onValueChange = viewModel::setText,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                minLines = 3,
+                maxLines = 8,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            McaButton(
+                onClick = viewModel::runPreview,
+                style = McaButtonStyle.Primary,
+                size = McaButtonSize.CardAction,
+                enabled = text.isNotBlank(),
+                loading = preview is MaskingPreviewUiState.Running,
+            ) {
+                Text(if (preview is MaskingPreviewUiState.Running) "预览中…" else "预览")
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "最多 $MaskingPreviewMaxChars 字",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        when (val current = preview) {
+            MaskingPreviewUiState.Idle -> Text(
+                text = "还没有预览。输入一段文本（密钥、邮箱、手机号都行）后点「预览」。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            MaskingPreviewUiState.Running -> Text(
+                text = "正在本机预览…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            is MaskingPreviewUiState.Failed -> Text(
+                text = if (current.code == "gateway_not_running") {
+                    "网关未启动：启动后才能预览。"
+                } else {
+                    "预览失败：${current.message}（错误码：${current.code}）"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            is MaskingPreviewUiState.Ready -> {
+                Text(
+                    text = "脱敏后（只在本机计算，没有发出去）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = current.preview.text.ifBlank { "（没有变化）" },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = maskingHitSummary(current.preview.hits),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                val offNote = maskingPreviewOffNote(current.preview)
+                if (offNote.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = offNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                val blockedNote = maskingPreviewBlockedNote(current.preview)
+                if (blockedNote.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = blockedNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 最近的脱敏记录：只读，含时间与命中规则数；不展示任何原文。 */
+@Composable
+internal fun MaskingRecordsSection(viewModel: MaskingToolsViewModel = viewModel()) {
+    val records by viewModel.records.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.loadRecords() }
+
+    SettingsSection("最近的脱敏记录") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "只显示命中处数与类型，不显示原文",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            McaButton(
+                onClick = viewModel::loadRecords,
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+                enabled = records !is MaskingRecordsUiState.Loading,
+            ) { Text(if (records is MaskingRecordsUiState.Loading) "读取中…" else "刷新") }
+        }
+        Spacer(Modifier.height(8.dp))
+        when (val current = records) {
+            MaskingRecordsUiState.Idle, MaskingRecordsUiState.Loading -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "正在读取脱敏记录…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            is MaskingRecordsUiState.Failed -> Text(
+                text = if (current.code == "gateway_not_running") {
+                    "网关未启动：启动后才能读取脱敏记录。"
+                } else {
+                    "读取失败：${current.message}（错误码：${current.code}）"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            is MaskingRecordsUiState.Ready -> {
+                val list = current.records.records
+                if (list.isEmpty()) {
+                    Text(
+                        text = maskingRecordsEmptyDetail(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    list.forEach { record -> MaskingRecordRow(record) }
+                    if (current.records.more) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "只取最近 ${list.size} 条；更早的记录在网关重启后已清空。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MaskingRecordRow(record: MaskingRecord) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = maskingTimestamp(record.atMs),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val source = maskingRecordSourceLine(record)
+            if (source.isNotEmpty()) {
+                Text(
+                    text = source,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            val kinds = record.kinds
+            if (kinds.isNotEmpty()) {
+                Text(
+                    text = kinds.joinToString("、"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = maskingRecordHitLabel(record),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (record.blocked) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            maxLines = 1,
+        )
+    }
 }

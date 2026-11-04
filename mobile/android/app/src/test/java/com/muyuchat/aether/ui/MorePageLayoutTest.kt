@@ -1,6 +1,7 @@
 package com.muyuchat.aether.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,6 +71,33 @@ class MorePageLayoutTest {
         val detail = moreSearchEmptyDetail("   ")
         assertTrue(detail.isNotBlank())
         assertTrue(detail.contains("9 个设置分组"))
+    }
+
+    @Test
+    fun notReadyNoticeExplainsMissingPageWithoutFakeStage() {
+        // 未接入的入口只弹一条说明：说清"没有手机页面 + 标「已接入」的才是能用的"。
+        // 不许再写"Stage 6 / 将在后续阶段接入"这种假进度——桌面端也没有占位页。
+        val notice = notReadyNoticeForWorkspace(title = "任务", subtitle = "唤醒队列")
+        assertTrue(notice.title, notice.title.contains("任务"))
+        assertTrue(notice.detail, notice.detail.contains("尚未移植"))
+        assertTrue(notice.detail, notice.detail.contains("已接入"))
+        assertFalse(notice.title, notice.title.contains("Stage"))
+        assertFalse(notice.detail, notice.detail.contains("Stage"))
+        assertFalse(notice.detail, notice.detail.contains("后续阶段"))
+    }
+
+    @Test
+    fun settingsGroupNoticeNamesTheGroupsThatActuallyExist() {
+        // 没接入的设置分组：点出手机端真正能改的是哪两组，而不是笼统"暂不支持"。
+        val notice = notReadyNoticeForSettingsGroup(
+            SettingsGroup("04", "预设", "客户端、模型与请求参数模板"),
+        )
+        assertTrue(notice.title, notice.title.contains("04"))
+        assertTrue(notice.title, notice.title.contains("预设"))
+        assertTrue(notice.detail, notice.detail.contains("桌面端"))
+        assertTrue(notice.detail, notice.detail.contains("网络与共享"))
+        assertTrue(notice.detail, notice.detail.contains("隐私"))
+        assertFalse(notice.detail, notice.detail.contains("后续阶段"))
     }
 
     private fun entry(action: WorkspaceAction): WorkspaceEntry =

@@ -19,7 +19,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.runtime.PriceRow
 import com.muyuchat.aether.runtime.PricingCatalog
-import com.muyuchat.aether.runtime.QuotaHistoryAccount
 import com.muyuchat.aether.runtime.StripDay
 import com.muyuchat.aether.runtime.formatMoney
 import com.muyuchat.aether.runtime.formatTokens
@@ -28,7 +27,6 @@ import com.muyuchat.core.designsystem.McaShape
 
 // 与概览页/用量页同一套节奏：卡内 16dp、行间 8~12dp，不再出现 2/6/14dp 这类随手值。
 private val CardPadding = 16.dp
-private val RowGap = 12.dp
 private val TightGap = 8.dp
 private val CellPadding = 4.dp
 
@@ -122,61 +120,6 @@ private fun HeatmapCell(day: StripDay, peak: Int) {
     }
 }
 
-/** 配额历史：每个渠道/账号一行，显示各自周期线的**最新剩余**与重置时间。 */
-@Composable
-internal fun UsageQuotaSection(accounts: List<QuotaHistoryAccount>, error: String?) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = McaShape.Sheet,
-        color = MaterialTheme.colorScheme.surface,
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(CardPadding)) {
-            Text(
-                text = "配额历史",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(TightGap))
-            when {
-                error != null -> Text(
-                    text = "读不到配额历史：$error",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                accounts.isEmpty() -> Text(
-                    text = quotaHistoryEmptyHint(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                else -> accounts.forEach { account ->
-                    Spacer(Modifier.height(RowGap))
-                    Text(
-                        text = if (account.user.isBlank()) account.provider else "${account.provider} · ${account.user}",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    account.lines.forEach { line ->
-                        val latest = line.latest()
-                        Text(
-                            text = if (latest == null) {
-                                "${line.name}：无采样点"
-                            } else {
-                                "${line.name}：剩余 ${latest.left}%" +
-                                    if (latest.resetsAt.isNotBlank()) " · 重置于 ${shortStamp(latest.resetsAt)}" else ""
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 /** 价格表：**只读**。编辑留在桌面端——改错单价会直接改掉账本口径。 */
 @Composable
 internal fun UsagePricingSection(pricing: PricingCatalog, error: String?) {
@@ -263,16 +206,6 @@ private fun PriceLine(row: PriceRow, currency: String, overridden: Boolean) {
     }
 }
 
-/** ISO 时间只留 `MM-DD HH:mm`（UTC），避免长串把一行撑开。 */
-internal fun shortStamp(iso: String): String {
-    val trimmed = iso.trim()
-    if (trimmed.length < 16) {
-        return trimmed
-    }
-    // 2026-10-27T21:38:03Z → 10-27 21:38
-    return trimmed.substring(5, 10) + " " + trimmed.substring(11, 16)
-}
-
 /** token 数展示复用 runtime 里的同一个格式化函数，避免两套小数位。 */
 internal fun heatmapTokensLabel(day: StripDay): String = formatTokens(day.tokens)
 
@@ -280,11 +213,6 @@ internal fun heatmapTokensLabel(day: StripDay): String = formatTokens(day.tokens
 internal fun heatmapEmptyHint(): String =
     "为什么空：服务端最近没有返回任何按天的记录——空不等于 0 次调用。" +
         "下一步：发出一次请求后回来刷新，这一节会按天亮起来。"
-
-/** 配额历史空态：为什么空 + 下一步（页面上的动作最多一个，这里只指路）。 */
-internal fun quotaHistoryEmptyHint(): String =
-    "为什么空：只有服务端曾经返回过额度数据的账号才会出现在这里，其余账号不会写 0%。" +
-        "下一步：到「额度」页读一次额度（那一步会拉最新周期），再回来刷新这一节。"
 
 /** 价格表空态：为什么空 + 下一步。 */
 internal fun pricingEmptyHint(): String =

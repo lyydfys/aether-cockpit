@@ -67,6 +67,50 @@ data class AccountQuotaRow(
     val quotaMessage: String,
     /** `quota.read_at`（`contract.go:249`）：>0 表示这个账号**被读过**额度，用来区分"没读过"与"读了但没有窗口"。 */
     val quotaReadAt: Long = 0L,
+    /** 账号级路由参数（`env.go:799-817`）：优先级 / 权重 / 并发上限 / 允许模型白名单。 */
+    val priority: Int = 0,
+    val weight: Int = 0,
+    /** null = 跟随全局（服务端 `concurrency` 是 `*int`，见 `env.go:815`）。 */
+    val concurrency: Int? = null,
+    val allowedModels: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val note: String = "",
+)
+
+/**
+ * 账号设置的补丁：**只带要改的字段**。
+ *
+ * 服务端 `handleAccountSettings`（`accounts_api.go:82-95`）的字段全是 `*T`，缺省即"不修改"；
+ * `concurrency = -1` 表示跟随全局（`:103-108`）。`clearAllowedModels` 单独建模，
+ * 因为要把空数组**真的发出去**才等于清空白名单。
+ */
+data class AccountSettingsPatch(
+    val disabled: Boolean? = null,
+    val priority: Int? = null,
+    val weight: Int? = null,
+    val concurrency: Int? = null,
+    val clearAllowedModels: Boolean = false,
+) {
+    val isEmpty: Boolean
+        get() = disabled == null && priority == null && weight == null &&
+            concurrency == null && !clearAllowedModels
+}
+
+/** 请求预设（`GET /api/presets` 的 `presets[]`；敏感 Header 服务端已脱敏，见 `request_presets.go:317-323`）。 */
+data class RequestPreset(
+    val id: String,
+    val name: String,
+    val description: String,
+    val enabled: Boolean,
+    val hasSystemPrompt: Boolean,
+    val bodyCount: Int,
+    val headerCount: Int,
+)
+
+/** `GET /api/presets` / `POST /api/presets/attach` 的回包（`presetsView`，`request_presets.go:333-337`）。 */
+data class PresetsView(
+    val presets: List<RequestPreset>,
+    val providerPresets: Map<String, List<String>>,
 )
 
 /**
@@ -326,6 +370,107 @@ class AccountQuotaApiClient(
         return parseQuotaRead(accountId, response)
     }
 
+    // ——— 账号详情/设置、标签、备注、预设（桌面 channels.js 那几个账号级入口） ———
+
+    /**
+     * 账号设置：`POST /api/accounts/{id}/settings`（`gateway.go:1074` → `accounts_api.go:71-134`）。
+     *
+     * **只发改动的字段**：服务端每个字段都是 `*T`，缺省即不修改（和桌面"全量提交"不同，
+     * 手机端更保守——没动过的字段不碰）。回包是 `{"account":<snapshot>}`，就地更新卡片。
+     */
+    fun updateAccountSettings(
+        status: GatewayStatus,
+        accountId: String,
+        patch: AccountSettingsPatch,
+    ): AccountQuotaRow {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateAccountId(accountId)?.let { code -> throw ManagementApiException(code, "账号 id 不合法") }
+        if (patch.isEmpty) {
+            throw ManagementApiException("empty_patch", "没有任何改动")
+        }
+        val response = request(
+            status = status,
+            method = "POST",
+            path = accountSettingsPath(accountId),
+            body = buildAccountSettingsJson(patch),
+            timeoutMs = readTimeoutMs,
+        )
+        return parseAccountSnapshot(response)
+    }
+
+    /** 标签：`POST /api/accounts/{id}/tags`（`accounts_api.go:19-44`）。**空列表 = 清空标签**。 */
+    fun setAccountTags(status: GatewayStatus, accountId: String, tags: List<String>): List<String> {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateAccountId(accountId)?.let { code -> throw ManagementApiException(code, "账号 id 不合法") }
+        val response = request(
+            status = status,
+            method = "POST",
+            path = accountTagsPath(accountId),
+            body = buildAccountTagsJson(tags),
+            timeoutMs = readTimeoutMs,
+        )
+        return parseTagsAck(response)
+    }
+
+    /** 备注：`POST /api/accounts/{id}/note`（`accounts_api.go:46-69`）。**空字符串 = 清空备注**。 */
+    fun setAccountNote(status: GatewayStatus, accountId: String, note: String): String {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateAccountId(accountId)?.let { code -> throw ManagementApiException(code, "账号 id 不合法") }
+        val response = request(
+            status = status,
+            method = "POST",
+            path = accountNotePath(accountId),
+            body = buildAccountNoteJson(note),
+            timeoutMs = readTimeoutMs,
+        )
+        return parseNoteAck(response)
+    }
+
+    /** 预设列表：`GET /api/presets`（`request_presets.go:340-343`）。 */
+    fun fetchPresets(status: GatewayStatus): PresetsView {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        val response = request(status, "GET", presetsPath(), body = null, timeoutMs = readTimeoutMs)
+        return parsePresets(response)
+    }
+
+    /**
+     * 把预设挂到**渠道**上：`POST /api/presets/attach`（`request_presets.go:575-652`）。
+     * `ids` 传空数组 = 解绑该渠道的全部预设（handler 里 `delete(ProviderPresets, key)`）。
+     */
+    fun attachProviderPresets(
+        status: GatewayStatus,
+        providerId: String,
+        ids: List<String>,
+    ): PresetsView {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        if (providerId.isBlank()) {
+            throw ManagementApiException("provider_id_empty", "渠道 id 不能为空")
+        }
+        val response = request(
+            status = status,
+            method = "POST",
+            path = presetsAttachPath(),
+            body = buildPresetAttachJson(providerId, ids),
+            timeoutMs = readTimeoutMs,
+        )
+        return parsePresets(response)
+    }
+
     /** 网关没跑 / 没有会话凭据时一次请求都不发。 */
     private fun guardOf(status: GatewayStatus): ManagementApiException? = when {
         !status.running || status.addr.isBlank() -> ManagementApiException("gateway_not_running", "网关未启动")
@@ -395,6 +540,119 @@ internal fun accountSettingsPath(accountId: String): String =
 
 /** 批量端点路径（`gateway.go:1073` `POST /api/accounts/batch`）。 */
 internal fun accountsBatchPath(): String = "/api/accounts/batch"
+
+/** 标签 / 备注 / 预设端点（`gateway.go:1072-1074`、`gateway.go:808-811`）。 */
+internal fun accountTagsPath(accountId: String): String =
+    "/api/accounts/${encodeAccountSegment(accountId)}/tags"
+
+internal fun accountNotePath(accountId: String): String =
+    "/api/accounts/${encodeAccountSegment(accountId)}/note"
+
+internal fun presetsPath(): String = "/api/presets"
+
+internal fun presetsAttachPath(): String = "/api/presets/attach"
+
+/**
+ * 账号设置请求体：**只放改动过的字段**（缺省 = 不修改，见 `accounts_api.go:82-95`）。
+ * `clear_allowed_models` 落成 `"allowed_models": []`——必须真的发空数组才算清空。
+ */
+internal fun buildAccountSettingsJson(patch: AccountSettingsPatch): String {
+    val json = JSONObject()
+    patch.disabled?.let { json.put("disabled", it) }
+    patch.priority?.let { json.put("priority", it) }
+    patch.weight?.let { json.put("weight", it) }
+    patch.concurrency?.let { json.put("concurrency", it) }
+    if (patch.clearAllowedModels) {
+        json.put("allowed_models", JSONArray())
+    }
+    return json.toString()
+}
+
+/** 标签请求体：`{"tags":[…]}`；空数组会真的发出去（清空语义）。 */
+internal fun buildAccountTagsJson(tags: List<String>): String =
+    JSONObject().put("tags", JSONArray(cleanTagList(tags))).toString()
+
+/** 备注请求体：`{"note":"…"}`；空字符串会真的发出去（清空语义）。 */
+internal fun buildAccountNoteJson(note: String): String =
+    JSONObject().put("note", note).toString()
+
+/** 预设挂载请求体：`{"scope":"provider","key":<pid>,"ids":[…]}`（`request_presets.go:575-579`）。 */
+internal fun buildPresetAttachJson(providerId: String, ids: List<String>): String {
+    val json = JSONObject()
+    json.put("scope", "provider")
+    json.put("key", providerId)
+    json.put("ids", JSONArray(ids.map { it.trim() }.filter { it.isNotEmpty() }.distinct()))
+    return json.toString()
+}
+
+/**
+ * 把用户输入切成标签：逗号（中英文）/空白分隔、去重、最多 8 个。
+ * 与桌面 `tagDialog`（`channels.js:460`）的口径一致。
+ */
+internal fun parseTagInput(input: String): List<String> = input
+    .split(Regex("[,，\\s]+"))
+    .map { it.trim() }
+    .filter { it.isNotEmpty() }
+    .distinct()
+    .take(MAX_ACCOUNT_TAGS)
+
+/** 服务端标签列表也按同一口径清洗（去空、去重、上限 8）。 */
+internal fun cleanTagList(tags: List<String>): List<String> = tags
+    .map { it.trim() }
+    .filter { it.isNotEmpty() }
+    .distinct()
+    .take(MAX_ACCOUNT_TAGS)
+
+/** 账号标签上限（桌面 `tagDialog` 的 `slice(0, 8)`）。 */
+internal const val MAX_ACCOUNT_TAGS = 8
+
+/** `{"account_id":…,"tags":[…]}` → 标签列表。 */
+internal fun parseTagsAck(body: String): List<String> {
+    val root = objectOrThrow(body, "标签")
+    val array = root.optJSONArray("tags")
+        ?: throw ManagementApiException("invalid_response", "标签回包缺少 tags 字段")
+    return (0 until array.length()).mapNotNull { index -> array.optString(index).trim().ifBlank { null } }
+}
+
+/** `{"account_id":…,"note":"…"}` → 备注（服务端回显的值，可能是空串）。 */
+internal fun parseNoteAck(body: String): String {
+    val root = objectOrThrow(body, "备注")
+    if (!root.has("note")) {
+        throw ManagementApiException("invalid_response", "备注回包缺少 note 字段")
+    }
+    return root.optString("note")
+}
+
+/** `presetsView` → 预设列表 + 每个渠道挂载的预设 id。 */
+internal fun parsePresets(body: String): PresetsView {
+    val root = objectOrThrow(body, "预设")
+    val array = root.optJSONArray("presets")
+        ?: throw ManagementApiException("invalid_response", "预设回包缺少 presets 字段")
+    val presets = (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id").trim()
+        if (id.isEmpty()) {
+            return@mapNotNull null
+        }
+        RequestPreset(
+            id = id,
+            name = item.optString("name").trim().ifBlank { id },
+            description = item.optString("description").trim().take(160),
+            enabled = item.optBoolean("enabled", true),
+            hasSystemPrompt = item.optString("system_prompt").isNotBlank(),
+            bodyCount = item.optJSONObject("body")?.length() ?: 0,
+            headerCount = item.optJSONObject("headers")?.length() ?: 0,
+        )
+    }
+    val providerPresetsJson = root.optJSONObject("provider_presets")
+    val providerPresets = buildMap {
+        providerPresetsJson?.keys()?.forEach { key ->
+            val ids = providerPresetsJson.optJSONArray(key) ?: return@forEach
+            put(key, (0 until ids.length()).mapNotNull { ids.optString(it).trim().ifBlank { null } })
+        }
+    }
+    return PresetsView(presets = presets, providerPresets = providerPresets)
+}
 
 /** 单账号读额度路径（`gateway.go:1116` `POST /api/accounts/{id}/refresh`）。 */
 internal fun accountRefreshPath(accountId: String): String =
@@ -606,6 +864,21 @@ private fun parseAccountObject(item: JSONObject): AccountQuotaRow? {
         quotaUnit = snapshot?.unit ?: "",
         quotaMessage = snapshot?.message ?: "",
         quotaReadAt = snapshot?.readAt ?: 0L,
+        priority = item.optInt("priority", 0).coerceAtLeast(0),
+        weight = item.optInt("weight", 0).coerceAtLeast(0),
+        // concurrency 是 *int：缺省/为 null 表示跟随全局，不能和 0 混为一谈。
+        concurrency = if (item.has("concurrency") && !item.isNull("concurrency")) {
+            item.optInt("concurrency", 0).coerceAtLeast(0)
+        } else {
+            null
+        },
+        allowedModels = item.optJSONArray("allowed_models")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optString(it).trim().ifBlank { null } }
+        }.orEmpty(),
+        tags = item.optJSONArray("tags")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optString(it).trim().ifBlank { null } }
+        }.orEmpty(),
+        note = item.optString("note").trim().take(500),
     )
 }
 

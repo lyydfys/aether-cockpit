@@ -105,7 +105,7 @@ internal fun UsagePage(
                 }
             }
         }
-        // 细分四块各自独立：任何一块读不到都只在自己那张卡里报错。
+        // 细分各自独立：任何一块读不到都只在自己那张卡里报错。
         when (detail) {
             UsageDetailUiState.Idle -> Unit
             UsageDetailUiState.Loading -> item { UsageLoadingCard("正在读取用量细分…") }
@@ -124,10 +124,6 @@ internal fun UsagePage(
                         days = detail.heatmap.recentDays(30, today),
                         error = detail.errors["heatmap"],
                     )
-                }
-                item { QuotaPlanSection(running = status.running) }
-                item {
-                    UsageQuotaSection(accounts = detail.quotaHistory, error = detail.errors["quota"])
                 }
                 item {
                     UsagePricingSection(pricing = detail.pricing, error = detail.errors["pricing"])

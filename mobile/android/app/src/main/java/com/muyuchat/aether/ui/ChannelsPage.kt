@@ -1,7 +1,8 @@
-package com.muyuchat.aether.ui
+﻿package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +18,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -25,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +37,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
@@ -39,8 +48,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
+import org.json.JSONObject
 import com.muyuchat.aether.runtime.AccountCheckin
 import com.muyuchat.aether.runtime.AccountQuotaRow
+import com.muyuchat.aether.runtime.AccountSettingsPatch
+import com.muyuchat.aether.runtime.MAX_ACCOUNT_TAGS
+import com.muyuchat.aether.runtime.RequestPreset
+import com.muyuchat.aether.runtime.parseTagInput
 import com.muyuchat.aether.runtime.AccountQuotaWindow
 import com.muyuchat.aether.runtime.ChannelProbe
 import com.muyuchat.aether.runtime.GatewayStatus
@@ -117,6 +131,8 @@ internal fun ChannelsPage(
     val batchRunning = batchState is BatchUiState.Running
     val accounts = ready?.accounts.orEmpty()
     val filtered = filterAccountRows(accounts, filter, query)
+    // 「复制配置」用的接入地址（与概览页口径一致：本机 /v1）；网关没跑时留空，不发假地址。
+    val gatewayBaseUrl = if (status.running && status.addr.isNotBlank()) "http://${status.addr}/v1" else ""
     val visibleSelected = visibleSelection(selectedIds, filtered)
     val checkinTargets = batchCheckinTargets(filtered, visibleSelected)
     val allSelected = allVisibleSelected(visibleSelected, filtered)
@@ -262,6 +278,10 @@ internal fun ChannelsPage(
                                 toggling = toggling == row.providerId,
                                 modelsState = models[row.providerId],
                                 readOutcome = state.quotaReadOutcomes[row.accountId],
+                                edit = state.accountEdit,
+                                presetsState = state.presets,
+                                onAccountAction = onAction,
+                                baseUrl = gatewayBaseUrl,
                                 selectionMode = selecting,
                                 selected = row.accountId in visibleSelected,
                                 onToggleSelected = {
@@ -632,6 +652,10 @@ private fun AccountQuotaCard(
     toggling: Boolean,
     modelsState: ProviderModelsUiState?,
     readOutcome: QuotaReadOutcome? = null,
+    edit: AccountEditUiState = AccountEditUiState.Idle,
+    presetsState: PresetsUiState = PresetsUiState.Idle,
+    onAccountAction: (ChannelsAction) -> Unit = {},
+    baseUrl: String = "",
     selectionMode: Boolean = false,
     selected: Boolean = false,
     onToggleSelected: () -> Unit = {},
@@ -658,6 +682,8 @@ private fun AccountQuotaCard(
     // 「最近读数」要相对当前时刻算；每次重组取一次即可（不缓存，读过之后自然会变）。
     val nowMs = System.currentTimeMillis()
     val failure = (action as? AccountActionUiState.Failed)?.takeIf { it.accountId == row.accountId }
+    // 卡片级弹窗（桌面端那些账号入口在这里归到「更多」里，避免卡片按钮堆到三行以上）
+    var sheet by remember(row.accountId) { mutableStateOf(CardSheet.NONE) }
     val headingColor = if (row.disabled) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
@@ -717,6 +743,28 @@ private fun AccountQuotaCard(
                     } else {
                         "停用账号 ${row.label}"
                     },
+                )
+            }
+
+            // 标签 / 备注（桌面端就在卡片上；手机端同样常显，保存后立刻能看到结果）
+            if (row.tags.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "标签 ${row.tags.joinToString(" · ")}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (row.note.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = row.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
@@ -839,6 +887,15 @@ private fun AccountQuotaCard(
                             Text(if (probing) "探测中…" else "测试")
                         }
                     }
+                    // 桌面端更多菜单（详情/标签/备注/预设/复制配置）收进这一个按钮
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        McaButton(
+                            onClick = { sheet = CardSheet.MORE },
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        ) { Text("更多") }
+                    }
                 }
             }
         }
@@ -875,6 +932,18 @@ private fun AccountQuotaCard(
             },
         )
     }
+
+    AccountSheets(
+        sheet = sheet,
+        row = row,
+        provider = provider,
+        edit = edit,
+        presetsState = presetsState,
+        baseUrl = baseUrl,
+        onAction = onAccountAction,
+        onClose = { sheet = CardSheet.NONE },
+        onOpen = { next -> sheet = next },
+    )
 }
 
 /** 额度区：有窗口画窗口条，有总量/已用画一条总条，都没有就说明原因（绝不画 0%）。 */
@@ -1516,4 +1585,492 @@ private fun ErrorCard(code: String, message: String, onRetry: () -> Unit) {
             }
         }
     }
+}
+
+// ——— 卡片级弹窗：详情/设置、标签、备注、预设、复制配置（对齐桌面 channels.js） ———
+
+/** 卡片上「更多」里的入口。 */
+internal enum class CardSheet {
+    NONE,
+    MORE,
+    DETAILS,
+    TAGS,
+    NOTE,
+    PRESETS,
+    COPY,
+}
+
+/** 桌面端一样的小输入框：Surface(hairline) + BasicTextField，自己撑到 48dp。 */
+@Composable
+private fun ChannelTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String = "",
+    singleLine: Boolean = true,
+    minHeight: Int = 48,
+) {
+    Surface(
+        shape = McaShape.CardAction,
+        color = MaterialTheme.colorScheme.surface,
+        border = McaHairline.stroke(),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = singleLine,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = minHeight.dp)
+                .wrapContentHeight(Alignment.CenterVertically)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .semantics { contentDescription = label },
+            decorationBox = { inner ->
+                if (value.isEmpty() && placeholder.isNotEmpty()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                inner()
+            },
+        )
+    }
+}
+
+/** 保存失败时贴在弹窗里的那一行（错误码 + 服务端原文）。 */
+@Composable
+private fun EditFailureLine(edit: AccountEditUiState, accountId: String, kind: AccountEditKind) {
+    val failure = (edit as? AccountEditUiState.Failed)
+        ?.takeIf { it.accountId == accountId && it.kind == kind }
+        ?: return
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = "${failure.message}（错误码：${failure.code}）",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+    )
+}
+
+/** 保存成功后自动关弹窗：只在"刚才在保存 → 现在 Idle"时关，失败（Failed）留着让用户看原因。 */
+@Composable
+private fun CloseOnSaved(edit: AccountEditUiState, onSaved: () -> Unit) {
+    var wasSaving by remember { mutableStateOf(false) }
+    LaunchedEffect(edit) {
+        if (edit is AccountEditUiState.Idle && wasSaving) {
+            onSaved()
+        }
+        wasSaving = edit is AccountEditUiState.Saving
+    }
+}
+
+@Composable
+private fun AccountSheets(
+    sheet: CardSheet,
+    row: AccountQuotaRow,
+    provider: ProviderSummary?,
+    edit: AccountEditUiState,
+    presetsState: PresetsUiState,
+    baseUrl: String,
+    onAction: (ChannelsAction) -> Unit,
+    onClose: () -> Unit,
+    onOpen: (CardSheet) -> Unit,
+) {
+    if (sheet == CardSheet.NONE) {
+        return
+    }
+    val savingKind = (edit as? AccountEditUiState.Saving)?.takeIf { it.accountId == row.accountId }?.kind
+    McaDialog(
+        onDismissRequest = onClose,
+        title = {
+            Text(
+                text = when (sheet) {
+                    CardSheet.DETAILS -> "账号详情 · ${row.label}"
+                    CardSheet.TAGS -> "标签 · ${row.label}"
+                    CardSheet.NOTE -> "备注 · ${row.label}"
+                    CardSheet.PRESETS -> "渠道预设 · ${provider?.name ?: row.providerId}"
+                    CardSheet.COPY -> "复制配置 · ${row.label}"
+                    else -> "更多 · ${row.label}"
+                },
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            when (sheet) {
+                CardSheet.MORE -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val presetCount = (presetsState as? PresetsUiState.Ready)
+                        ?.view?.providerPresets?.get(row.providerId)?.size ?: 0
+                    McaButton(onClick = { onOpen(CardSheet.DETAILS) }, style = McaButtonStyle.Text) {
+                        Text("详情与设置（优先级 / 权重 / 并发）")
+                    }
+                    McaButton(onClick = { onOpen(CardSheet.TAGS) }, style = McaButtonStyle.Text) {
+                        Text(if (row.tags.isEmpty()) "添加标签" else "标签（${row.tags.size} 个）")
+                    }
+                    McaButton(onClick = { onOpen(CardSheet.NOTE) }, style = McaButtonStyle.Text) {
+                        Text(if (row.note.isBlank()) "添加备注" else "编辑备注")
+                    }
+                    McaButton(onClick = { onOpen(CardSheet.PRESETS) }, style = McaButtonStyle.Text) {
+                        Text(if (presetCount > 0) "预设（已挂 $presetCount 个）" else "预设")
+                    }
+                    McaButton(onClick = { onOpen(CardSheet.COPY) }, style = McaButtonStyle.Text) {
+                        Text("复制配置（不含凭据）")
+                    }
+                }
+                CardSheet.DETAILS -> AccountDetailsBody(
+                    row = row,
+                    edit = edit,
+                    saving = savingKind == AccountEditKind.DETAILS,
+                    onAction = onAction,
+                    onSaved = onClose,
+                )
+                CardSheet.TAGS -> AccountTagsBody(
+                    row = row,
+                    edit = edit,
+                    saving = savingKind == AccountEditKind.TAGS,
+                    onAction = onAction,
+                    onSaved = onClose,
+                )
+                CardSheet.NOTE -> AccountNoteBody(
+                    row = row,
+                    edit = edit,
+                    saving = savingKind == AccountEditKind.NOTE,
+                    onAction = onAction,
+                    onSaved = onClose,
+                )
+                CardSheet.PRESETS -> {
+                    LaunchedEffect(row.providerId) { onAction(ChannelsAction.LoadPresets) }
+                    AccountPresetsBody(
+                        row = row,
+                        presetsState = presetsState,
+                        saving = savingKind == AccountEditKind.PRESETS,
+                        onAction = onAction,
+                    )
+                }
+                CardSheet.COPY -> {
+                    val json = accountConfigJson(baseUrl, row.providerId, row.label)
+                    val clipboard = LocalClipboardManager.current
+                    Column {
+                        Text(
+                            text = json,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "只含接入地址、渠道 id 与账号名；凭据永远不进剪贴板。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        McaButton(
+                            onClick = {
+                                clipboard.setText(AnnotatedString(json))
+                                onClose()
+                            },
+                            style = McaButtonStyle.Outlined,
+                        ) { Text("复制到剪贴板") }
+                    }
+                }
+                CardSheet.NONE -> Unit
+                else -> Unit
+            }
+        },
+        confirmButton = {
+            McaButton(onClick = onClose, style = McaButtonStyle.Outlined) { Text("关闭") }
+        },
+    )
+}
+
+@Composable
+private fun AccountDetailsBody(
+    row: AccountQuotaRow,
+    edit: AccountEditUiState,
+    saving: Boolean,
+    onAction: (ChannelsAction) -> Unit,
+    onSaved: () -> Unit,
+) {
+    CloseOnSaved(edit, onSaved)
+    var priorityText by remember(row.accountId) { mutableStateOf(row.priority.toString()) }
+    var weightText by remember(row.accountId) { mutableStateOf((if (row.weight <= 0) 1 else row.weight).toString()) }
+    var concurrencyText by remember(row.accountId) { mutableStateOf(row.concurrency?.toString() ?: "") }
+    var disabledDraft by remember(row.accountId) { mutableStateOf(row.disabled) }
+    var clearWhitelist by remember(row.accountId) { mutableStateOf(false) }
+    val patch = accountSettingsPatch(row, priorityText, weightText, concurrencyText, disabledDraft, clearWhitelist)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "启用",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            McaSwitch(
+                checked = !disabledDraft,
+                onCheckedChange = { disabledDraft = !it },
+                enabled = !saving,
+                contentDescription = "启用账号",
+            )
+        }
+        ChannelTextField(
+            value = priorityText,
+            onValueChange = { priorityText = it },
+            label = "优先级",
+            placeholder = "0 = 默认，1 = 首选",
+        )
+        ChannelTextField(
+            value = weightText,
+            onValueChange = { weightText = it },
+            label = "权重",
+            placeholder = "1 - 1000",
+        )
+        ChannelTextField(
+            value = concurrencyText,
+            onValueChange = { concurrencyText = it },
+            label = "并发上限",
+            placeholder = "留空 = 跟随全局",
+        )
+        // 账号级白名单：桌面端已改为跟随渠道，这里只提供"清空"这一条真改动
+        if (row.allowedModels.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "账号级白名单 ${row.allowedModels.size} 个",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                McaChip(
+                    selected = clearWhitelist,
+                    onClick = { clearWhitelist = !clearWhitelist },
+                    label = { Text(if (clearWhitelist) "将清空" else "清空") },
+                    enabled = !saving,
+                )
+            }
+        } else {
+            Text(
+                text = "没有账号级白名单（跟随渠道模型勾选）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            text = "只提交改动过的字段；没动的保持服务端原值。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        EditFailureLine(edit, row.accountId, AccountEditKind.DETAILS)
+        McaButton(
+            onClick = { onAction(ChannelsAction.UpdateAccountDetails(row.accountId, patch)) },
+            style = McaButtonStyle.Primary,
+            enabled = !saving && !patch.isEmpty,
+        ) { Text(if (saving) "保存中…" else if (patch.isEmpty) "没有改动" else "保存") }
+    }
+}
+
+@Composable
+private fun AccountTagsBody(
+    row: AccountQuotaRow,
+    edit: AccountEditUiState,
+    saving: Boolean,
+    onAction: (ChannelsAction) -> Unit,
+    onSaved: () -> Unit,
+) {
+    CloseOnSaved(edit, onSaved)
+    var text by remember(row.accountId) { mutableStateOf(row.tags.joinToString(", ")) }
+    val tags = parseTagInput(text)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ChannelTextField(
+            value = text,
+            onValueChange = { text = it },
+            label = "标签",
+            placeholder = "逗号或空格分隔，最多 8 个",
+        )
+        Text(
+            text = if (tags.isEmpty()) "留空 = 清空标签" else "${tags.size} / $MAX_ACCOUNT_TAGS 个：${tags.joinToString(" · ")}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        EditFailureLine(edit, row.accountId, AccountEditKind.TAGS)
+        McaButton(
+            onClick = { onAction(ChannelsAction.SetAccountTags(row.accountId, tags)) },
+            style = McaButtonStyle.Primary,
+            enabled = !saving && tags != row.tags,
+        ) { Text(if (saving) "保存中…" else "保存") }
+    }
+}
+
+@Composable
+private fun AccountNoteBody(
+    row: AccountQuotaRow,
+    edit: AccountEditUiState,
+    saving: Boolean,
+    onAction: (ChannelsAction) -> Unit,
+    onSaved: () -> Unit,
+) {
+    CloseOnSaved(edit, onSaved)
+    var text by remember(row.accountId) { mutableStateOf(row.note) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ChannelTextField(
+            value = text,
+            onValueChange = { text = it },
+            label = "备注",
+            placeholder = "例如：主力号，额度月底重置",
+            singleLine = false,
+            minHeight = 96,
+        )
+        Text(
+            text = "留空 = 清空备注",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        EditFailureLine(edit, row.accountId, AccountEditKind.NOTE)
+        McaButton(
+            onClick = { onAction(ChannelsAction.SetAccountNote(row.accountId, text.trim())) },
+            style = McaButtonStyle.Primary,
+            enabled = !saving && text.trim() != row.note,
+        ) { Text(if (saving) "保存中…" else "保存") }
+    }
+}
+
+@Composable
+private fun AccountPresetsBody(
+    row: AccountQuotaRow,
+    presetsState: PresetsUiState,
+    saving: Boolean,
+    onAction: (ChannelsAction) -> Unit,
+) {
+    when (presetsState) {
+        PresetsUiState.Idle, PresetsUiState.Loading -> Text(
+            text = "正在读取预设…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        is PresetsUiState.Failed -> Text(
+            text = "${presetsState.message}（错误码：${presetsState.code}）",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        is PresetsUiState.Ready -> {
+            val view = presetsState.view
+            var selected by remember(row.providerId, view) {
+                mutableStateOf(view.providerPresets[row.providerId].orEmpty().toSet())
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (view.presets.isEmpty()) {
+                    Text(
+                        text = "还没有预设；先到桌面端「设置 → 预设」新建，再回来挂载。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    view.presets.forEach { preset ->
+                        PresetRow(
+                            preset = preset,
+                            selected = preset.id in selected,
+                            enabled = !saving,
+                            onToggle = {
+                                selected = if (preset.id in selected) selected - preset.id else selected + preset.id
+                            },
+                        )
+                    }
+                }
+                Text(
+                    text = "挂载是渠道级：同一渠道的所有账号共享这些预设；全部取消 = 解绑。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                McaButton(
+                    onClick = { onAction(ChannelsAction.AttachPresets(row.providerId, selected.toList())) },
+                    style = McaButtonStyle.Primary,
+                    enabled = !saving,
+                ) { Text(if (saving) "保存中…" else "保存挂载") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresetRow(
+    preset: RequestPreset,
+    selected: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onToggle)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SelectionMark(selected = selected)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = preset.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = buildString {
+                    append("Body ${preset.bodyCount} · Headers ${preset.headerCount}")
+                    if (preset.hasSystemPrompt) append(" · 提示词")
+                    if (!preset.enabled) append(" · 已停用")
+                    if (preset.description.isNotBlank()) append(" · ${preset.description}")
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * 详情表单 → 请求补丁：**只有和原值不同**的字段才非空（服务端缺省=不修改）。
+ *
+ * - 权重缺省按 1 算（服务端 omitempty，0 表示没设过）；
+ * - 并发清空 = `-1`（跟随全局，`accounts_api.go:103-108`）；
+ * - 白名单只在用户真的点了"清空"且原本非空时才发 `[]`。
+ */
+internal fun accountSettingsPatch(
+    row: AccountQuotaRow,
+    priorityText: String,
+    weightText: String,
+    concurrencyText: String,
+    disabledDraft: Boolean,
+    clearAllowedModels: Boolean,
+): AccountSettingsPatch {
+    val baseWeight = if (row.weight <= 0) 1 else row.weight
+    val priority = priorityText.trim().toIntOrNull()?.coerceAtLeast(0)?.takeIf { it != row.priority }
+    val weight = weightText.trim().toIntOrNull()?.coerceIn(1, 1000)?.takeIf { it != baseWeight }
+    val concurrencyText2 = concurrencyText.trim()
+    val concurrency = if (concurrencyText2.isEmpty()) {
+        // 清空输入 = 跟随全局；原本就是"跟随全局"时不算改动
+        if (row.concurrency == null) null else -1
+    } else {
+        concurrencyText2.toIntOrNull()?.coerceAtLeast(0)?.takeIf { it != row.concurrency }
+    }
+    return AccountSettingsPatch(
+        disabled = if (disabledDraft != row.disabled) disabledDraft else null,
+        priority = priority,
+        weight = weight,
+        concurrency = concurrency,
+        clearAllowedModels = clearAllowedModels && row.allowedModels.isNotEmpty(),
+    )
+}
+
+/** 「复制配置」的 JSON：只含接入地址、渠道 id、账号名——**凭据永不进剪贴板**。 */
+internal fun accountConfigJson(baseUrl: String, providerId: String, accountLabel: String): String {
+    val json = JSONObject()
+    json.put("base_url", baseUrl)
+    json.put("provider", providerId)
+    json.put("account", accountLabel)
+    return json.toString()
 }
