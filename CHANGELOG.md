@@ -1,5 +1,15 @@
 # 更新日志
 
+## 0.1.18（2026-11-04）
+
+### 积分类渠道第二轮：Kiro / MiniMax / Antigravity / ZCode
+
+- **Kiro**：额度域名从老的 `codewhisperer.*` 换成 `q.<region>.amazonaws.com`（GovCloud 用 `q-fips.`）；补 `resourceType=AGENTIC_REQUEST` 参数；**新增免费试用分支**（`freeTrialInfo`，试用账号此前一直显示"没额度"）；同时认 `usageBreakdowns.{plan,covered,bonus}` 与扁平 `credits` 两种新形状；`403 + BANNED` 判为终态（封禁不重试）。
+- **MiniMax**：补"只有计数、没有百分比"的兜底——`current_interval_usage_count` / `current_weekly_usage_count` 的语义是**剩余**（不是已用），按 `剩余/总量` 反算百分比。写反会让"还剩 90%"显示成"已用 90%"。
+- **Antigravity**：`remainingFraction` 缺失时回落到 `remainingAmount`（此前整个窗口被丢掉）；新增读取 `paidTier.availableCredits` 的积分余额。
+- **ZCode（新增）**：此前完全没有额度读取器。现在读 `zcode.z.ai/api/v1/zcode-plan/billing/balance`，多钱包求和（`remaining_units` 优先）、`code != 0` 按业务错误处理、`period_end` 取最小作重置时间；**API Key 模式静默不查询**（该接口只认 OAuth JWT，拿 Key 去打只会稳定 401）。
+- 错误语义：Kiro 的封禁、ZCode 的 401/404、Trae/Qoder/CodeBuddy 的"该路径不存在就换下一个候选"已分别处理，不再把"接口不存在"和"凭证失效"混成一句。
+
 ## 0.1.17（2026-11-04）
 
 ### 积分类渠道（签到/credits）读数修正

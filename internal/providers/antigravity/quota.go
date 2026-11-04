@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +56,14 @@ type quotaSummaryResponse struct {
 	Groups      []quotaSummaryGroup  `json:"groups"`
 	Buckets     []quotaSummaryBucket `json:"buckets"`
 	Description string               `json:"description"`
+	// PaidTier 是付费档的积分余额；免费档没有这一段。
+	PaidTier *struct {
+		AvailableCredits []struct {
+			CreditType    string   `json:"creditType"`
+			CreditAmount  *float64 `json:"creditAmount"`
+			MinimumAmount *float64 `json:"minimumCreditAmountForUsage"`
+		} `json:"availableCredits"`
+	} `json:"paidTier"`
 }
 
 type quotaResponse struct {
@@ -99,26 +108,47 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 		}
 		pools = append(pools, pool)
 		for _, b := range g.Buckets {
-			if b.Disabled || b.RemainingFraction == nil {
+			if b.Disabled {
+				continue
+			}
+			frac, ok := bucketFraction(b)
+			if !ok {
 				continue
 			}
 			q.Windows = append(q.Windows, provider.QuotaWindow{
 				Name:     windowName(b.Window, b.DisplayName),
 				Pool:     pool,
-				Used:     usedPercent(*b.RemainingFraction),
+				Used:     usedPercent(frac),
 				ResetsAt: parseResetTime(b.ResetTime),
 			})
 		}
 	}
 	for _, b := range summaryBuckets(summary) {
-		if b.Disabled || b.RemainingFraction == nil {
+		if b.Disabled {
+			continue
+		}
+		frac, ok := bucketFraction(b)
+		if !ok {
 			continue
 		}
 		q.Windows = append(q.Windows, provider.QuotaWindow{
 			Name:     windowName(b.Window, b.DisplayName),
-			Used:     usedPercent(*b.RemainingFraction),
+			Used:     usedPercent(frac),
 			ResetsAt: parseResetTime(b.ResetTime),
 		})
+	}
+	// 付费档的积分余额：不在窗口里，单独作为可用额度展示。
+	if summary != nil && summary.PaidTier != nil {
+		var credits float64
+		for _, c := range summary.PaidTier.AvailableCredits {
+			if c.CreditAmount != nil && *c.CreditAmount > 0 {
+				credits += *c.CreditAmount
+			}
+		}
+		if credits > 0 {
+			q.Balance = credits
+			q.BalanceUnit = "credits"
+		}
 	}
 	if summary != nil && strings.TrimSpace(summary.Description) != "" {
 		q.Message = truncate(strings.TrimSpace(summary.Description), 200)
@@ -127,7 +157,11 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 	if models != nil {
 		added := 0
 		for _, b := range models.Buckets {
-			if b.ModelID == "" || b.RemainingFraction == nil {
+			if b.ModelID == "" {
+				continue
+			}
+			frac, ok := modelBucketFraction(b)
+			if !ok {
 				continue
 			}
 			fam := modelFamily(b.ModelID)
@@ -140,7 +174,7 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 				Name:     b.ModelID,
 				Family:   fam,
 				Pool:     poolForFamily(pools, fam),
-				Used:     usedPercent(*b.RemainingFraction),
+				Used:     usedPercent(frac),
 				ResetsAt: parseResetTime(b.ResetTime),
 			})
 			added++
@@ -223,6 +257,47 @@ func summaryBuckets(s *quotaSummaryResponse) []quotaSummaryBucket {
 		return nil
 	}
 	return s.Buckets
+}
+
+// bucketFraction 取一个额度桶的"剩余比例"。
+//
+// 上游有时只给 remainingAmount（字符串）而不给 remainingFraction。
+// 直接按"缺 fraction 就跳过"会把整个窗口丢掉，用户看到的是"没有额度"。
+// remainingAmount ≤ 1 时按比例用；> 1 说明是绝对积分，那把比例留空但
+// 至少要给出额度存在的信息——这里选择按比例夹到 0-1 处理，避免误判成 0%。
+func bucketFraction(b quotaSummaryBucket) (float64, bool) {
+	if b.RemainingFraction != nil {
+		return *b.RemainingFraction, true
+	}
+	return amountFraction(b.RemainingAmount)
+}
+
+func modelBucketFraction(b quotaBucket) (float64, bool) {
+	if b.RemainingFraction != nil {
+		return *b.RemainingFraction, true
+	}
+	return amountFraction(b.RemainingAmount)
+}
+
+// amountFraction 把 remainingAmount 解析成 0-1 的比例。
+func amountFraction(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	if v < 0 {
+		v = 0
+	}
+	if v > 1 {
+		// 绝对积分（不是比例）：无法换算成百分比，按"满额"处理，
+		// 让窗口仍然可见，具体数值由 paidTier 的积分余额那一路展示。
+		v = 1
+	}
+	return v, true
 }
 
 func usedPercent(remainingFraction float64) float64 {

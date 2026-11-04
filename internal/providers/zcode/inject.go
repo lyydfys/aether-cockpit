@@ -12,10 +12,15 @@ import (
 	"aether-cockpit/internal/provider"
 )
 
-// Manifest 在 reverse 渠道基础上补充「一键切号」能力。
+// Manifest 在 reverse 渠道基础上补充「一键切号」与「额度读取」能力。
+//
+// 额度要在这里显式打开：reverse 用 Profile.QuotaKind != "" 推 Capabilities.Quota，
+// 而 ZCode 的额度是本包自己的实现（且只对 OAuth JWT 模式生效）。
+// 打开后界面才会去读；API Key 模式的账号由 QueryQuota 返回 nil 静默跳过。
 func (p *Provider) Manifest() provider.ProviderManifest {
 	m := p.Provider.Manifest()
 	m.Capabilities.LocalInject = true
+	m.Capabilities.Quota = true
 	return m
 }
 

@@ -200,11 +200,37 @@ type planRaw struct {
 	IntervalStart  *float64 `json:"start_time"`
 	IntervalEnd    *float64 `json:"end_time"`
 	IntervalTotal  *float64 `json:"current_interval_total_count"`
-	WeeklyPct      *float64 `json:"current_weekly_remaining_percent"`
-	WeeklyStatus   *int     `json:"current_weekly_status"`
-	WeeklyStart    *float64 `json:"weekly_start_time"`
-	WeeklyEnd      *float64 `json:"weekly_end_time"`
-	WeeklyTotal    *float64 `json:"current_weekly_total_count"`
+	// current_interval_usage_count 的字面意思是"使用数"，但上游语义是
+	// **剩余数**（参考实现里有单测钉住这一点）。这是最容易写反的字段：
+	// 当成已用会让"还剩 90%"显示成"已用 90%"。
+	IntervalUsedCount *float64 `json:"current_interval_usage_count"`
+	WeeklyPct         *float64 `json:"current_weekly_remaining_percent"`
+	WeeklyStatus      *int     `json:"current_weekly_status"`
+	WeeklyStart       *float64 `json:"weekly_start_time"`
+	WeeklyEnd         *float64 `json:"weekly_end_time"`
+	WeeklyTotal       *float64 `json:"current_weekly_total_count"`
+	WeeklyUsedCount   *float64 `json:"current_weekly_usage_count"`
+}
+
+// effectivePct 在"只有计数、没有百分比"时按 剩余/总量 反算百分比。
+//
+// 上游有时只下发 count 字段（`*_usage_count` 是**剩余**），没有百分比；
+// 这时如果直接跳过窗口，用户就看不到额度了。
+func effectivePct(pct, remainCount, total *float64) *float64 {
+	if pct != nil {
+		return pct
+	}
+	if remainCount == nil || total == nil || *total <= 0 {
+		return nil
+	}
+	v := *remainCount / *total * 100
+	if v < 0 {
+		v = 0
+	}
+	if v > 100 {
+		v = 100
+	}
+	return &v
 }
 
 // planWindows 读取 M Plan 的 5 小时/周窗口（aether planWindows 的等价实现）。
@@ -314,8 +340,10 @@ func (p *Provider) planWindows(ctx context.Context, env *provider.AccountEnv, to
 			}
 			out = append(out, w)
 		}
-		add(k.IntervalPct, numi(k.IntervalStatus), num(k.IntervalStart), num(k.IntervalEnd), false)
-		add(k.WeeklyPct, numi(k.WeeklyStatus), num(k.WeeklyStart), num(k.WeeklyEnd), true)
+		add(effectivePct(k.IntervalPct, k.IntervalUsedCount, k.IntervalTotal),
+			numi(k.IntervalStatus), num(k.IntervalStart), num(k.IntervalEnd), false)
+		add(effectivePct(k.WeeklyPct, k.WeeklyUsedCount, k.WeeklyTotal),
+			numi(k.WeeklyStatus), num(k.WeeklyStart), num(k.WeeklyEnd), true)
 	}
 	return out
 }

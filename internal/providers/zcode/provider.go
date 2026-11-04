@@ -199,4 +199,5 @@ var (
 	_ provider.BaseProvider          = (*Provider)(nil)
 	_ provider.ChatCapability        = (*Provider)(nil)
 	_ provider.LocalImportCapability = (*Provider)(nil)
+	_ provider.QuotaCapability       = (*Provider)(nil)
 )

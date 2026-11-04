@@ -47,8 +47,8 @@ func TestDiscoverLocalAccountsByRegion(t *testing.T) {
 	userInfo, _ := json.Marshal(map[string]string{"email": "dev@example.com"})
 	writeCreds(t, map[string]string{
 		"account-provider:coding-plan:account:bigmodel-team-coding-plan:account:58771773930227764:api-key": enc(t, "cn-key"),
-		"account-provider:coding-plan:account:zai-coding-plan:account:uuid-1:api-key":                       enc(t, "intl-key"),
-		"oauth:zai:user_info":  string(userInfo),
+		"account-provider:coding-plan:account:zai-coding-plan:account:uuid-1:api-key":                      enc(t, "intl-key"),
+		"oauth:zai:user_info":   string(userInfo),
 		"oauth:active_provider": "zai",
 	})
 
