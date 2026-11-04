@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只暴露 cacheDir/backups 这一层给 FileProvider：
+  备份文件是临时产物（导出后分享给别的应用），不该放进 filesDir 长期留存。
+-->
+<paths>
+    <cache-path name="backups" path="backups/" />
+    <!-- 本机自检摘要：临时诊断产物，导出即分享，不长期保留。 -->
+    <cache-path name="reports" path="reports/" />
+</paths>

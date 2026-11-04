@@ -8,6 +8,19 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// 版本号的唯一来源是 ../version.properties（Stage 7 发布门禁）：
+// scripts/check-mobile-release.sh 会读同一个文件去核对 APK，两边不一致就失败。
+// 这里**不提供默认值**——文件缺失或字段缺失就让构建直接失败，而不是悄悄用 1 和 "0.1.0"。
+val appVersion: Properties = Properties().apply {
+    val file = rootProject.file("version.properties")
+    check(file.isFile) { "missing version.properties: $file" }
+    file.inputStream().use { load(it) }
+}
+val appVersionCode: Int = (appVersion.getProperty("versionCode") ?: error("version.properties 缺少 versionCode"))
+    .trim().toIntOrNull() ?: error("version.properties 的 versionCode 不是整数")
+val appVersionName: String = (appVersion.getProperty("versionName") ?: error("version.properties 缺少 versionName")).trim()
+check(appVersionName.isNotEmpty()) { "version.properties 的 versionName 不能为空" }
+
 android {
     namespace = "com.muyuchat.aether"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -19,8 +32,8 @@ android {
         applicationId = "com.muyuchat.aether"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             // arm64-v8a is the only ABI shipped to real devices. x86_64 is added
@@ -33,6 +46,22 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    // Stage 7 冒烟签名：**默认关闭**。
+    //
+    // release 变体默认是没有签名配置的（产出 app-release-unsigned.apk），这是有意的：
+    // 发布签名不该由构建脚本自己决定。但"未签名"也意味着 release 变体从没被装上验证过。
+    // 所以给一条显式开关：只有 -PaetherSmokeSigning=true 时，才把 **debug keystore**
+    // 挂到 release 上，用于 scripts/check-mobile-release-smoke.sh 的装机冒烟。
+    // 带这个开关产出的 APK 不可发布、不可分发，脚本会打印 SMOKE SIGNING 警告。
+    buildTypes {
+        release {
+            if ((project.findProperty("aetherSmokeSigning") as String?)?.toBoolean() == true) {
+                signingConfig = signingConfigs.getByName("debug")
+                matchingFallbacks += listOf("debug")
+            }
+        }
     }
 
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs").get().asFile)

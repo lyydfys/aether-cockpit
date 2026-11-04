@@ -28,5 +28,19 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="local_ai_model_gateway" />
         </service>
+        <!--
+          备份导出用：把 cacheDir/backups 下的临时文件以 content:// 交给分享面板。
+          exported=false + grantUriPermissions：外部应用只能拿到我们显式授权的那个 URI，
+          不能遍历目录。文件名不含口令，口令只在导出请求体里出现。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>
