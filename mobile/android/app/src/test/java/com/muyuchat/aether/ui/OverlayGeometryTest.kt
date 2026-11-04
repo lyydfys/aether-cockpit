@@ -64,6 +64,18 @@ class OverlayGeometryTest {
     }
 
     @Test
+    fun dragOffsetUsesRawPixelDeltaAndClamps() {
+        assertEquals(140, OverlayGeometry.dragOffsetPx(100, 50f, 90f, 16, 900))
+        assertEquals(80, OverlayGeometry.dragOffsetPx(100, 50f, 30f, 16, 900))
+        assertEquals(16, OverlayGeometry.dragOffsetPx(100, 50f, -500f, 16, 900))
+        assertEquals(900, OverlayGeometry.dragOffsetPx(100, 50f, 900f, 16, 900))
+        assertEquals(100, OverlayGeometry.dragOffsetPx(100, Float.NaN, 90f, 16, 900))
+        assertEquals(100, OverlayGeometry.dragOffsetPx(100, 50f, Float.NaN, 16, 900))
+        // 起点本身越界时也先夹到活动区。
+        assertEquals(16, OverlayGeometry.dragOffsetPx(0, 50f, 50f, 16, 900))
+    }
+
+    @Test
     fun snapFractionGoesToNearestHorizontalEdge() {
         assertEquals(0f, OverlayGeometry.snapFraction(0.49f))
         assertEquals(1f, OverlayGeometry.snapFraction(0.5f))

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 internal/web/ui2/assets/icons/stepfun.svg 转换（brandicons.js 的品牌图标） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+            <path
+                android:fillColor="#FF191919"
+                android:fillType="evenOdd"
+                android:pathData="M22 0h1v1h1v.9h-1v1.9h-1V1.9h-1.9v-1h2zM2.6 12.4V1.9h1v10.5zM13 13h11v1h-6.2v9.5H13zM5.6 3.3v12.4H0v4.5h10.4V8h10.5V3.3z" />
+</vector>

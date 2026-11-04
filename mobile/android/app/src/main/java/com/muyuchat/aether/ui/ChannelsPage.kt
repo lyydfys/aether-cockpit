@@ -1,4 +1,4 @@
-﻿package com.muyuchat.aether.ui
+package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -74,7 +74,9 @@ import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
+import com.muyuchat.core.designsystem.McaPlateSize
 import com.muyuchat.core.designsystem.McaIconButton
+import com.muyuchat.core.designsystem.McaIconPlate
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaIcons
 import com.muyuchat.core.designsystem.McaShape
@@ -701,12 +703,30 @@ private fun AccountQuotaCard(
         border = McaHairline.stroke(),
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
-            // 名称 + 启用开关
+            // 名称 + 渠道品牌图标 + 启用开关（品牌图标按 provider_id 取，映射见 ProviderIcons.kt）
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (selectionMode) {
                     SelectionMark(selected = selected)
                     Spacer(Modifier.width(12.dp))
                 }
+                val brandIcon = providerIcon(row.providerId)
+                McaIconPlate(
+                    size = McaPlateSize.Medium,
+                    shape = McaShape.Badge,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ) {
+                    Icon(
+                        painter = painterResource(brandIcon.res),
+                        contentDescription = null,
+                        tint = if (brandIcon.mono) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            Color.Unspecified
+                        },
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = row.label,

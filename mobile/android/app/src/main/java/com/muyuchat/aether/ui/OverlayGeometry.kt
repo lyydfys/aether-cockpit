@@ -54,6 +54,31 @@ internal object OverlayGeometry {
     }
 
     /**
+     * 拖动中的绝对像素位置：起点像素 + 指针位移，直接夹在活动区内。
+     *
+     * 拖动全程用它（不经过比例往返），只有松手时才把结果换算成 proportion。
+     */
+    fun dragOffsetPx(
+        startOffsetPx: Int,
+        startPointerPx: Float,
+        currentPointerPx: Float,
+        minPx: Int,
+        maxPx: Int,
+    ): Int {
+        val low = minPx.coerceAtMost(maxPx)
+        val high = maxPx.coerceAtLeast(minPx)
+        val start = startOffsetPx.coerceIn(low, high)
+        if (!startPointerPx.isFinite() || !currentPointerPx.isFinite()) {
+            return start
+        }
+        val delta = currentPointerPx - startPointerPx
+        if (!delta.isFinite()) {
+            return start
+        }
+        return (startOffsetPx + delta.roundToInt()).coerceIn(low, high)
+    }
+
+    /**
      * 横向吸附：拖完只落到最近的一条边（0 或 1）。
      *
      * 页面球和系统 overlay 共用；系统层再把比例翻成 `Gravity.END/START`，

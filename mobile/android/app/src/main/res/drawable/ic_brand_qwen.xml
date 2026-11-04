@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 internal/web/ui2/assets/icons/qwen.svg 转换（brandicons.js 的品牌图标） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+            <path
+                android:fillColor="#FF6950EF"
+                android:pathData="m24 14.5-3.2-5.3 1.5-2.6v-.5l-1.6-2.9-.5-.3H14L12.5.4 12 .1H8.7l-.5.3-3 5.4h-3l-.5.3L.1 8.9v.6l3 5.3-1.4 2.6v.5l1.6 2.9.5.3H10l1.5 2.5.5.3h3.3l.5-.3 3-5.4h3l.5-.3 1.6-2.8zM8.7.7l1.7 2.8-1.7 2.8h13.1l-1.6 2.9H7.4L5.6 6ZM10 20.5H3.8l1.7-2.8h3.2L2.2 6.3h3.3l6.3 11zm10.2-5.7L18.5 12 12 23.3l-1.6-2.8q3-5.6 6.3-11h3.6l3.1 5.3z" />
+</vector>

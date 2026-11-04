@@ -7,6 +7,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.compose.runtime.collectAsState
@@ -27,7 +28,6 @@ import com.muyuchat.aether.runtime.GatewayState
 import com.muyuchat.aether.ui.BubbleMarkDp
 import com.muyuchat.aether.ui.GatewaySystemOverlayBubble
 import com.muyuchat.aether.ui.OverlayGeometry
-import com.muyuchat.aether.ui.isBubbleClick
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -76,8 +76,8 @@ data class OverlayColors(
  * 由前台 [AetherGatewayService] 调用：服务活着，overlay 就活着；服务被停止/销毁时
  * 一定会 `hide()`。它不是独立进程、也不会在服务死后单独存活——这一点必须如实说明。
  *
- * 位置存的是**比例**（xFraction/yFraction），进程内保留；旋转/分屏后按新的 travel
- * 重新换算，不用旧像素贴边。左右吸附只切 `Gravity.END/START`，不手算绝对边缘坐标。
+ * 拖动过程只用像素：ACTION_MOVE 把 rawX/rawY 增量累加到 params.x/y 并 updateViewLayout，
+ * **不在 move 里改 gravity**；只有 ACTION_UP 才把最终像素换算成比例、吸附并切 gravity。
  */
 object GatewayOverlayController {
     private val _visible = MutableStateFlow(false)
@@ -125,6 +125,10 @@ object GatewayOverlayController {
         val edgePx = OverlayGeometry.EDGE_DP * density
         val travelX = OverlayGeometry.travelPx(screenWidthPx, markPx.roundToInt(), edgePx.roundToInt())
         val travelY = OverlayGeometry.travelPx(screenHeightPx, markPx.roundToInt(), edgePx.roundToInt())
+        val minWindowX = edgePx.roundToInt()
+        val minWindowY = edgePx.roundToInt()
+        val maxWindowX = (screenWidthPx - markPx - edgePx).roundToInt().coerceAtLeast(minWindowX)
+        val maxWindowY = (screenHeightPx - markPx - edgePx).roundToInt().coerceAtLeast(minWindowY)
         xFraction = OverlayGeometry.clampFraction(xFraction)
         yFraction = OverlayGeometry.clampFraction(yFraction)
 
@@ -136,27 +140,45 @@ object GatewayOverlayController {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT,
         )
+        var rightAnchored = xFraction >= 0.5f
 
-        fun applyPosition(target: View, updateLayout: Boolean) {
-            val rightAnchored = xFraction >= 0.5f
+        fun applyFractions(target: View, updateLayout: Boolean) {
+            rightAnchored = xFraction >= 0.5f
             params.gravity = (if (rightAnchored) Gravity.END else Gravity.START) or Gravity.TOP
-            val xOffset = OverlayGeometry.offsetPx(xFraction, travelX)
-            val yOffset = OverlayGeometry.offsetPx(yFraction, travelY)
+            val left = edgePx + OverlayGeometry.offsetPx(xFraction, travelX)
             params.x = if (rightAnchored) {
-                (screenWidthPx - (edgePx + xOffset + markPx))
+                (screenWidthPx - (left + markPx))
                     .roundToInt()
-                    .coerceAtLeast(edgePx.roundToInt())
+                    .coerceIn(minWindowX, maxWindowX)
             } else {
-                (edgePx + xOffset)
-                    .roundToInt()
-                    .coerceAtLeast(edgePx.roundToInt())
+                left.roundToInt().coerceIn(minWindowX, maxWindowX)
             }
-            params.y = (edgePx + yOffset)
+            params.y = (edgePx + OverlayGeometry.offsetPx(yFraction, travelY))
                 .roundToInt()
-                .coerceAtLeast(edgePx.roundToInt())
+                .coerceIn(minWindowY, maxWindowY)
             if (updateLayout) {
                 runCatching { manager.updateViewLayout(target, params) }
             }
+        }
+
+        // 松手才落比例：先由当前像素反推左/上绝对位置，再吸附并重算 gravity。
+        fun commitPosition(view: View) {
+            val absoluteLeft = if (rightAnchored) {
+                screenWidthPx - (params.x + markPx)
+            } else {
+                params.x.toFloat()
+            }
+            xFraction = OverlayGeometry.snapFraction(
+                OverlayGeometry.fractionForOffset(
+                    (absoluteLeft - edgePx).roundToInt(),
+                    travelX,
+                ),
+            )
+            yFraction = OverlayGeometry.fractionForOffset(
+                (params.y - edgePx).roundToInt(),
+                travelY,
+            )
+            applyFractions(view, updateLayout = true)
         }
 
         val touchRoot = OverlayTouchRoot(context)
@@ -167,18 +189,19 @@ object GatewayOverlayController {
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
+        val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
         var downRawX = 0f
         var downRawY = 0f
-        var startXFraction = xFraction
-        var startYFraction = yFraction
+        var startParamsX = 0
+        var startParamsY = 0
         var dragging = false
         touchRoot.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downRawX = event.rawX
                     downRawY = event.rawY
-                    startXFraction = xFraction
-                    startYFraction = yFraction
+                    startParamsX = params.x
+                    startParamsY = params.y
                     dragging = false
                     true
                 }
@@ -187,38 +210,45 @@ object GatewayOverlayController {
                     val dy = event.rawY - downRawY
                     if (!dragging) {
                         val distance = hypot(dx.toDouble(), dy.toDouble()).toFloat()
-                        if (!isBubbleClick(distance, density)) {
+                        if (distance > touchSlop) {
                             dragging = true
                         }
                     }
-                    if (dragging) {
-                        xFraction = OverlayGeometry.fractionAfterDrag(startXFraction, dx, travelX)
-                        yFraction = OverlayGeometry.fractionAfterDrag(startYFraction, dy, travelY)
-                        applyPosition(view, updateLayout = true)
-                    }
+                    // 全程像素、全帧跟随；gravity 保持不动，避免重排跳变。
+                    val signedDx = if (rightAnchored) -dx else dx
+                    params.x = (startParamsX + signedDx).roundToInt()
+                        .coerceIn(minWindowX, maxWindowX)
+                    params.y = (startParamsY + dy).roundToInt()
+                        .coerceIn(minWindowY, maxWindowY)
+                    runCatching { manager.updateViewLayout(view, params) }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (dragging) {
-                        // 横向吸附到最近一边；只改比例 + gravity，不手算绝对坐标。
-                        xFraction = OverlayGeometry.snapFraction(xFraction)
-                        applyPosition(view, updateLayout = true)
+                        commitPosition(view)
                     } else {
+                        // 小位移回弹，仍当作点击。
+                        params.x = startParamsX
+                        params.y = startParamsY
+                        runCatching { manager.updateViewLayout(view, params) }
                         openApp(context)
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     if (dragging) {
-                        xFraction = OverlayGeometry.snapFraction(xFraction)
-                        applyPosition(view, updateLayout = true)
+                        commitPosition(view)
+                    } else {
+                        params.x = startParamsX
+                        params.y = startParamsY
+                        runCatching { manager.updateViewLayout(view, params) }
                     }
                     true
                 }
                 else -> false
             }
         }
-        applyPosition(touchRoot, updateLayout = false)
+        applyFractions(touchRoot, updateLayout = false)
         return try {
             manager.addView(touchRoot, params)
             treeOwner.start()

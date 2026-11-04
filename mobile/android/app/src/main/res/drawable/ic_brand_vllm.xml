@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 internal/web/ui2/assets/icons/vllm.svg 转换（brandicons.js 的品牌图标） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+            <path
+                android:fillColor="#FF30A2FF"
+                android:pathData="m23.6 0-8.7 4.6-5 19.4h7.3zM9.8 24V5.1H.4Z" />
+</vector>

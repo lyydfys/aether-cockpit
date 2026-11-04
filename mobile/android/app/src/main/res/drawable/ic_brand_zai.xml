@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 internal/web/ui2/assets/icons/zai.svg 转换（brandicons.js 的品牌图标） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+            <path
+                android:fillColor="#FFFFFFFF"
+                android:pathData="M256 40v176.2a40 40 0 0 1-40 39.8H40a40 40 0 0 1-40-40V40A40 40 0 0 1 40 0h176a40 40 0 0 1 40 40" />
+            <path
+                android:fillColor="#FF2D2D2D"
+                android:pathData="M216 253H40a37 37 0 0 1-37-37V40A37 37 0 0 1 40 3h176a37 37 0 0 1 37 37v176a37 37 0 0 1-37 37" />
+            <path
+                android:fillColor="#FFFFFFFF"
+                android:pathData="M214 54.8 110.7 201.2H42L145.2 54.8zm-4.3 124.8v21.6h-86.1l12.1-17.3c1.9-2.6 5-4.3 8.4-4.3zM46.2 76.3V54.7h.5l85.6.1-12 17.2c-1.9 2.6-5 4.3-8.4 4.3z" />
+</vector>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 internal/web/ui2/assets/icons/moonshot.svg 转换（brandicons.js 的品牌图标） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+            <path
+                android:fillColor="#FF191919"
+                android:pathData="m1 17 9.6 2.5v2l6 1.6a12 12 0 0 1-15.5-6.2m-1-5.8 11.3 3-.5 2 10.8 3-1.8 2L.7 15.9a12 12 0 0 1-.7-4.8M1.6 6l12 3.2-1 1.8 11.3 3-.7 2.4-11.6-3L.1 10.2A12 12 0 0 1 1.6 6m4.5-4.4 11.3 3-1.7 1.7 7.8 2.1.5 2.7L2.1 5.2a12 12 0 0 1 4-3.6m15.6 3.3L7.2 1a12 12 0 0 1 14.5 3.9" />
+</vector>

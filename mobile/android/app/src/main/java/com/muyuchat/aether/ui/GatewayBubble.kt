@@ -14,8 +14,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -66,22 +67,14 @@ import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconPlate
 import com.muyuchat.core.designsystem.McaShape
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 /** 悬浮球直径；页面球和系统 overlay 共用。 */
 internal const val BubbleMarkDp = 64f
 
-/** 小于该位移（dp）视为点击，不移动也不展开。 */
-internal const val BubbleDragThresholdDp = 8f
-
 /** 页面列表底部预留区：球高 + 默认边距，默认位置不会压住最后一张卡。 */
 internal val BubbleReservedBottom: Dp = 80.dp
-
-/** 拖动距离小于 8dp 才算点击；distance 与 density 都用同一套 px 单位。 */
-internal fun isBubbleClick(distancePx: Float, density: Float): Boolean {
-    val safeDensity = density.coerceAtLeast(0.01f)
-    return distancePx < BubbleDragThresholdDp * safeDensity
-}
 
 /** 系统外显的前置条件；顺序就是用户实际会遇到的顺序（先有网关，再要权限）。 */
 internal enum class OverlayAvailability { Available, NeedGateway, NeedPermission }
@@ -151,38 +144,107 @@ internal fun GatewayBubble(
 
     BoxWithConstraints(modifier) {
         val markPx = with(density) { BubbleMarkDp.dp.toPx() }
-        val edgePx = with(density) { OverlayGeometry.EDGE_DP.dp.toPx() }
+        val edgePx = with(density) { OverlayGeometry.EDGE_DP.dp.toPx() }.roundToInt()
         val widthPx = with(density) { maxWidth.toPx() }
         val heightPx = with(density) { maxHeight.toPx() }
-        val travelX = OverlayGeometry.travelPx(widthPx.roundToInt(), markPx.roundToInt(), edgePx.roundToInt())
-        val travelY = OverlayGeometry.travelPx(heightPx.roundToInt(), markPx.roundToInt(), edgePx.roundToInt())
+        val travelX = OverlayGeometry.travelPx(widthPx.roundToInt(), markPx.roundToInt(), edgePx)
+        val travelY = OverlayGeometry.travelPx(heightPx.roundToInt(), markPx.roundToInt(), edgePx)
+        val minX = edgePx
+        val minY = edgePx
+        val maxX = edgePx + travelX
+        val maxY = edgePx + travelY
         var xFraction by rememberSaveable { mutableStateOf(1f) }
         var yFraction by rememberSaveable { mutableStateOf(1f) }
 
-        val xPx = (edgePx + OverlayGeometry.offsetPx(xFraction, travelX)).roundToInt()
-        val yPx = (edgePx + OverlayGeometry.offsetPx(yFraction, travelY)).roundToInt()
+        // 拖动全程只写像素（mutableIntStateOf + offset lambda，布局阶段读），
+        // 松手才换算成比例；避免每帧“像素→比例→像素”的取整抖动与组合重组。
+        var dragDx by remember { mutableIntStateOf(0) }
+        var dragDy by remember { mutableIntStateOf(0) }
         val onRight = xFraction >= 0.5f
         val menuAbove = yFraction >= 0.5f
 
         Box(
             modifier = Modifier
-                .offset { IntOffset(xPx, yPx) }
+                .offset {
+                    val baseX = minX + OverlayGeometry.offsetPx(xFraction, travelX)
+                    val baseY = minY + OverlayGeometry.offsetPx(yFraction, travelY)
+                    IntOffset(
+                        x = (baseX + dragDx).coerceIn(minX, maxX),
+                        y = (baseY + dragDy).coerceIn(minY, maxY),
+                    )
+                }
                 .zIndex(2f)
                 .size(BubbleMarkDp.dp)
-                .pointerInput(travelX, travelY) {
-                    detectDragGestures(
-                        onDragStart = { expanded = false },
-                        onDragEnd = { xFraction = OverlayGeometry.snapFraction(xFraction) },
-                        onDragCancel = { xFraction = OverlayGeometry.snapFraction(xFraction) },
-                    ) { change, dragAmount ->
-                        change.consume()
-                        xFraction = OverlayGeometry.fractionAfterDrag(xFraction, dragAmount.x, travelX)
-                        yFraction = OverlayGeometry.fractionAfterDrag(yFraction, dragAmount.y, travelY)
-                    }
-                }
-                .pointerInput(Unit) {
-                    detectTapGestures {
-                        expanded = !expanded
+                .pointerInput(travelX, travelY, minX, minY, maxX, maxY) {
+                    val dragModeThresholdPx = 4.dp.toPx()
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        val startPointerX = down.position.x
+                        val startPointerY = down.position.y
+                        val startAbsX = minX + OverlayGeometry.offsetPx(xFraction, travelX)
+                        val startAbsY = minY + OverlayGeometry.offsetPx(yFraction, travelY)
+                        var dragging = false
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                if (dragging) {
+                                    val finalX = OverlayGeometry.dragOffsetPx(
+                                        startOffsetPx = startAbsX,
+                                        startPointerPx = startPointerX,
+                                        currentPointerPx = change.position.x,
+                                        minPx = minX,
+                                        maxPx = maxX,
+                                    )
+                                    val finalY = OverlayGeometry.dragOffsetPx(
+                                        startOffsetPx = startAbsY,
+                                        startPointerPx = startPointerY,
+                                        currentPointerPx = change.position.y,
+                                        minPx = minY,
+                                        maxPx = maxY,
+                                    )
+                                    xFraction = OverlayGeometry.snapFraction(
+                                        OverlayGeometry.fractionForOffset(finalX - minX, travelX),
+                                    )
+                                    yFraction = OverlayGeometry.fractionForOffset(finalY - minY, travelY)
+                                }
+                                dragDx = 0
+                                dragDy = 0
+                                if (!dragging) {
+                                    expanded = !expanded
+                                }
+                                return@awaitEachGesture
+                            }
+                            val dx = change.position.x - startPointerX
+                            val dy = change.position.y - startPointerY
+                            val distance = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                            if (!dragging && distance > dragModeThresholdPx) {
+                                dragging = true
+                                expanded = false
+                            }
+                            // 第一帧移动就跟随；只有超过 4dp 才算进入拖动模式，
+                            // 未达阈值时松手会回弹并当作点击。
+                            val absX = OverlayGeometry.dragOffsetPx(
+                                startOffsetPx = startAbsX,
+                                startPointerPx = startPointerX,
+                                currentPointerPx = change.position.x,
+                                minPx = minX,
+                                maxPx = maxX,
+                            )
+                            val absY = OverlayGeometry.dragOffsetPx(
+                                startOffsetPx = startAbsY,
+                                startPointerPx = startPointerY,
+                                currentPointerPx = change.position.y,
+                                minPx = minY,
+                                maxPx = maxY,
+                            )
+                            dragDx = absX - startAbsX
+                            dragDy = absY - startAbsY
+                            change.consume()
+                        }
+                        dragDx = 0
+                        dragDy = 0
                     }
                 }
                 .semantics {
