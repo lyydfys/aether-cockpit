@@ -105,6 +105,25 @@ enum class AccountActionKind {
     DELETE,
 }
 
+/** 删除成功后的收尾步骤。 */
+internal enum class AccountDeleteStep {
+    /** 先把这一行从列表里移除（用户立刻看到生效，不闪烁）。 */
+    RemoveRow,
+
+    /** 再整页重拉：纠正 `readyCount`、概览「可用账号」、路由组成员数这些联动数字。 */
+    RefreshAll,
+}
+
+/**
+ * 删除成功后的收尾顺序：**先移除、后刷新**。
+ *
+ * 为什么必须这个顺序：只删行会让卡片数字停在旧值（渠道 readyCount / 概览可用账号 / 路由组人数）；
+ * 只整页刷新会让用户等一个网络往返才看到变化。先移除给即时反馈，再刷新让服务端数字追上来——
+ * 中间那一瞬间列表里已经没有这条，不会出现"行还在但数字变了"的闪烁。
+ */
+internal fun accountDeleteFollowUp(): List<AccountDeleteStep> =
+    listOf(AccountDeleteStep.RemoveRow, AccountDeleteStep.RefreshAll)
+
 /**
  * 批量动作类别。**端点不同，别混**：
  * - [REFRESH] 走真批量端点 `POST /api/accounts/batch`（`action:"refresh"`）；
@@ -881,7 +900,8 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     /**
      * 删除账号：`DELETE /api/accounts/{id}`（桌面 `channels.js:313-317`）。
      *
-     * 成功后从列表里移除该行（不整页重拉，避免滚动位置跳）；失败保留行并给通用红字。
+     * 成功后按 [accountDeleteFollowUp] 收尾：**先移除行**（即时反馈），**再整页重拉**
+     * （纠正 `readyCount` / 概览「可用账号」/ 路由组成员数）。失败保留行并给通用红字。
      * 二次确认由页面负责——这里只执行，不重复问。
      */
     fun deleteAccount(accountId: String) {
@@ -902,8 +922,14 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { accountsClient.deleteAccount(status, accountId) }
-                lockCurrentRows()
-                accountsOverride.value = currentAccountRows().filterNot { it.accountId == accountId }
+                // 顺序不能反：先移除行是即时反馈，再整页重拉纠正联动数字
+                //（`readyCount`、概览「可用账号」、路由组成员数）。见 [accountDeleteFollowUp]。
+                accountDeleteFollowUp().forEach { step ->
+                    when (step) {
+                        AccountDeleteStep.RemoveRow -> removeAccountRow(accountId)
+                        AccountDeleteStep.RefreshAll -> invalidate()
+                    }
+                }
                 accountAction.value = AccountActionUiState.Idle
             } catch (e: CancellationException) {
                 throw e
@@ -918,6 +944,12 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 )
             }
         }
+    }
+
+    /** 从当前渲染的行里移除一条（先锁住 override，避免与 Ready 快照不同步）。 */
+    private fun removeAccountRow(accountId: String) {
+        lockCurrentRows()
+        accountsOverride.value = currentAccountRows().filterNot { it.accountId == accountId }
     }
 
     /** 唤醒后重拉账号行：服务端没有回快照，只能重新取一次（失败静默，不覆盖已有数据）。 */

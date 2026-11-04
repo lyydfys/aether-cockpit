@@ -46,7 +46,28 @@ data class LibraryEntry(
     val disabledTools: List<String> = emptyList(),
 )
 
-data class LibrarySnapshot(val entries: List<LibraryEntry>)
+/**
+ * 库里的一个 Hook（`GET /api/library` 的 `hooks[]`，`library_api.go:244-250`）。
+ *
+ * 只读：桌面保存 Hook 时会同时写网关自有库与各 agent 配置文件；手机上没有 agent 配置目录，
+ * 所以手机端只展示库里已同步的条目，**不提供新建/编辑/删除**（也不能触发）。
+ */
+data class HookEntry(
+    val id: String,
+    val name: String,
+    val event: String,
+    val matcher: String,
+    val command: String,
+    val timeout: Int,
+    val agents: List<String>,
+    val updatedAt: Long,
+)
+
+data class LibrarySnapshot(
+    val entries: List<LibraryEntry>,
+    /** 只读 Hook 列表；带默认值保证现有构造点不破。 */
+    val hooks: List<HookEntry> = emptyList(),
+)
 
 /**
  * 一个 MCP 服务器的工具清单（`mcp_check.go` 的 `mcpCheckResult`）。
@@ -244,7 +265,48 @@ internal fun parseLibrary(body: String): LibrarySnapshot {
     entries += libraryRows(root.optJSONArray("skills_raw"), LibraryKind.SKILL)
     entries += libraryRows(root.optJSONArray("mcp"), LibraryKind.MCP)
     entries += libraryRows(root.optJSONArray("subagents"), LibraryKind.SUBAGENT)
-    return LibrarySnapshot(entries = entries)
+    return LibrarySnapshot(
+        entries = entries,
+        hooks = parseHooks(root.optJSONArray("hooks")),
+    )
+}
+
+/**
+ * 解析只读 Hook 列表。规则与服务端字段（`library_api.go:244-250`）对齐：
+ * - `null` 数组 → 空表；数组项不是对象 → 跳过；
+ * - `id`/`name` 都空 → 跳过（服务端视图没有 id 时用 name 兜底展示）；
+ * - `agents` 缺失或空数组 → 空表；`timeout` 缺省 0；
+ * - `updated_at` 缺省回落到 `created_at`，再缺省为 0。
+ *
+ * 不在这里 catch：坏 JSON 由 [parseLibrary]/上层统一抛 `invalid_response`。
+ */
+internal fun parseHooks(array: JSONArray?): List<HookEntry> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id").trim()
+        val name = item.optString("name").trim()
+        if (id.isEmpty() && name.isEmpty()) {
+            return@mapNotNull null
+        }
+        val agents = item.optJSONArray("agents")?.let { list ->
+            (0 until list.length()).mapNotNull { i ->
+                list.optString(i).trim().takeIf { it.isNotEmpty() }
+            }
+        }.orEmpty()
+        HookEntry(
+            id = id,
+            name = name.ifBlank { id },
+            event = item.optString("event").trim(),
+            matcher = item.optString("matcher").trim(),
+            command = item.optString("command").trim(),
+            timeout = item.optInt("timeout", 0),
+            agents = agents,
+            updatedAt = item.optLong("updated_at", item.optLong("created_at", 0L)),
+        )
+    }
 }
 
 /**

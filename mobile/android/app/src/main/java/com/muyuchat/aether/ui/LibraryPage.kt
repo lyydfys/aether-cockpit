@@ -1,5 +1,6 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -33,11 +34,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.HookEntry
 import com.muyuchat.aether.runtime.LibraryDraft
 import com.muyuchat.aether.runtime.LibraryDraftProblems
 import com.muyuchat.aether.runtime.LibraryEntry
@@ -56,6 +59,12 @@ import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
 import com.muyuchat.core.designsystem.McaSwitch
+
+/**
+ * Hook 页签的独立 id：**不进 [LibraryKind]**。
+ * 只读场景没有删除/新建路径，混进 kind 会牵动 libraryDeletePath 等映射。
+ */
+private const val HookTab = "HOOK"
 
 /**
  * 资源库页：列出沙盒库里的条目，并能删除。
@@ -119,6 +128,8 @@ internal fun LibraryPage(
     // 桌面默认停在「指令」页签（library.js:42 `state.tab = 'prompts'`）。
     var tab by rememberSaveable { mutableStateOf(LibraryKind.PROMPT.name) }
     var libQuery by rememberSaveable { mutableStateOf("") }
+    // 只读 Hook 详情（桌面 library.js:402-411 的行点开）；不提供编辑入口。
+    var hookDetail by remember { mutableStateOf<HookEntry?>(null) }
     LaunchedEffect(Unit) { onRefresh() }
     // 登录流程结束（成功/失败）时把弹窗关掉，失败原因留在 flow 状态里给下一次打开看不如直接弹掉——
     // 所以只在 Done 时自动关，失败保留弹窗显示原因。
@@ -216,8 +227,45 @@ internal fun LibraryPage(
                                 style = if (tab == kind.name) McaButtonStyle.Primary else McaButtonStyle.Outlined,
                             ) { Text("${libraryTabLabel(kind)} $count", maxLines = 1) }
                         }
+                        // 第 5 页签：Hooks（只读）。独立 id，不复用 LibraryKind。
+                        McaButton(
+                            onClick = { tab = HookTab },
+                            style = if (tab == HookTab) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                        ) { Text("Hooks ${state.hooks.size}", maxLines = 1) }
                     }
                 }
+                if (tab == HookTab) {
+                    item {
+                        Text(
+                            text = "新建与编辑只在桌面端：Hook 需要写进各 agent 的配置文件，手机上没有那些目录。" +
+                                "这里显示的是库中已同步的条目（在手机上不会触发）。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    item { DeepSectionTitle(text = "Hooks", trailing = "${state.hooks.size} 个") }
+                    if (state.hooks.isEmpty()) {
+                        item {
+                            DeepStateCard(
+                                title = "还没有 Hook",
+                                detail = "事件触发时执行命令；保存时会写入所选 agent 的配置。" +
+                                    "新建只在桌面端；手机上即使有条目也不会触发。",
+                            )
+                        }
+                    } else {
+                        items(state.hooks.size) { index ->
+                            val hook = state.hooks[index]
+                            HookRow(hook = hook, onClick = { hookDetail = hook })
+                        }
+                    }
+                    item {
+                        Text(
+                            text = "Hook 是只读视图：新建、编辑、删除、写入 agent 都只在桌面端。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
                 item { SearchField(libQuery, { libQuery = it }, placeholder = "搜索名称…") }
                 val currentKind = LibraryKind.fromName(tab)
                 val visible = state.entries
@@ -339,8 +387,13 @@ internal fun LibraryPage(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                }
             }
         }
+    }
+
+    hookDetail?.let { hook ->
+        HookDetailDialog(hook = hook, onDismiss = { hookDetail = null })
     }
 
     // MCP 登录/登出弹窗（桌面 library.js:795）：手机上用系统浏览器打开授权页，回跳本机回环地址。
@@ -548,6 +601,148 @@ internal fun libraryEmptyCopy(hasAnyEntry: Boolean, kindLabel: String?): Library
         detail = "可以点分区标题旁的「新建」创建一条；从桌面 Agent 配置里「发现 / 导入」仍在桌面端做。",
         action = "新增条目",
     )
+}
+
+@Composable
+private fun HookRow(hook: HookEntry, onClick: () -> Unit) {
+    DeepCard(modifier = Modifier.clickable(onClick = onClick)) {
+        Row(verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = hook.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(6.dp))
+                // 桌面 library.js:405-409：event chip → matcher(mono) → command(mono) → agents chip。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HookChip(hook.event.ifBlank { "—" })
+                    if (hook.matcher.isNotBlank()) {
+                        HookMono(hook.matcher)
+                    }
+                    if (hook.command.isNotBlank()) {
+                        HookMono(hook.command)
+                    }
+                    if (hook.agents.isNotEmpty()) {
+                        HookChip("→ " + hook.agents.joinToString("、"))
+                    }
+                }
+                if (hook.agents.isEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "未写入任何 agent",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (hook.timeout > 0) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "${hook.timeout}s",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** 只读小 chip（event / agents）。 */
+@Composable
+private fun HookChip(text: String) {
+    Surface(
+        shape = McaShape.CardAction,
+        color = MaterialTheme.colorScheme.surface,
+        border = McaHairline.stroke(),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+    }
+}
+
+/** matcher / command 等机器可读字段：等宽字体。 */
+@Composable
+private fun HookMono(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+        color = MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/** Hook 详情：只读展示，不提供编辑/删除（桌面是在抽屉里编辑）。 */
+@Composable
+private fun HookDetailDialog(hook: HookEntry, onDismiss: () -> Unit) {
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = hook.name,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                HookDetailLine("事件", hook.event.ifBlank { "—" })
+                HookDetailLine("Matcher", hook.matcher.ifBlank { "—" }, mono = true)
+                HookDetailLine("命令", hook.command.ifBlank { "—" }, mono = true)
+                HookDetailLine(
+                    "超时",
+                    if (hook.timeout > 0) "${hook.timeout}s" else "未设置",
+                )
+                HookDetailLine(
+                    "写入的 agent",
+                    if (hook.agents.isEmpty()) "未写入任何 agent" else hook.agents.joinToString("、"),
+                )
+            }
+        },
+        confirmButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
+        },
+    )
+}
+
+@Composable
+private fun HookDetailLine(label: String, value: String, mono: Boolean = false) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = if (mono) {
+                MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+            } else {
+                MaterialTheme.typography.bodySmall
+            },
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
 }
 
 @Composable

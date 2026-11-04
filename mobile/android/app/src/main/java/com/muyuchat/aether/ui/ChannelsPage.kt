@@ -356,6 +356,14 @@ internal fun ChannelsPage(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // 桌面才能做的两件事放在一起讲，口径统一：不是"没端点"，而是"手机上语义不适用"。
+        item {
+            Text(
+                text = channelsDesktopOnlyNote(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
     // 模型清单弹窗按渠道只弹一个：同一渠道的多个账号共用一份清单。
     if (ready != null) {
@@ -1869,6 +1877,18 @@ internal fun accountWakeLabel(): String = "立即唤醒"
 internal fun accountDeleteConfirmTitle(label: String): String = "删除账号「$label」？"
 
 internal fun accountDeleteConfirmBody(): String = "只移除本机记录，渠道本身不动。"
+
+/**
+ * 渠道页脚注：讲清"为什么这两块只有桌面能做"。
+ *
+ * 注意口径：`inject`（`POST /api/accounts/{id}/inject`，`gateway.go:1123`）**端点存在**，
+ * 只是语义是把凭据写进**桌面 IDE 的配置文件**——手机上没有那个目录，所以不是"没接口"，
+ * 而是"这件事在手机上不成立"。`local_import` 同理（要读桌面客户端刚写好的凭据文件）。
+ */
+internal fun channelsDesktopOnlyNote(): String =
+    "「写入本机 IDE（一键切号）」只在桌面端可用：它把凭据写进本机 IDE 的配置文件，" +
+        "手机上没有对应的配置目录。「本机导入」同理——它要读桌面客户端刚写好的凭据文件，" +
+        "手机上也没有那些目录。"
 
 /** 一项菜单：文案 + 一句话说明 + 是否危险（危险项要二次确认）。 */
 internal data class AccountMoreItem(

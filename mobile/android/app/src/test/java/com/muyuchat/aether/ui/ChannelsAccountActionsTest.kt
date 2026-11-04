@@ -111,4 +111,33 @@ class ChannelsAccountActionsTest {
         assertEquals("刷新凭据", credentials.label)
         assertTrue(credentials.detail.contains("凭据") || credentials.detail.contains("续期"))
     }
+
+    @Test
+    fun deleteRemovesTheRowBeforeRefreshingEverything() {
+        // 删除成功后的收尾顺序：先移除行（即时反馈，不闪烁）→ 再整页重拉（纠正联动数字）
+        val steps = accountDeleteFollowUp()
+        assertEquals(
+            listOf(AccountDeleteStep.RemoveRow, AccountDeleteStep.RefreshAll),
+            steps,
+        )
+        assertEquals("必须先移除再刷新", AccountDeleteStep.RemoveRow, steps.first())
+        assertEquals("刷新必须是最后一步", AccountDeleteStep.RefreshAll, steps.last())
+        assertEquals("两步都要跑，不能省", 2, steps.size)
+        assertEquals("不许重复", steps.toSet().size, steps.size)
+    }
+
+    @Test
+    fun desktopOnlyFootnoteExplainsIdeInjectAndLocalImport() {
+        val note = channelsDesktopOnlyNote()
+        assertTrue("要点名桌面端", note.contains("桌面端"))
+        assertTrue("要解释 IDE 配置目录", note.contains("IDE 的配置文件"))
+        assertTrue("要说明手机上为何不行", note.contains("手机上没有"))
+        assertTrue("口径统一：本机导入也一起讲", note.contains("本机导入"))
+        // 逐字保留用户给的那句主说明
+        assertTrue(
+            note.startsWith(
+                "「写入本机 IDE（一键切号）」只在桌面端可用：它把凭据写进本机 IDE 的配置文件",
+            ),
+        )
+    }
 }

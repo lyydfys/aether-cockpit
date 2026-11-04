@@ -7,6 +7,7 @@ import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.LibraryApiClient
 import com.muyuchat.aether.runtime.LibraryDraft
+import com.muyuchat.aether.runtime.HookEntry
 import com.muyuchat.aether.runtime.LibraryDraftProblems
 import com.muyuchat.aether.runtime.LibraryEntry
 import com.muyuchat.aether.runtime.LibraryKind
@@ -36,7 +37,12 @@ sealed interface LibraryUiState {
 
     data object Loading : LibraryUiState
 
-    data class Ready(val entries: List<LibraryEntry>, val sampledAtMs: Long) : LibraryUiState
+    data class Ready(
+        val entries: List<LibraryEntry>,
+        val sampledAtMs: Long,
+        /** 只读 Hook 列表（`GET /api/library` 的 hooks[]）。不带任何编辑/删除入口。 */
+        val hooks: List<HookEntry> = emptyList(),
+    ) : LibraryUiState
 
     data class Failed(val code: String, val message: String) : LibraryUiState
 }
@@ -154,7 +160,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         loadJob = viewModelScope.launch {
             _state.value = try {
                 val snapshot: LibrarySnapshot = withContext(Dispatchers.IO) { client.fetchLibrary(status) }
-                LibraryUiState.Ready(snapshot.entries, System.currentTimeMillis())
+                LibraryUiState.Ready(
+                    entries = snapshot.entries,
+                    sampledAtMs = System.currentTimeMillis(),
+                    hooks = snapshot.hooks,
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
