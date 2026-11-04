@@ -22,7 +22,6 @@ class GatewayHomeOverlayTest {
             "settings" to OverlayFlags(settings = true),
             "probe" to OverlayFlags(probe = true),
             "totp" to OverlayFlags(totp = true),
-            "sessions" to OverlayFlags(sessions = true),
             "wake" to OverlayFlags(wake = true),
             "library" to OverlayFlags(library = true),
             "backup" to OverlayFlags(backup = true),
@@ -30,8 +29,8 @@ class GatewayHomeOverlayTest {
             "clients" to OverlayFlags(clients = true),
             "plugins" to OverlayFlags(plugins = true),
         )
-        // 覆盖页数量本身也是事实：11 个，少一个就说明有人删了字段。
-        assertEquals(11, cases.size)
+        // 覆盖页数量本身也是事实：10 个（会话页已整页删除，手机端恒空），少一个就说明有人删了字段。
+        assertEquals(10, cases.size)
         cases.forEach { (name, flags) ->
             assertTrue("$name 打开时返回键必须由 BackHandler 接管", flags.anyOpen)
         }

@@ -9,10 +9,12 @@ class WorkspaceTest {
     @Test
     fun directoryMatchesTheApprovedDesign() {
         val workspaces = workspaceEntries()
-        // 13 条 = 桌面 16 项导航（shell.js:17-43）减去底栏已有的 4 项
+        // 12 条 = 桌面 16 项导航（shell.js:17-43）减去底栏已有的 4 项
         //（概览 / 账号与额度 / 用量 / 请求日志），加「客户端」
-        //（桌面是 gateway.js:113 的一张卡，手机端有独立页）。
-        assertEquals(13, workspaces.size)
+        //（桌面是 gateway.js:113 的一张卡，手机端有独立页），再减「会话」。
+        // 会话页已整页删除：`sessions.Scan()` 只读本机 agent 会话文件，Android 上没有这些文件，
+        // 页面在手机上恒为空，留着只会误导（用户 2026-11-04 决定删除）。
+        assertEquals(12, workspaces.size)
         assertEquals(workspaces.size, workspaces.map { it.title }.toSet().size)
         val settings = settingsGroups()
         // 设置分组 = 桌面 settings.js:44-47 的 10 个 tab，逐字照抄。
@@ -39,7 +41,6 @@ class WorkspaceTest {
         assertEquals(WorkspaceAction.Onboard, byTitle.getValue("接入渠道").action)
         assertEquals(WorkspaceAction.Wake, byTitle.getValue("唤醒任务").action)
         assertEquals(WorkspaceAction.DesktopOnly, byTitle.getValue("应用启动").action)
-        assertEquals(WorkspaceAction.Sessions, byTitle.getValue("会话").action)
         assertEquals(WorkspaceAction.Library, byTitle.getValue("库（指令/技能/MCP）").action)
         assertEquals(WorkspaceAction.Probe, byTitle.getValue("网关与探针").action)
         assertEquals(WorkspaceAction.Totp, byTitle.getValue("2FA 管理").action)
@@ -83,7 +84,7 @@ class WorkspaceTest {
             when (val action = entry.action) {
                 is WorkspaceAction.Tab -> assertTrue(action.tab != MobileTab.MORE)
                 WorkspaceAction.Routing, WorkspaceAction.Settings, WorkspaceAction.Probe,
-                WorkspaceAction.Totp, WorkspaceAction.Sessions, WorkspaceAction.Wake,
+                WorkspaceAction.Totp, WorkspaceAction.Wake,
                 WorkspaceAction.Library, WorkspaceAction.Plugins, WorkspaceAction.Clients,
                 WorkspaceAction.Agents, WorkspaceAction.Onboard -> Unit
                 is WorkspaceAction.Pending -> assertTrue(

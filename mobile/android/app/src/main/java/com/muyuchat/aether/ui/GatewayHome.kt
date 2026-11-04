@@ -92,7 +92,6 @@ internal data class OverlayFlags(
     val settings: Boolean = false,
     val probe: Boolean = false,
     val totp: Boolean = false,
-    val sessions: Boolean = false,
     val wake: Boolean = false,
     val library: Boolean = false,
     val backup: Boolean = false,
@@ -101,7 +100,7 @@ internal data class OverlayFlags(
     val plugins: Boolean = false,
 ) {
     val anyOpen: Boolean
-        get() = routing || settings || probe || totp || sessions || wake ||
+        get() = routing || settings || probe || totp || wake ||
             library || backup || agents || clients || plugins
 }
 
@@ -125,7 +124,6 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     var showSettings by remember { mutableStateOf(false) }
     var showProbe by remember { mutableStateOf(false) }
     var showTotp by remember { mutableStateOf(false) }
-    var showSessions by remember { mutableStateOf(false) }
     var showWake by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
     var showOnboard by remember { mutableStateOf(false) }
@@ -212,7 +210,6 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         settings = showSettings,
         probe = showProbe,
         totp = showTotp,
-        sessions = showSessions,
         wake = showWake,
         library = showLibrary,
         backup = showBackup,
@@ -231,8 +228,6 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
             showProbe = false
         } else if (showTotp) {
             showTotp = false
-        } else if (showSessions) {
-            showSessions = false
         } else if (showWake) {
             showWake = false
         } else if (showLibrary) {
@@ -263,7 +258,6 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     showSettings = false
                     showProbe = false
                     showTotp = false
-                    showSessions = false
                     showWake = false
                     showLibrary = false
                     showBackup = false
@@ -473,42 +467,6 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onBack = { showWake = false },
                     onOpenOverview = {
                         showWake = false
-                        selectedTab = MobileTab.OVERVIEW
-                    },
-                    modifier = modifier,
-                )
-            }
-            showSessions -> {
-                val sessionsViewModel: SessionsViewModel = viewModel()
-                val sessionsState by sessionsViewModel.state.collectAsStateWithLifecycle()
-                val agentFilter by sessionsViewModel.agentFilter.collectAsStateWithLifecycle()
-                val sessionQuery by sessionsViewModel.query.collectAsStateWithLifecycle()
-                val sessionsContentSearch by sessionsViewModel.contentSearch.collectAsStateWithLifecycle()
-                val sessionsStats by sessionsViewModel.stats.collectAsStateWithLifecycle()
-                val sessionsDetail by sessionsViewModel.detail.collectAsStateWithLifecycle()
-                val sessionsMarkdown by sessionsViewModel.markdown.collectAsStateWithLifecycle()
-                SessionsPage(
-                    status = state.status,
-                    state = sessionsState,
-                    agentFilter = agentFilter,
-                    query = sessionQuery,
-                    onAgentChange = sessionsViewModel::setAgentFilter,
-                    onQueryChange = sessionsViewModel::setQuery,
-                    onRefresh = sessionsViewModel::refresh,
-                    stats = sessionsStats,
-                    onRefreshStats = { sessionsViewModel.refreshStats() },
-                    contentSearch = sessionsContentSearch,
-                    onSearchContent = sessionsViewModel::searchContent,
-                    onDismissContentSearch = sessionsViewModel::dismissContentSearch,
-                    detail = sessionsDetail,
-                    onOpenSession = { row -> sessionsViewModel.openSessionDetail(row.agent, row.id) },
-                    onCloseDetail = sessionsViewModel::dismissSessionDetail,
-                    markdown = sessionsMarkdown,
-                    onLoadMarkdown = sessionsViewModel::loadSessionMarkdown,
-                    onMarkdownCopied = sessionsViewModel::dismissSessionMarkdown,
-                    onBack = { showSessions = false },
-                    onOpenOverview = {
-                        showSessions = false
                         selectedTab = MobileTab.OVERVIEW
                     },
                     modifier = modifier,
@@ -830,7 +788,6 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                         WorkspaceAction.Settings -> showSettings = true
                         WorkspaceAction.Probe -> showProbe = true
                         WorkspaceAction.Totp -> showTotp = true
-                        WorkspaceAction.Sessions -> showSessions = true
                         WorkspaceAction.Wake -> showWake = true
                         WorkspaceAction.Library -> showLibrary = true
                         WorkspaceAction.Onboard -> showOnboard = true

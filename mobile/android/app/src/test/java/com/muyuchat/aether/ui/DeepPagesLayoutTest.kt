@@ -1,7 +1,6 @@
 package com.muyuchat.aether.ui
 
 import com.muyuchat.aether.runtime.CallerKeySummary
-import com.muyuchat.aether.runtime.SessionRow
 import com.muyuchat.aether.runtime.WakeTask
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -48,8 +47,8 @@ class DeepPagesLayoutTest {
 
     @Test
     fun countLabelsStayConsistentAcrossPages() {
-        assertEquals("0 条", sessionCountLabel(0))
-        assertEquals("7 条", sessionCountLabel(7))
+        // 会话页已整页删除（sessions.Scan() 只读本机 agent 文件，Android 上恒空），
+        // 所以这里不再断言 sessionCountLabel。
         assertEquals("0 条", libraryCountLabel(0))
         assertEquals("3 条", libraryCountLabel(3))
         assertEquals("未配置", pluginRulesCountLabel(0))
@@ -117,28 +116,6 @@ class DeepPagesLayoutTest {
 
         val overdue = task.copy(nextRun = now - 5, running = false, failures = 0)
         assertEquals("每 5 小时 · 即将到期", wakeTaskMetaLine(overdue, now))
-    }
-
-    @Test
-    fun sessionMetaLinePrefersAgentNameAndDropsBlankDirectory() {
-        val row = SessionRow(
-            key = "claude-code:s1",
-            id = "s1",
-            agent = "claude-code",
-            agentName = "Claude Code",
-            title = "重构",
-            directory = "aether",
-            lastAt = 1_799_999_000L,
-            requests = 3,
-            messages = 12,
-            toolCalls = 2,
-            cost = 0.0,
-        )
-        assertEquals("Claude Code · aether", sessionMetaLine(row))
-        // 路径缺失时不留悬空的「· 」。
-        assertEquals("Claude Code", sessionMetaLine(row.copy(directory = "")))
-        // Agent 名缺失时退回 id，不能显示空标签。
-        assertEquals("claude-code · aether", sessionMetaLine(row.copy(agentName = "")))
     }
 
     @Test

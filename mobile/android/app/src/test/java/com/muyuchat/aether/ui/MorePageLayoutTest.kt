@@ -34,7 +34,6 @@ class MorePageLayoutTest {
             WorkspaceAction.Totp,
             WorkspaceAction.Clients,
             WorkspaceAction.Agents,
-            WorkspaceAction.Sessions,
             WorkspaceAction.Wake,
             WorkspaceAction.Library,
             WorkspaceAction.Plugins,
@@ -49,11 +48,12 @@ class MorePageLayoutTest {
         val pending = SettingsGroup("01", "常规", "外观与语言")
         assertEquals("已接入", settingsRowTrailing(wired))
         assertEquals("后续阶段", settingsRowTrailing(pending))
-        // 目录本身的事实：13 个工作区、10 个设置分组（= 桌面 settings.js:44-47 的 10 个 tab），
+        // 目录本身的事实：12 个工作区、10 个设置分组（= 桌面 settings.js:44-47 的 10 个 tab），
         // 其中只有 2 组真的接进了设置页。
-        // 13 = 桌面 16 项导航（shell.js:17-43）去掉底栏已有的 4 项（概览 / 账号与额度 /
-        // 用量 / 请求日志），再加「客户端」（桌面是 gateway.js:113 的一张卡，手机端有独立页）。
-        assertEquals(13, workspaceEntries().size)
+        // 12 = 桌面 16 项导航（shell.js:17-43）去掉底栏已有的 4 项（概览 / 账号与额度 /
+        // 用量 / 请求日志），加「客户端」（桌面是 gateway.js:113 的一张卡，手机端有独立页），
+        // 再减「会话」（手机端恒空，已整页删除）。
+        assertEquals(12, workspaceEntries().size)
         assertEquals(10, settingsGroups().size)
         assertEquals(2, settingsGroups().count { it.available })
     }
@@ -63,7 +63,7 @@ class MorePageLayoutTest {
         val detail = moreSearchEmptyDetail("路由")
         assertTrue("要点出被搜索的关键词", detail.contains("「路由」"))
         assertTrue("要用真实计数，不写死", detail.contains("10 个设置分组"))
-        assertTrue("要用真实计数，不写死", detail.contains("13 个工作区"))
+        assertTrue("要用真实计数，不写死", detail.contains("12 个工作区"))
         assertTrue("要给出下一步", detail.contains("清除搜索"))
         // 匹配是「标题或说明」，文案不能夸大成「全文搜索」。
         assertTrue(detail.contains("标题或说明"))

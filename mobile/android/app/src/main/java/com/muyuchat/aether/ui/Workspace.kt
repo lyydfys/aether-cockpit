@@ -57,9 +57,6 @@ sealed interface WorkspaceAction {
      */
     data object Agents : WorkspaceAction
 
-    /** 打开会话页（真实页面，只读；手机端通常为空，见页面说明）。 */
-    data object Sessions : WorkspaceAction
-
     /** 打开唤醒队列页（真实页面：只读状态 + 手动触发，不承诺定时）。 */
     data object Wake : WorkspaceAction
 
@@ -125,8 +122,8 @@ fun workspaceEntries(): List<WorkspaceEntry> = listOf(
     // 所以这里不再写"签到仅 Windows"——那会变成一句假话。
     WorkspaceEntry("唤醒任务", "唤醒队列（签到调度已接线）", WorkspaceAction.Wake),
     WorkspaceEntry("应用启动", "启动 PC 客户端；仅 Windows", WorkspaceAction.DesktopOnly),
-    // 资产（shell.js:26-29）
-    WorkspaceEntry("会话", "本机 Agent 会话（只读）", WorkspaceAction.Sessions),
+    // 资产（shell.js:26-29）。会话页在手机端恒为空（`sessions.Scan()` 只读本机 agent 会话文件，
+    // Android 上没有），已整页删除，不再列入工作区。
     WorkspaceEntry("库（指令/技能/MCP）", "指令、技能、MCP 与子代理（查看/删除）", WorkspaceAction.Library),
     // 系统（shell.js:30-35）；请求日志在底栏「请求」Tab，不重复列
     WorkspaceEntry("网关与探针", "健康、版本与指标", WorkspaceAction.Probe),

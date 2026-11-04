@@ -49,7 +49,38 @@ data class SettingsSummary(
     val redactAllowCount: Int,
     val desktopApp: Boolean,
     val customRules: List<RedactCustomRule> = emptyList(),
+    // —— 桌面 settings.js「常规」tab 的字段（`settingsView()` 由 `maskSettings` + `settings.ui` 合并而来，
+    //    `lan.go:213-221`；这些键都在里面，不是盲猜）——
+    /** `settings.ui.theme`；空 = 跟随系统。 */
+    val uiTheme: String = "",
+    /** `monitor_minutes`：渠道自动探测（桌面 `settings.js:198` / `:207-209`）。 */
+    val monitorMinutes: Int = 0,
+    /** `keep_awake`：桌面宿主防休眠开关（手机端桌面专属）。 */
+    val keepAwake: Boolean = false,
+    /** `wsl_disabled`：WSL 接入关闭态（手机端恒不可用）。 */
+    val wslDisabled: Boolean = false,
+    /** `autostart.supported`：桌面宿主注册表/LaunchAgent 能力，手机端为 false。 */
+    val autostartSupported: Boolean = false,
+    /** —— 隐私（`settings.js:448-487`）：三个键都由 settingsView 回传 —— */
+    /** `settings.ui.redactShape`：保留格式的假值（`masking_api.go:489` 读的就是这个键）。 */
+    val redactShape: Boolean = false,
+    /** `privacy_mask.enabled`：响应回填。 */
+    val privacyMaskEnabled: Boolean = false,
+    /** `settings.ui.hooks`：请求管线钩子（`pipeline_hooks.go:44` 读同一个键）。 */
+    val hooks: PipelineHooks = PipelineHooks(),
 )
+
+/** 请求管线钩子（桌面 `settings.js:468-485` 的四项）。 */
+data class PipelineHooks(
+    val dropReasoning: Boolean = false,
+    /** 0 = 不限制。 */
+    val clampOutput: Int = 0,
+    val blockModels: List<String> = emptyList(),
+    val guardProviders: List<String> = emptyList(),
+)
+
+/** 模型重定向（桌面「模型目录」tab，`settings.js:400-446`）：虚拟名 → {渠道: 上游模型名}。 */
+data class ModelRedirects(val redirects: Map<String, Map<String, String>> = emptyMap())
 
 class SettingsApiClient(
     private val connectTimeoutMs: Int = 5_000,
@@ -89,6 +120,50 @@ class SettingsApiClient(
     /** GET /api/settings 是自定义规则的唯一读取入口；redact-actions 只返回内置规则。 */
     fun fetchCustomRules(status: GatewayStatus): List<RedactCustomRule> =
         parseSettings(requestJson(status, "/api/settings", "GET", null)).customRules
+
+    /* ---------------- 桌面「常规 / 隐私 / 模型目录」三个 tab 的写操作 ----------------
+     * 全部走 `POST /api/settings`（`settings_ui.go` 的合法键表：`ui` / `privacy_mask` /
+     * `keep_awake` / `wsl_disabled` / `monitor_minutes` 都是保留键，非保留键合并进 `settings.ui`）。
+     * 每个方法都回读完整设置，失败时由 requestJson 抛出服务端原文。
+     */
+
+    /** 主题：`settings.ui.theme`（`auto` / `light` / `dark`）。 */
+    fun setTheme(status: GatewayStatus, theme: String): SettingsSummary =
+        parseSettings(requestJson(status, "/api/settings", "POST", buildThemeJson(theme)))
+
+    /** 渠道自动探测间隔（分钟，0 = 关闭）。 */
+    fun setMonitorMinutes(status: GatewayStatus, minutes: Int): SettingsSummary =
+        parseSettings(requestJson(status, "/api/settings", "POST", buildMonitorMinutesJson(minutes)))
+
+    /** 防休眠（桌面宿主能力；手机端只做展示与置灰）。 */
+    fun setKeepAwake(status: GatewayStatus, enabled: Boolean): SettingsSummary =
+        parseSettings(requestJson(status, "/api/settings", "POST", buildKeepAwakeJson(enabled)))
+
+    /** WSL 接入开关（桌面宿主能力；手机端置灰）。 */
+    fun setWslEnabled(status: GatewayStatus, enabled: Boolean): SettingsSummary =
+        parseSettings(requestJson(status, "/api/settings", "POST", buildWslDisabledJson(!enabled)))
+
+    /** 保留格式的假值（`settings.ui.redactShape`）。 */
+    fun setRedactShape(status: GatewayStatus, enabled: Boolean): SettingsSummary =
+        parseSettings(requestJson(status, "/api/settings", "POST", buildRedactShapeJson(enabled)))
+
+    /** 响应回填（`privacy_mask.enabled`）。 */
+    fun setPrivacyMask(status: GatewayStatus, enabled: Boolean): SettingsSummary =
+        parseSettings(requestJson(status, "/api/settings", "POST", buildPrivacyMaskJson(enabled)))
+
+    /** 请求钩子四项一次写回（桌面 `saveHooks` 同口径：整对象覆盖）。 */
+    fun saveHooks(status: GatewayStatus, hooks: PipelineHooks): SettingsSummary =
+        parseSettings(requestJson(status, "/api/settings", "POST", buildHooksJson(hooks)))
+
+    /** 模型重定向（`GET /api/model-redirects`）。 */
+    fun fetchModelRedirects(status: GatewayStatus): ModelRedirects =
+        parseModelRedirectsSnapshot(requestJson(status, "/api/model-redirects", "GET", null))
+
+    /** 模型重定向保存（`POST /api/model-redirects {redirects}`）。 */
+    fun saveModelRedirects(status: GatewayStatus, redirects: Map<String, Map<String, String>>): ModelRedirects =
+        parseModelRedirectsSnapshot(
+            requestJson(status, "/api/model-redirects", "POST", buildModelRedirectsJson(redirects)),
+        )
 
     fun replaceRedactRules(status: GatewayStatus, rules: List<RedactCustomRule>): List<RedactCustomRule> =
         parseSettings(requestJson(status, "/api/settings/redact-rules", "POST", buildRedactRulesJson(rules))).customRules
@@ -445,7 +520,114 @@ internal fun parseSettings(body: String): SettingsSummary {
         redactAllowCount = root.optJSONArray("redactAllow")?.length() ?: 0,
         desktopApp = root.optBoolean("desktop_app", false),
         customRules = parseCustomRules(root),
+        uiTheme = root.optString("theme").trim(),
+        monitorMinutes = root.optInt("monitor_minutes", 0).coerceAtLeast(0),
+        keepAwake = root.optBoolean("keep_awake", false),
+        wslDisabled = root.optBoolean("wsl_disabled", false),
+        autostartSupported = root.optJSONObject("autostart")?.optBoolean("supported", false) ?: false,
+        redactShape = root.optBoolean("redactShape", false),
+        privacyMaskEnabled = root.optJSONObject("privacy_mask")?.optBoolean("enabled", false) ?: false,
+        hooks = parsePipelineHooks(root.optJSONObject("hooks")),
     )
+}
+
+/* ---------------- 新增字段的解析与 JSON 构造（纯函数，单测覆盖） ---------------- */
+
+internal fun parsePipelineHooks(obj: org.json.JSONObject?): PipelineHooks {
+    if (obj == null) {
+        return PipelineHooks()
+    }
+    fun list(key: String): List<String> {
+        val array = obj.optJSONArray(key) ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            array.optString(index).trim().ifBlank { null }
+        }
+    }
+    return PipelineHooks(
+        dropReasoning = obj.optBoolean("drop_reasoning", false),
+        clampOutput = obj.optInt("clamp_output", 0).coerceAtLeast(0),
+        blockModels = list("block_models"),
+        guardProviders = list("guard_providers"),
+    )
+}
+
+internal fun buildThemeJson(theme: String): String =
+    "{\"ui\":{\"theme\":${quoteJson(theme.trim())}}}"
+
+internal fun buildMonitorMinutesJson(minutes: Int): String =
+    "{\"monitor_minutes\":${minutes.coerceAtLeast(0)}}"
+
+internal fun buildKeepAwakeJson(enabled: Boolean): String = "{\"keep_awake\":$enabled}"
+
+internal fun buildWslDisabledJson(disabled: Boolean): String = "{\"wsl_disabled\":$disabled}"
+
+internal fun buildRedactShapeJson(enabled: Boolean): String = "{\"redactShape\":$enabled}"
+
+internal fun buildPrivacyMaskJson(enabled: Boolean): String = "{\"privacy_mask\":{\"enabled\":$enabled}}"
+
+internal fun buildHooksJson(hooks: PipelineHooks): String {
+    val blocks = hooks.blockModels.joinToString(",") { quoteJson(it) }
+    val guards = hooks.guardProviders.joinToString(",") { quoteJson(it) }
+    return "{\"hooks\":{\"drop_reasoning\":${hooks.dropReasoning}," +
+        "\"clamp_output\":${hooks.clampOutput.coerceAtLeast(0)}," +
+        "\"block_models\":[$blocks],\"guard_providers\":[$guards]}}"
+}
+
+internal fun buildModelRedirectsJson(redirects: Map<String, Map<String, String>>): String {
+    val body = redirects.entries.sortedBy { it.key }.joinToString(",") { (virtual, targets) ->
+        val inner = targets.entries.sortedBy { it.key }.joinToString(",") { (provider, model) ->
+            "${quoteJson(provider)}:${quoteJson(model)}"
+        }
+        "${quoteJson(virtual)}:{$inner}"
+    }
+    return "{\"redirects\":{$body}}"
+}
+
+internal fun parseModelRedirectsSnapshot(body: String): ModelRedirects {
+    val root = try {
+        org.json.JSONObject(body.trim())
+    } catch (_: org.json.JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的模型重定向格式不正确")
+    }
+    val redirects = root.optJSONObject("redirects") ?: return ModelRedirects()
+    val out = LinkedHashMap<String, Map<String, String>>()
+    val keys = redirects.keys()
+    while (keys.hasNext()) {
+        val virtual = keys.next().trim()
+        if (virtual.isEmpty()) {
+            continue
+        }
+        val targets = redirects.optJSONObject(virtual) ?: continue
+        val inner = LinkedHashMap<String, String>()
+        val innerKeys = targets.keys()
+        while (innerKeys.hasNext()) {
+            val provider = innerKeys.next().trim()
+            if (provider.isEmpty()) {
+                continue
+            }
+            inner[provider] = targets.optString(provider).trim()
+        }
+        out[virtual] = inner
+    }
+    return ModelRedirects(redirects = out)
+}
+
+/** 极简 JSON 字符串转义（只处理控制字符与引号/反斜杠，够用于键名与模型名）。 */
+internal fun quoteJson(value: String): String {
+    val out = StringBuilder(value.length + 2)
+    out.append('"')
+    for (ch in value) {
+        when (ch) {
+            '"' -> out.append("\\\"")
+            '\\' -> out.append("\\\\")
+            '\n' -> out.append("\\n")
+            '\r' -> out.append("\\r")
+            '\t' -> out.append("\\t")
+            else -> if (ch < ' ') out.append(String.format("\\u%04x", ch.code)) else out.append(ch)
+        }
+    }
+    out.append('"')
+    return out.toString()
 }
 
 private fun parseCustomRules(root: JSONObject): List<RedactCustomRule> {

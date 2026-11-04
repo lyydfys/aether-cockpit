@@ -173,7 +173,6 @@ internal fun workspaceRowTrailing(entry: WorkspaceEntry): String {
         is WorkspaceAction.Pending -> action.stage
         WorkspaceAction.Settings, WorkspaceAction.Routing, WorkspaceAction.Probe,
         WorkspaceAction.Totp, WorkspaceAction.Clients, WorkspaceAction.Agents,
-        WorkspaceAction.Sessions,
         WorkspaceAction.Wake, WorkspaceAction.Library, WorkspaceAction.Plugins,
         WorkspaceAction.Onboard,
         -> "已接入"
