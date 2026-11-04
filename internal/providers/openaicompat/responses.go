@@ -224,6 +224,17 @@ func buildResponsesInput(req *ir.UnifiedChatRequest) []any {
 			out = append(out, map[string]any{
 				"type": "function_call_output", "call_id": it.CallID, "output": it.Output,
 			})
+		case ir.ItemTypeCompaction:
+			// 压缩载荷原样送回：它是上游签发的密文，我们既不解析也不替换。
+			// 不带回去的话，长会话在压缩后会被上游以 invalid_encrypted_content 拒绝。
+			if it.EncryptedContent == "" {
+				continue
+			}
+			item := map[string]any{"type": "compaction", "encrypted_content": it.EncryptedContent}
+			if it.ID != "" {
+				item["id"] = it.ID
+			}
+			out = append(out, item)
 		}
 	}
 	return out

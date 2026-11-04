@@ -329,6 +329,10 @@ type Gateway struct {
 	// 只放内存：启动时会按设置重新注册一遍，不需要落盘。
 	customIDs []string
 
+	// 压缩载荷 → 账号绑定（见 compact_pins.go）。
+	compactPin     *compactPinStore
+	compactPinOnce sync.Once
+
 	// quota 额度卡片的后台补读去重（懒初始化）。
 	quotaOnce sync.Once
 	quota     *quotaRefreshState
@@ -1757,6 +1761,11 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			work.Meta["upstream_session"] = req.Meta["upstream_session"]
 
 			pinnedAccount, _ := req.Meta["pinned_account"].(string)
+			// 压缩载荷绑定优先于 previous_response_id：密文只有签发它的
+			// 账号能解开，换号会直接被上游拒绝（invalid_encrypted_content）。
+			if acc := g.pinnedAccountFor(work.Items); acc != "" {
+				pinnedAccount = acc
+			}
 
 			excludeFor := exclude
 			if len(fullThisPass) > 0 {

@@ -51,6 +51,11 @@ func (g *Gateway) handleResponsesCompact(w http.ResponseWriter, r *http.Request)
 			lastErr = err
 			continue
 		}
+		// 记住"这段压缩产物是哪个账号签发的"：后续请求带着它回来时，
+		// 必须回到同一个账号，否则上游会报 invalid_encrypted_content。
+		if sealed := extractSealedFromCompactResponse(out); sealed != "" {
+			g.compactPins().Bind(sealed, env.AccountID)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(out)

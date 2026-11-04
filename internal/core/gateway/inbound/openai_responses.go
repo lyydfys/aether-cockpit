@@ -129,6 +129,16 @@ func decodeResponsesInput(raw json.RawMessage) ([]ir.UnifiedItem, error) {
 				Output: decodeFunctionOutput(w.Output),
 			})
 
+		case "compaction":
+			// Codex 压缩后回传的封装载荷：必须原样带回上游，
+			// 丢掉会让长会话以 invalid_encrypted_content 被拒。
+			out = append(out, ir.UnifiedItem{
+				ID:               w.ID,
+				Type:             ir.ItemTypeCompaction,
+				Role:             "assistant",
+				EncryptedContent: w.EncryptedContent,
+			})
+
 		case "item_reference":
 			// 只记录引用，展开交给 StateSuture（它才有历史快照）。
 			out = append(out, ir.UnifiedItem{

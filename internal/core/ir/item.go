@@ -22,6 +22,12 @@ const (
 	ItemTypeFunctionCall ItemType = "function_call"
 	// ItemTypeFunctionCallOutput 客户端回传的工具执行结果。
 	ItemTypeFunctionCallOutput ItemType = "function_call_output"
+	// ItemTypeCompaction 是 Codex 压缩后回传的**封装载荷**。
+	//
+	// 它是上游签发的密文（encrypted_content），只能用原样送回上游；
+	// 我们自己既解不开也不该替换。丢弃它会让长会话在压缩后直接被上游
+	// 以 invalid_encrypted_content 拒绝——这正是"上下文一压缩就续不上"的根因。
+	ItemTypeCompaction ItemType = "compaction"
 )
 
 // MediaAttachment 多模态附件。URL 与 DataB64 二选一。
