@@ -45,6 +45,7 @@ import com.muyuchat.aether.runtime.AccountQuotaWindow
 import com.muyuchat.aether.runtime.ChannelProbe
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.QUOTA_UNSUPPORTED_COPY
+import com.muyuchat.aether.runtime.relativeTimeLabel
 import com.muyuchat.aether.runtime.ProviderSummary
 import com.muyuchat.aether.runtime.channelProbeAgeLabel
 import com.muyuchat.aether.runtime.channelProbeSummary
@@ -73,6 +74,9 @@ import kotlin.math.roundToInt
 
 /** 卡片上一屏最多铺三个额度窗口：再多就该去桌面端看，手机不堆到看不清。 */
 private const val MAX_QUOTA_WINDOWS = 3
+
+/** 从未读过额度时的值；`read_at` 为 0 / 缺失 / 脏值都归到这一句，绝不编时间。 */
+internal const val QUOTA_READ_NEVER_COPY = "从未读过"
 
 @Composable
 internal fun ChannelsPage(
@@ -646,6 +650,8 @@ private fun AccountQuotaCard(
         action.kind == AccountActionKind.QUOTA
     // 同一时刻只允许一个账号在动：别的卡片在忙时，这一张的写操作一起禁用。
     val anyBusy = action is AccountActionUiState.Busy
+    // 「最近读数」要相对当前时刻算；每次重组取一次即可（不缓存，读过之后自然会变）。
+    val nowMs = System.currentTimeMillis()
     val failure = (action as? AccountActionUiState.Failed)?.takeIf { it.accountId == row.accountId }
     val headingColor = if (row.disabled) {
         MaterialTheme.colorScheme.onSurfaceVariant
@@ -711,7 +717,7 @@ private fun AccountQuotaCard(
 
             // 额度
             Spacer(Modifier.height(12.dp))
-            QuotaBlock(row = row)
+            QuotaBlock(row = row, nowMs = nowMs)
 
             // 重置时间 / 最近使用
             Spacer(Modifier.height(8.dp))
@@ -866,7 +872,7 @@ private fun AccountQuotaCard(
 
 /** 额度区：有窗口画窗口条，有总量/已用画一条总条，都没有就说明原因（绝不画 0%）。 */
 @Composable
-private fun QuotaBlock(row: AccountQuotaRow) {
+private fun QuotaBlock(row: AccountQuotaRow, nowMs: Long) {
     if (!row.quotaSupported) {
         Text(
             text = QUOTA_UNSUPPORTED_COPY,
@@ -897,6 +903,12 @@ private fun QuotaBlock(row: AccountQuotaRow) {
             Spacer(Modifier.height(8.dp))
         }
     }
+    // 最近读数：点过一次「读取额度」后这行会变，用户据此确认"这次真的读到了"。
+    Text(
+        text = "最近读数 ${quotaReadAtLabel(row.quotaReadAt, nowMs)}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     accountQuotaNote(row)?.let { note ->
         Text(
             text = note,
@@ -1216,6 +1228,21 @@ internal fun accountRemainingPercent(row: AccountQuotaRow): Int? {
 internal fun quotaReadLabel(reading: Boolean): String = if (reading) "读取中…" else "读取额度"
 
 /**
+ * 「最近读数」的值：`read_at` 是**Unix 秒**（`contract.go:249`，服务端用 `time.Now().Unix()` 写入）。
+ *
+ * - `<= 0`（缺字段/从未读过/脏值）→ [QUOTA_READ_NEVER_COPY]，**不编时间**；
+ * - 有值 → 复用 [relativeTimeLabel]（刚刚 / N 分钟前 / N 小时前 / N 天前），不另写一套格式化。
+ *
+ * [nowMs] 由调用方传入，纯函数好测（不读系统时钟）。
+ */
+internal fun quotaReadAtLabel(readAtSec: Long, nowMs: Long): String {
+    if (readAtSec <= 0L) {
+        return QUOTA_READ_NEVER_COPY
+    }
+    return relativeTimeLabel(nowMs, readAtSec * 1000L)
+}
+
+/**
  * 只有「渠道有额度接口」且「当前没有任何账号在动」时才可点。
  * 同一时刻只允许一个账号在读取，所以别的卡片在忙时这里也要禁用。
  */
@@ -1225,9 +1252,9 @@ internal fun quotaReadEnabled(quotaSupported: Boolean, anyBusy: Boolean): Boolea
 /**
  * 没有额度条可画时的说明文案；有条可画就返回 null（不再叠一句话）。
  *
- * 三句话互不相同，因为它们说的是三件事：
+ * 三种"没有条"的情况：
  * - `quota_supported == false` → 渠道**没有额度接口**（能力缺失，不是读到 0%）；
- * - `quota.read_at == 0` → **还没读过**（用户点「读取额度」就能拉一次）；
+ * - 支持额度但没读过 → 这一态由额度区那行 `最近读数 从未读过` 表达，这里不再重复；
  * - 读过了但没有窗口 → 上游这次确实没给窗口。
  */
 internal fun accountQuotaNote(row: AccountQuotaRow): String? = when {
@@ -1236,8 +1263,8 @@ internal fun accountQuotaNote(row: AccountQuotaRow): String? = when {
     accountRemainingPercent(row) != null -> null
     row.quotaError.isNotBlank() -> null
     row.quotaMessage.isNotBlank() -> row.quotaMessage
-    row.quotaReadAt <= 0L -> "还没读过额度，点「读取额度」拉一次"
-    else -> "上次读取没有返回可用窗口（读于 ${accountTimeLabel(row.quotaReadAt) ?: "未知时间"}）"
+    row.quotaReadAt <= 0L -> null
+    else -> "上次读取没有返回可用窗口"
 }
 
 /**

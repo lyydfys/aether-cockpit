@@ -17,6 +17,9 @@ import org.junit.Test
  * - 读取成功后百分比条能直接用回包快照画出来。
  */
 class ChannelsQuotaReadTest {
+    /** 固定"现在"，相对时间才是确定的。 */
+    private val NOW_MS = 1_762_300_000_000L
+
     private fun row(
         accountId: String = "acc-1",
         quotaSupported: Boolean = true,
@@ -42,21 +45,19 @@ class ChannelsQuotaReadTest {
     )
 
     @Test
-    fun unsupportedNeverReadAndReadButEmptyAreThreeDifferentSentences() {
-        val unsupported = accountQuotaNote(row(quotaSupported = false))!!
-        val neverRead = accountQuotaNote(row(quotaSupported = true, quotaReadAt = 0L))!!
-        val readButEmpty = accountQuotaNote(row(quotaSupported = true, quotaReadAt = 1762290000L))!!
-
+    fun unsupportedAndNeverReadAreDifferentSentences() {
         // ① 渠道没有额度接口
+        val unsupported = accountQuotaNote(row(quotaSupported = false))!!
         assertEquals(QUOTA_UNSUPPORTED_COPY, unsupported)
         assertTrue(unsupported.contains("接口"))
-        // ② 还没读过 → 引导点「读取额度」
-        assertTrue(neverRead, neverRead.contains("还没读过"))
-        assertTrue(neverRead, neverRead.contains("读取额度"))
-        // ③ 读过了但上游没给窗口 → 带上读取时间
+        // ② 支持额度但没读过 → 额度区由「最近读数 从未读过」表达，不再叠一句说明
+        assertNull(accountQuotaNote(row(quotaSupported = true, quotaReadAt = 0L)))
+        assertEquals(QUOTA_READ_NEVER_COPY, quotaReadAtLabel(readAtSec = 0L, nowMs = NOW_MS))
+        // ③ 读过了但上游没给窗口 → 另一种说法
+        val readButEmpty = accountQuotaNote(row(quotaSupported = true, quotaReadAt = 1_762_290_000L))!!
         assertTrue(readButEmpty, readButEmpty.contains("上次读取没有返回可用窗口"))
-        // 三句话互不相同，用户才分得清
-        assertEquals(3, setOf(unsupported, neverRead, readButEmpty).size)
+        // 「不提供接口」与「从未读过」绝不是同一句
+        assertTrue(unsupported != quotaReadAtLabel(readAtSec = 0L, nowMs = NOW_MS))
     }
 
     @Test

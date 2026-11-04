@@ -100,11 +100,10 @@ class ChannelsAccountCardTest {
         assertNull(accountQuotaNote(row(quotaError = "upstream 401")))
         // 服务端给了说明 → 原样用
         assertEquals("积分制渠道，无重置窗口", accountQuotaNote(row(message = "积分制渠道，无重置窗口")))
-        // 支持额度、但一次都没读过 → 提示可以主动读一次（与"上游不提供"区分）
-        assertTrue(accountQuotaNote(row())!!.contains("还没读过"))
-        // 读过了但没有窗口 → 另一种说法，且带上读取时间
-        val readButEmpty = accountQuotaNote(row(quotaReadAt = 1762290000L))!!
-        assertTrue(readButEmpty.contains("上次读取没有返回可用窗口"))
+        // 支持额度但没读过 → 这一态交给额度区的「最近读数 从未读过」，不再叠一句说明
+        assertNull(accountQuotaNote(row()))
+        // 读过了但没有窗口 → 明确说"上次没返回窗口"
+        assertEquals("上次读取没有返回可用窗口", accountQuotaNote(row(quotaReadAt = 1762290000L)))
     }
 
     @Test
