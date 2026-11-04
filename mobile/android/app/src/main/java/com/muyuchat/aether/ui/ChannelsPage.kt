@@ -94,13 +94,15 @@ internal fun ChannelsPage(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = "渠道",
+                        // 与桌面端同名的页面标题：桌面导航写「账号与额度」，
+                        // 副标题也照抄桌面端的原句，避免两端对同一页有两种说法。
+                        text = "账号与额度",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        text = "本机渠道与账号概览",
+                        text = "账号、模型与余量，一眼看到底",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

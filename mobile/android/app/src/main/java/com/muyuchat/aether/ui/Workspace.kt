@@ -7,7 +7,9 @@ enum class MobileTab(
     val stage: String? = null,
 ) {
     OVERVIEW("概览", "状态、地址与启停"),
-    CHANNELS("渠道", "账号、渠道与额度", "Stage 4"),
+    // 桌面端把这一页叫「账号与额度」（账号、模型与余量一眼看到底）。
+    // 手机上底栏只有两个字的位置，所以 Tab 用「额度」，页内标题仍写全称。
+    CHANNELS("额度", "账号、模型与余量", "Stage 4"),
     USAGE("用量", "本机用量与成本", "Stage 5"),
     REQUESTS("请求", "请求账本与诊断", "Stage 5"),
     MORE("更多", "全部工作区与设置入口"),
