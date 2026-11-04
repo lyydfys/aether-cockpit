@@ -39,11 +39,15 @@ func (g *Gateway) mobileAdminAllowed(r *http.Request) bool {
 
 // mobileCallerAllowed 校验模型侧 caller key。接受 OpenAI 风格的
 // Authorization: Bearer 与 Anthropic/Gemini 风格的 x-api-key，
-// 但不读取 query（凭据不得进 URL）。未配置 key 时失败关闭。
+// 但不读取 query（凭据不得进 URL）。
+//
+// 两类凭据都算数（与桌面一致）：
+//  1. 运行时生成、随启动配置下发的 `cfg.CallerKey`；
+//  2. 管理面 `/api/caller-keys` 创建且**未停用**的密钥——手机端用户在设置页点的
+//     「新建密钥」必须真的能用，否则就是"创建了却调不通"的假功能。
+//
+// 两者都不匹配时一律拒绝（fail-closed）：没配置不等于放行。
 func (g *Gateway) mobileCallerAllowed(r *http.Request) bool {
-	if g.cfg.CallerKey == "" {
-		return false
-	}
 	token := ""
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
 	const prefix = "Bearer "
@@ -52,5 +56,14 @@ func (g *Gateway) mobileCallerAllowed(r *http.Request) bool {
 	} else if v := strings.TrimSpace(r.Header.Get("x-api-key")); v != "" {
 		token = v
 	}
-	return token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(g.cfg.CallerKey)) == 1
+	if token == "" {
+		return false
+	}
+	if g.cfg.CallerKey != "" && subtle.ConstantTimeCompare([]byte(token), []byte(g.cfg.CallerKey)) == 1 {
+		return true
+	}
+	if _, ok := g.callerKeys.match(token); ok {
+		return true
+	}
+	return false
 }

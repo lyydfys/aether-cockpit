@@ -78,8 +78,19 @@ func (g *Gateway) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// redactMCPEntries 返回去掉 OAuth clientSecret 的副本（原始条目也不外发敏感值）。
+// redactMCPEntries 返回一份"结构可见、凭据不可见"的副本。
+//
+// 两层掩码：
+//  1. OAuth 的 clientSecret 直接清空（沿用原有行为）；
+//  2. config 里的敏感值（env / headers 的值、args 里 `--flag=value` 的值）换成掩码。
+//
+// 第 2 条是必须的：MCP 的 `env` 通常就是 API_KEY，原先它原样出现在
+// `GET /api/library` 的响应里——任何拿到管理会话的客户端（含手机端）都能读到明文。
+// 掩码只作用于**外发视图**，`library.json` 里仍是真值，下发给 Agent 时不受影响。
 func redactMCPEntries(in []library.MCPEntry) []library.MCPEntry {
+	if len(in) == 0 {
+		return nil
+	}
 	out := make([]library.MCPEntry, len(in))
 	for i, m := range in {
 		cp := m
@@ -88,7 +99,87 @@ func redactMCPEntries(in []library.MCPEntry) []library.MCPEntry {
 			o.ClientSecret = ""
 			cp.OAuth = &o
 		}
+		cp.Config = maskMCPConfig(m.Config)
 		out[i] = cp
+	}
+	return out
+}
+
+// maskMCPConfig 把 config 里的凭据值换成掩码，保留键名与命令，便于页面显示结构。
+//
+// 规则：
+//   - `env` / `headers`：保留键，值走 maskHeaderValue（`••••` + 末 4 位）；
+//   - `args`：只对 `--flag=value` 形式掩值，保留 flag 本身；
+//   - 其余字段（command、url、transport…）原样保留；
+//   - **解不开或不是对象 → 整体置空**。宁可少给，也不把未知结构原样外发。
+//
+// 注意：重新序列化会让 JSON 的键顺序变化。目前仓库里没有任何代码依赖这个顺序。
+func maskMCPConfig(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return nil
+	}
+	for _, key := range []string{"env", "headers"} {
+		sub, ok := obj[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		masked := make(map[string]any, len(sub))
+		for k, v := range sub {
+			if s, ok := v.(string); ok {
+				masked[k] = maskHeaderValue(s)
+				continue
+			}
+			// 非字符串值（数字/布尔）也可能是凭据的一部分：统一掩掉，保留键。
+			masked[k] = "••••"
+		}
+		obj[key] = masked
+	}
+	if args, ok := obj["args"].([]any); ok {
+		next := make([]any, 0, len(args))
+		for _, a := range args {
+			s, isStr := a.(string)
+			if !isStr {
+				next = append(next, a)
+				continue
+			}
+			next = append(next, maskMCPArg(s))
+		}
+		obj["args"] = next
+	}
+	buf, err := json.Marshal(obj)
+	if err != nil {
+		return nil
+	}
+	return buf
+}
+
+// maskMCPArg 只处理 `--flag=value` / `-f=value` 这种内联赋值形式：保留 flag，掩掉值。
+// 没有 `=` 的参数（例如 `mcp-server-fetch`）原样保留——它不是凭据。
+func maskMCPArg(arg string) string {
+	eq := strings.IndexByte(arg, '=')
+	if eq <= 0 {
+		return arg
+	}
+	flag := arg[:eq]
+	if !strings.HasPrefix(flag, "-") {
+		return arg
+	}
+	return flag + "=" + maskHeaderValue(arg[eq+1:])
+}
+
+// maskMCPArgs 批量版本。注意：`/api/library` 有**两条**路径会把 args 带出去——
+// `mcp_servers[].config.args` 和插件视图 `servers[].args`，两处都必须掩。
+func maskMCPArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = maskMCPArg(a)
 	}
 	return out
 }
@@ -187,7 +278,7 @@ func (g *Gateway) libraryPluginView(snap library.Snapshot) map[string]any {
 		}
 		servers = append(servers, map[string]any{
 			"name": m.Name, "transport": transport,
-			"command": cfg.Command, "args": cfg.Args, "url": cfg.URL,
+			"command": cfg.Command, "args": maskMCPArgs(cfg.Args), "url": cfg.URL,
 			"agents": agents, "icon": "generic",
 			"signIn": g.mcpSignInView(m.Name, cfg.URL),
 			"disabledTools": func() []string {

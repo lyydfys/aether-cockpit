@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -12,14 +13,21 @@ import (
 	"strings"
 	"time"
 
+	"aether-cockpit/internal/core/credential"
 	"aether-cockpit/internal/core/simplecrypt"
 	"aether-cockpit/internal/core/totp"
 )
 
 // 本机 2FA（TOTP）验证码管理：对标 local-vault 的 2FA 管理页。
 //
-// 密钥用 simplecrypt 加密后落盘（0600），列表接口不回传明文；
-// 验证码由本机计算，页面只拿 code/remaining，不碰 secret。
+// seed 的落盘方式取决于运行形态：
+//   - 桌面：没有 `CredentialKey`，沿用 simplecrypt（既有 2fa.json 继续可读）。
+//   - 移动：`CredentialKey` 由 Android Keystore 派生，seed 走 envelope v2
+//     （AES-256-GCM，AAD 绑定条目 ID）。simplecrypt 的 key 来自 hostname/home，
+//     在 Android 上要么退化成「所有设备同一个 key」，要么换装后再也解不开，
+//     两者都不满足架构文档要求的「TOTP seed 走 Keystore 包裹的 cipher」。
+//
+// 列表接口一律不回传明文 seed，验证码只在本机计算。
 
 type twoFAEntry struct {
 	ID         string `json:"id"`
@@ -39,6 +47,34 @@ type twoFAFile struct {
 }
 
 func (g *Gateway) twoFAPath() string { return filepath.Join(g.configDir(), "2fa.json") }
+
+// twoFASecretAAD 把 seed 密文绑定到条目 ID：同一份密文换到别的条目就解不开，
+// 防止「拷一条密文到另一条」这种搬运。
+func twoFASecretAAD(id string) string { return credential.AAD("2fa", id) }
+
+// sealTwoFASecret 决定 seed 怎么落盘。
+//
+// 有 CredentialKey（移动运行时，Keystore 派生）就走 envelope v2；没有就保持
+// simplecrypt，保证桌面既有 2fa.json 不被写坏。**不猜、不降级**：给了 key 却写
+// simplecrypt，等于把移动端的安全前提悄悄丢掉。
+func (g *Gateway) sealTwoFASecret(id, secret string) ([]byte, error) {
+	if len(g.cfg.CredentialKey) > 0 {
+		return credential.Seal(g.cfg.CredentialKey, []byte(secret), twoFASecretAAD(id))
+	}
+	return simplecrypt.Encrypt([]byte(secret))
+}
+
+// openTwoFASecret 对称地解封。带 v2 magic 但当前运行模式没有 key 时如实报错，
+// 不能假装成功；老 simplecrypt 条目继续可读（桌面与老数据兼容）。
+func (g *Gateway) openTwoFASecret(id string, raw []byte) ([]byte, error) {
+	if credential.IsV2(raw) {
+		if len(g.cfg.CredentialKey) == 0 {
+			return nil, errors.New("该条目由设备凭据加密，当前运行模式没有可用密钥")
+		}
+		return credential.Open(g.cfg.CredentialKey, raw, twoFASecretAAD(id))
+	}
+	return simplecrypt.Decrypt(raw)
+}
 
 // load2FA 读取条目；调用方持有 twofaMu。
 func (g *Gateway) load2FA() ([]twoFAEntry, error) {
@@ -139,7 +175,12 @@ func (g *Gateway) handle2FAAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enc, err := simplecrypt.Encrypt([]byte(secret))
+	// 条目 ID 要在加封之前生成：移动端的 AAD 绑定条目 ID，先封后取 ID 就绑不上。
+	buf := make([]byte, 6)
+	_, _ = rand.Read(buf)
+	id := "2fa_" + hex.EncodeToString(buf)
+
+	enc, err := g.sealTwoFASecret(id, secret)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "加密密钥失败: " + err.Error()})
 		return
@@ -149,10 +190,8 @@ func (g *Gateway) handle2FAAdd(w http.ResponseWriter, r *http.Request) {
 		tail = tail[len(tail)-4:]
 	}
 
-	buf := make([]byte, 6)
-	_, _ = rand.Read(buf)
 	entry := twoFAEntry{
-		ID:         "2fa_" + hex.EncodeToString(buf),
+		ID:         id,
 		Issuer:     strings.TrimSpace(body.Issuer),
 		Account:    strings.TrimSpace(body.Account),
 		Note:       strings.TrimSpace(body.Note),
@@ -226,9 +265,9 @@ func (g *Gateway) handle2FACodes(w http.ResponseWriter, r *http.Request) {
 			views = append(views, v)
 			continue
 		}
-		plain, err := simplecrypt.Decrypt(raw)
+		plain, err := g.openTwoFASecret(e.ID, raw)
 		if err != nil {
-			v["error"] = "密钥无法解密（换机器后需要重新添加）"
+			v["error"] = "密钥无法解密：" + err.Error()
 			views = append(views, v)
 			continue
 		}
