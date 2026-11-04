@@ -476,6 +476,16 @@ export default {
       const pri = input({ type: 'number', value: String(a.priority || 0), label: '优先级', placeholder: '0 = 默认，1 = 首选' });
       const wt = input({ type: 'number', value: String(a.weight || 1), label: '权重', placeholder: '1 - 1000' });
       const conc = input({ type: 'number', value: a.concurrency == null ? '' : String(a.concurrency), label: '并发上限', placeholder: '留空 = 跟随全局' });
+      // 窗口配额闸：用到上游窗口的百分之几就先把这号按住。
+      // 订阅型渠道的限流按 5h/7d 窗口计，打满后整个窗口都发不出去；
+      // 提前留一点余量，可以把"用满即挂"变成"平滑用光"。
+      const capShares = (a.window_caps && a.window_caps.all) || 0;
+      const capAll = input({
+        type: 'number',
+        value: capShares > 0 && capShares < 100 ? String(capShares) : '',
+        label: '窗口配额闸',
+        placeholder: '留空 = 不限制；例：90 表示用到 90% 就暂停这个号',
+      });
       const exposed = ((p && p.models) || []).filter((m) => m.on).map((m) => m.id);
       const modelBox = h('div', { class: 'list', style: 'max-height:220px;overflow:auto;gap:2px' });
       if (!exposed.length) {
@@ -493,6 +503,7 @@ export default {
           field('状态', dis),
           h('div', { class: 'inline', style: 'gap:10px;align-items:flex-start' }, field('优先级', pri), field('权重', wt)),
           field('并发上限', conc),
+          field('窗口配额闸', capAll),
           ...(binding ? [binding] : []),
           h('div', { class: 'meta' }, '可用模型由渠道「模型」页统一维护；账号级白名单不再单独设置。'),
           modelBox,
@@ -504,6 +515,8 @@ export default {
                 priority: Math.max(0, Number(pri.value) || 0),
                 weight: Math.min(1000, Math.max(1, Number(wt.value) || 1)),
                 concurrency: conc.value.trim() === '' ? -1 : Math.max(0, Number(conc.value) || 0),
+                // 窗口配额闸：留空或 >=100 表示不限制（传 0）。
+                window_caps: { all: Math.min(100, Math.max(0, Number(capAll.value) || 0)) },
                 // 账号白名单与渠道模型选择合并：清掉旧账号级限制，统一看渠道勾选。
                 allowed_models: [],
               };

@@ -817,6 +817,8 @@ type AccountSnapshot struct {
 	Concurrency      *int              `json:"concurrency,omitempty"`
 	AllowedModels    []string          `json:"allowed_models,omitempty"`
 	ModelMapping     map[string]string `json:"model_mapping,omitempty"`
+	// WindowCaps 是窗口配额闸（用到窗口多少就按住这个号），只在真设置过时回显。
+	WindowCaps *WindowCaps `json:"window_caps,omitempty"`
 }
 
 // CredentialsSnapshot 返回凭证的深拷贝，供导出/迁移使用。
@@ -864,6 +866,10 @@ func (e *AccountEnv) Snapshot() AccountSnapshot {
 	if e.concurrency != nil {
 		v := *e.concurrency
 		s.Concurrency = &v
+	}
+	// 窗口配额闸要回显给界面，否则用户设了看不见、也没法确认是否生效。
+	if e.windowCaps.Holds() {
+		s.WindowCaps = &e.windowCaps
 	}
 	if !e.resetAt.IsZero() {
 		s.ResetAt = e.resetAt.Unix()

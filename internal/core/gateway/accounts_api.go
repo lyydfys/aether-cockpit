@@ -85,6 +85,13 @@ func (g *Gateway) handleAccountSettings(w http.ResponseWriter, r *http.Request) 
 		Weight        *int      `json:"weight"`
 		Concurrency   *int      `json:"concurrency"`
 		AllowedModels *[]string `json:"allowed_models"`
+		// WindowCaps 是"用到窗口多少就按住这个号"的配额闸：
+		//   {"all": 90, "windows": {"5h": 60, "7d": 80}}
+		// 传 null 表示清除（回到不限制）；份额 0 或 100 也视为不限制。
+		WindowCaps *struct {
+			All     int            `json:"all"`
+			Windows map[string]int `json:"windows"`
+		} `json:"window_caps"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -126,11 +133,42 @@ func (g *Gateway) handleAccountSettings(w http.ResponseWriter, r *http.Request) 
 		}
 		env.SetAllowedModels(models)
 	}
+	if body.WindowCaps != nil {
+		caps := provider.WindowCaps{All: clampCapShare(body.WindowCaps.All)}
+		if len(body.WindowCaps.Windows) > 0 {
+			caps.Windows = make(map[string]int, len(body.WindowCaps.Windows))
+			for k, v := range body.WindowCaps.Windows {
+				key := provider.WindowCapID(k)
+				if key == "" {
+					continue
+				}
+				caps.Windows[key] = clampCapShare(v)
+				if len(caps.Windows) >= 16 {
+					break
+				}
+			}
+		}
+		env.SetWindowCaps(caps)
+	}
 	g.saveAccountsNow()
 	eventbus.Emit(eventbus.TopicAccount+".updated", map[string]any{
 		"account_id": id, "provider_id": env.ProviderID, "change": "settings",
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"account": env.Snapshot()})
+}
+
+// clampCapShare 把窗口份额收敛到 0..100。
+//
+// 份额是"用到窗口的百分之几就按住"，负数没有意义、超过 100 等于没限制；
+// 顺手挡住手写配置里的荒唐值，避免它把账号永久按住。
+func clampCapShare(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
 }
 
 // handleAccountBatch POST /api/accounts/batch
