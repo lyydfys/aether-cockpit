@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"aether-cockpit/internal/core/clients"
 	"aether-cockpit/internal/core/library"
 	"aether-cockpit/internal/core/spec"
 	"aether-cockpit/internal/provider"
@@ -35,6 +37,21 @@ type backupBundle struct {
 	// Icons 是自定义供应商图标：文件名 → base64 内容。
 	// 设置里只存 file:<name> 引用，不带文件的话换机恢复会全部退回通用图标。
 	Icons map[string]string `json:"icons,omitempty"`
+	// Agents 是"哪些客户端接了这个网关、用的是哪个模型"的快照。
+	//
+	// 只导出**可安全字段**（id / base_url / model）：客户端配置文件里通常直接
+	// 写着 API Key，把整份配置塞进备份等于把密钥传到云端。换机时这已经够用——
+	// 网关地址和模型名一填，密钥走各客户端自己的登录态或账号池。
+	Agents []backupAgentMeta `json:"agents,omitempty"`
+}
+
+// backupAgentMeta 是单个客户端的接线快照（不含任何密钥）。
+type backupAgentMeta struct {
+	ID      string `json:"id"`
+	Name    string `json:"name,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	Model   string `json:"model,omitempty"`
 }
 
 type backupAccountMeta struct {
@@ -97,6 +114,7 @@ func (g *Gateway) buildBackupBundle() backupBundle {
 		bundle.Library = &snap
 	}
 	bundle.Icons = g.backupIcons()
+	bundle.Agents = g.backupAgents()
 
 	for _, e := range g.poolAll() {
 		snap := e.Snapshot()
@@ -110,8 +128,34 @@ func (g *Gateway) buildBackupBundle() backupBundle {
 	return bundle
 }
 
-// handleBackupImport POST /api/backup/import
+// backupAgents 采集当前"已接入本网关"的客户端快照（只取可安全字段）。
 //
+// 只收 Managed 非空的条目：那表示这个客户端的配置里确实有我们写的网关地址，
+// 而不是用户自己手配的别家服务——把别人的接线也导进备份没有意义。
+func (g *Gateway) backupAgents() []backupAgentMeta {
+	mgr := g.clientsManager()
+	if mgr == nil {
+		return nil
+	}
+	var out []backupAgentMeta
+	for _, st := range mgr.List() {
+		if st.Managed == nil || st.Managed.BaseURL == "" {
+			continue
+		}
+		out = append(out, backupAgentMeta{
+			ID:      st.ID,
+			Name:    st.Name,
+			Kind:    st.Kind,
+			BaseURL: st.Managed.BaseURL,
+			Model:   st.Managed.Model,
+		})
+		if len(out) >= 64 {
+			break
+		}
+	}
+	return out
+}
+
 // 两种形态：
 //   - {"data": base64, "pass": "口令"} —— 桌面壳导出的密封文件；
 //   - 直接是导出的 bundle JSON —— 兼容旧流程。
@@ -197,7 +241,7 @@ func (g *Gateway) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 		profiles = len(bundle.Settings.Profiles)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"Added": 0, "Replaced": 0, "Profiles": profiles, "Agents": 0,
+		"Added": 0, "Replaced": 0, "Profiles": profiles, "Agents": len(bundle.Agents),
 		"NeedKey": needKey, "SignIn": []string{},
 		"Plugins": []string{}, "PluginErrors": map[string]string{},
 		"Library":         applied["library"],
@@ -425,7 +469,60 @@ func (g *Gateway) applyBundle(bundle *backupBundle) map[string]bool {
 		}
 		applied["accounts"] = okN > 0
 	}
+	// 5. 客户端接线：把"哪些客户端接过本网关"重新写回去。
+	//
+	// 只对**已检测到、且当前没有我们接线的**条目动手：
+	//   - 已经接过（Managed 非空）说明本机配置是最新的，不该覆盖；
+	//   - 没装的客户端直接跳过（没有文件可写）。
+	// 写入的只有 base_url / model 和一个占位 token；真实密钥仍由各客户端
+	// 自己的登录态或账号池提供——备份里本来就没有密钥。
+	if len(bundle.Agents) > 0 {
+		if mgr := g.clientsManager(); mgr != nil {
+			// 用本机的网关地址（不是备份里的）：换机后地址可能不同。
+			origin := g.PublicAddr()
+			status := map[string]clients.Status{}
+			for _, st := range mgr.List() {
+				status[st.ID] = st
+			}
+			apiKey := strings.TrimSpace(g.cfg.APIKey)
+			if apiKey == "" {
+				apiKey = "aether-local"
+			}
+			n := 0
+			for _, meta := range restorableAgents(bundle.Agents, status) {
+				if _, err := mgr.Apply(meta.ID, clients.ApplyParams{
+					BaseURL: origin,
+					APIKey:  apiKey,
+					Model:   meta.Model,
+				}); err == nil {
+					n++
+				}
+			}
+			applied["agents"] = n > 0
+		}
+	}
 	return applied
+}
+
+// restorableAgents 过滤出"该恢复接线"的客户端。
+//
+// 三条规则（顺序即优先级）：
+//  1. 备份里没有的 id 不处理；
+//  2. 本机没装（Detected=false）跳过——没有文件可写；
+//  3. 本机已经有我们写的接线（Managed 非空）跳过——不覆盖更新的配置。
+//
+// 抽成纯函数是为了能测：真实 Apply 会写用户的 home 目录，测试只能碰文件系统
+// 之外的判定逻辑。
+func restorableAgents(agents []backupAgentMeta, status map[string]clients.Status) []backupAgentMeta {
+	var out []backupAgentMeta
+	for _, meta := range agents {
+		st, ok := status[meta.ID]
+		if !ok || !st.Detected || st.Managed != nil {
+			continue
+		}
+		out = append(out, meta)
+	}
+	return out
 }
 
 // handleBackupPush POST /api/backup/push —— 把当前配置备份推送到 WebDAV。
