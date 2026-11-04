@@ -11,6 +11,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,6 +51,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -495,6 +497,62 @@ private fun BubbleMenu(
     }
 }
 
+/** 品牌图形在球内的显示尺寸：48dp plate 里 32dp（占比 67%，1.3× 字号下仍清晰）。 */
+private val BrandOrbGlyphDp = 32.dp
+
+/** `ic_brand_mark` 的 viewport（与品牌 SVG 的 viewBox 一致）。 */
+private const val BrandMarkViewport = 108f
+
+/**
+ * 停用态/启用态的两色取色。
+ *
+ * 停止态必须满足 `plate != glyph`：底板取 `surfaceVariant`、图形取 `onSurfaceVariant`；
+ * 星芒用底板色"挖亮"，这样深灰气泡里仍能看出一颗亮星芒，而不是糊成一块实心。
+ */
+internal data class OrbColors(val plate: Color, val glyph: Color, val star: Color)
+
+internal fun stoppedOrbColors(surfaceVariant: Color, onSurfaceVariant: Color): OrbColors =
+    OrbColors(plate = surfaceVariant, glyph = onSurfaceVariant, star = surfaceVariant)
+
+/**
+ * 球内的品牌图形。
+ *
+ * - 运行态：原色渲染 `ic_brand_mark`（蓝气泡 + 白星芒）。
+ * - 停止态：**不能用单一 `ColorFilter.tint` 直接染整张图**——tint 会把白星芒一起染成灰，
+ *   形状塌成实心块；更不能用 `ic_brand_avatar`（它带 108×108 圆角背景，一 tint 就是一整块灰方块，
+ *   这正是线上那个「灰色实心圆角方块」的成因）。所以用透明的 mark + 双色：
+ *   气泡染成 [glyph]，星芒按品牌 SVG 的多边形坐标单独用 [star]（底板色）补画。
+ */
+@Composable
+private fun BrandOrbMark(running: Boolean, plate: Color, glyph: Color) {
+    Box(Modifier.size(BrandOrbGlyphDp)) {
+        Image(
+            painter = painterResource(R.drawable.ic_brand_mark),
+            contentDescription = null,
+            colorFilter = if (running) null else ColorFilter.tint(glyph),
+            modifier = Modifier.matchParentSize(),
+        )
+        if (!running) {
+            Canvas(Modifier.matchParentSize()) {
+                val scale = size.minDimension / BrandMarkViewport
+                val star = Path().apply {
+                    // 星芒多边形（与品牌 SVG 的 L 段逐一对应：M54,34 L57,47 L70,50 L57,53 L54,66 L51,53 L38,50 L51,47 Z）
+                    moveTo(54f * scale, 34f * scale)
+                    lineTo(57f * scale, 47f * scale)
+                    lineTo(70f * scale, 50f * scale)
+                    lineTo(57f * scale, 53f * scale)
+                    lineTo(54f * scale, 66f * scale)
+                    lineTo(51f * scale, 53f * scale)
+                    lineTo(38f * scale, 50f * scale)
+                    lineTo(51f * scale, 47f * scale)
+                    close()
+                }
+                drawPath(star, plate)
+            }
+        }
+    }
+}
+
 /** 运行中才组合呼吸动画；停止态是单独的静态灰，不创建 InfiniteTransition。 */
 @Composable
 private fun GatewayOrb(running: Boolean) {
@@ -559,15 +617,11 @@ private fun OrbPlate(
             containerColor = container,
             borderColor = border,
         ) {
-            Image(
-                painter = painterResource(R.drawable.ic_brand_avatar),
-                contentDescription = null,
-                colorFilter = if (running) {
-                    null
-                } else {
-                    ColorFilter.tint(MaterialTheme.colorScheme.onSurfaceVariant)
-                },
-                modifier = Modifier.size(28.dp),
+            // 停止态用 onSurfaceVariant 的深灰气泡 + 底板色星芒（两色，避免糊成实心块）。
+            BrandOrbMark(
+                running = running,
+                plate = container,
+                glyph = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -669,12 +723,8 @@ private fun SystemOrb(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            Image(
-                painter = painterResource(R.drawable.ic_brand_avatar),
-                contentDescription = null,
-                colorFilter = if (running) null else ColorFilter.tint(outline),
-                modifier = Modifier.size(28.dp),
-            )
+            // 系统悬浮球同理：透明 mark + 两色（停止态 outline 气泡 + surface 星芒）。
+            BrandOrbMark(running = running, plate = surface, glyph = outline)
         }
     }
 }
