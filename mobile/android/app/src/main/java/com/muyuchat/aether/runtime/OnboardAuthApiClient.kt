@@ -238,7 +238,13 @@ internal fun onboardMethods(provider: ProviderSummary): List<String> {
     return methods.distinct()
 }
 
-/** `METHOD_LABEL`（`onboard.js:9-24`），键与文案全量照抄。 */
+/**
+ * `METHOD_LABEL`（`onboard.js:9-24`），键与文案全量照抄 —— 这是一张**翻译表**，不是能力声明。
+ *
+ * 其中 `webview_login`（浏览器登录）按原表保留以维持与桌面逐字一致（`ChannelsLayoutOnboardTest`
+ * 钉住了 14 个键）；它**不表示手机端欠这一项**：没有任何渠道声明该方式，桌面也只是把 URL
+ * 丢给系统浏览器（`onboard.js:777-784`），两端一致地不提供。
+ */
 internal val ONBOARD_METHOD_LABELS: Map<String, String> = mapOf(
     "local_import" to "本机导入",
     "oauth_pkce" to "浏览器授权",
@@ -274,17 +280,23 @@ internal fun onboardDeviceKind(method: String): String? = when (method) {
  * 手机端做不了的方式与原因（如实说明，不给假按钮）。
  *
  * 判断依据：
- *  - `local_import`：服务端要读桌面客户端的凭证文件（`auth_api.go:190-288` 的
- *    `DiscoverLocalAccounts`），手机上不存在那些路径；
- *  - `webview_login`：桌面用内置 WebView 走网页登录（`onboard.js:777-784`），手机端
- *    没有对应 WebView 容器，且这条链路不在 AndroidManifest 写集里。
+ *  - `local_import`：服务端要读桌面客户端的配置目录里的凭证文件（`auth_api.go:190-288` 的
+ *    `DiscoverLocalAccounts`，各渠道实现见 `internal/providers/<provider>/localimport.go` 与
+ *    `localimport_windows.go`：`~/.claude/.credentials.json`、
+ *    `~/.gemini/jetski-standalone-oauth-token`、`~/.antigravity_cockpit/kiro_accounts.json`、
+ *    `%APPDATA%\Cursor\...`、`~/.config/github-copilot/hosts.json` 等），
+ *    手机 App 沙箱里 home / `%APPDATA%` 都不是桌面那些目录，这些文件不存在。
+ *
+ * **`webview_login` 不在这里**：它在桌面端也是死分支——没有任何渠道声明 `AuthWebViewLogin`、
+ * `WebViewLoginURL` 全仓无赋值、服务端也没有"cookie → 账号"的端点，桌面
+ * `onboard.js:777-784` 只把 URL 丢给系统浏览器并提示改用「手动凭据」。
+ * 两端一致地不提供，不是"手机端欠账"，所以不给它编一条"手机端未启用"的理由。
  *
  * `windsurf_login` 已开：手机上就是一个 POST（邮箱 + 密码 → token），
  * 走 `OnboardAuthApiClient.loginWindsurf`，不再列入「做不了」。
  */
 internal fun onboardUnsupportedReason(method: String): String? = when (method) {
-    "local_import" -> "需要桌面客户端的本机凭证文件，手机上没有那些路径"
-    "webview_login" -> "需要桌面内置 WebView 网页登录，手机端未启用"
+    "local_import" -> "需要桌面客户端的配置目录（home / %APPDATA%）里的登录态文件，手机上没有那些路径"
     else -> null
 }
 

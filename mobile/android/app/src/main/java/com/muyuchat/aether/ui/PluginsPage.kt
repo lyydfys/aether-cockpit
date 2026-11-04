@@ -228,7 +228,7 @@ internal fun PluginsPage(
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
                         title = "插件",
-                        subtitle = "请求改写规则与内置能力",
+                        subtitle = "改写规则与内置能力",
                     )
                 }
                 McaIconButton(

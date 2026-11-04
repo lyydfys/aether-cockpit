@@ -76,8 +76,13 @@ class OnboardAuthApiTest {
     @Test
     fun mobileCannotDoDesktopOnlyMethods() {
         val claude = provider("claude", listOf("local_import", "oauth_pkce", "manual_input"), oauth = true)
+        // 服务端读的是桌面 home 目录下的登录态文件（internal/providers/*/localimport.go：
+        // ~/.claude/.credentials.json、~/.gemini/jetski-standalone-oauth-token 等），手机沙箱没有这些路径。
         assertTrue(onboardMethodBlockedBy("local_import", claude)!!.contains("桌面"))
-        assertTrue(onboardMethodBlockedBy("webview_login", claude)!!.contains("WebView"))
+        // webview_login 不再有"手机端未启用"这条理由：桌面端也是死分支（无渠道声明
+        // AuthWebViewLogin、WebViewLoginURL 全仓无赋值、服务端无 cookie→账号端点，
+        // onboard.js:777-784 只开系统浏览器），两端一致地不提供 → 不属于手机端差异。
+        assertNull(onboardUnsupportedReason("webview_login"))
         // windsurf_login 已开：手机上就是一个 POST（邮箱 + 密码 → token），不再拦。
         assertNull(onboardMethodBlockedBy("windsurf_login", claude))
         assertNull(onboardMethodBlockedBy("windsurf_login", provider("windsurf")))

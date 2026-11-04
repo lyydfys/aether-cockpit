@@ -125,14 +125,12 @@ internal fun LibraryPage(
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
                         title = "资源库",
-                        subtitle = "查看 / 新增 / 删除 · 不下发给 Agent",
+                        // 1.3× 下再长会挤压标题：页脚已有「不下发给 Agent」的完整说明。
+                        subtitle = "查看 / 新增 / 删除",
                     )
                 }
-                McaButton(
-                    onClick = { showCreate = true },
-                    style = McaButtonStyle.Outlined,
-                    enabled = status.running && !saving,
-                ) { Text("新增") }
+                // 「新增」由各页签分区标题上的「新建指令 / 新建技能…」按钮承担（桌面也是分区建）。
+                // 头部重复一个「新增」会在 1.3× 把副标题挤成省略号，这里不再重复放。
                 McaIconButton(
                     contentDescription = "刷新资源库",
                     onClick = onRefresh,
@@ -192,7 +190,7 @@ internal fun LibraryPage(
                             McaButton(
                                 onClick = { tab = kind.name },
                                 style = if (tab == kind.name) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                            ) { Text("${libraryTabLabel(kind)} $count") }
+                            ) { Text("${libraryTabLabel(kind)} $count", maxLines = 1) }
                         }
                     }
                 }
@@ -388,7 +386,7 @@ private fun LibraryKpiRow(label: String, value: Int, detail: String) {
                 text = "$detail $value",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -431,40 +429,43 @@ private fun LibraryRow(
     onMcpTools: () -> Unit = {},
 ) {
     DeepCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = entry.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = entry.kind.label + if (entry.disabledTools.isNotEmpty()) {
-                        " · 停用 ${entry.disabledTools.size} 个工具"
-                    } else {
-                        ""
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.width(8.dp))
+        Text(
+            text = entry.name,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = entry.kind.label + if (entry.disabledTools.isNotEmpty()) {
+                " · 停用 ${entry.disabledTools.size} 个工具"
+            } else {
+                ""
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // 动作按钮独占一行：1.3× 下「工具 / 登录 / 删除」与长标题同排会互相挤压并溢出，
+        // 下来一行后两档都不截断；仍保留横滚兜底（极端长文案时滚动而不是换行）。
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             if (mcpToolsEnabled) {
                 McaButton(
                     onClick = onMcpTools,
                     style = McaButtonStyle.Outlined,
                 ) { Text("工具") }
-                Spacer(Modifier.width(8.dp))
             }
             if (mcpSigninEnabled) {
                 McaButton(
                     onClick = onMcpSignin,
                     style = McaButtonStyle.Outlined,
                 ) { Text("登录") }
-                Spacer(Modifier.width(8.dp))
             }
             McaButton(
                 onClick = onDelete,

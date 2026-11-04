@@ -107,7 +107,7 @@ private fun PageHeadline(onBack: () -> Unit) {
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
                 title = "仅 Windows",
-                subtitle = "手机端做不到的能力与原因",
+                subtitle = "手机端做不到的能力",
             )
         }
     }

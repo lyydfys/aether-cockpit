@@ -22,10 +22,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -189,30 +192,30 @@ private fun GatewayCard(
     val headline = gatewayStateHeadline(status)
     val accent = statusAccent(status)
     DeepCard {
+        // 标题/说明占整行、动作单独一行靠右：
+        // 1.3× 下按钮与说明并排会把说明列压到半宽，"本机应用可通过回环地址接入" 会折出
+        // 孤立单字（实测 "…接" + "入"），既难读也违反"无竖排单字"。
+        Column(verticalArrangement = Arrangement.spacedBy(TightGap)) {
+            Text(
+                text = headline,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (status.state == GatewayState.FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            Text(
+                text = gatewayStateDetail(status),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(DeepCardGap),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(TightGap),
-            ) {
-                Text(
-                    text = headline,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (status.state == GatewayState.FAILED) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                )
-                Text(
-                    text = gatewayStateDetail(status),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             McaButton(
                 onClick = onPrimaryAction,
                 style = McaButtonStyle.Primary,
@@ -285,46 +288,51 @@ private fun GatewayCard(
     }
 }
 
-/** KPI 四格：可用账号 / 今日请求 / 今日 Token / 会话（桌面 `overview.js:157-164`）。 */
+/** KPI 四格：可用账号 / 今日请求 / 今日 Token / 会话（桌面 `overview.js:157-164`）。
+ *
+ * 1.0× 两列、1.3× 单列——这是任务允许的唯一两档差异（列数随字号变化），
+ * 否则 `1.5K`、`$0.0123` 这类值会在两列里被省略号吃掉。
+ */
 @Composable
 private fun KpiCard(stats: OverviewStats?) {
+    val cells = listOf(
+        Triple("可用账号", stats?.accounts ?: "—", statNoteOrBlank(stats?.captions?.getOrNull(0))),
+        Triple("今日请求", stats?.calls ?: "—", statNoteOrBlank(stats?.captions?.getOrNull(1))),
+        Triple("今日 Token", stats?.tokens ?: "—", statNoteOrBlank(stats?.captions?.getOrNull(2))),
+        Triple("会话", stats?.sessions ?: "—", statNoteOrBlank(stats?.captions?.getOrNull(3))),
+    )
+    val columns = if (isLargeFontScale()) 1 else 2
     DeepCard {
         DeepCardTitle("今日")
-        Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
-            StatCell(
-                label = "可用账号",
-                value = stats?.accounts ?: "—",
-                note = statNoteOrBlank(stats?.captions?.getOrNull(0)),
-                modifier = Modifier.weight(1f),
-            )
-            StatCell(
-                label = "今日请求",
-                value = stats?.calls ?: "—",
-                note = statNoteOrBlank(stats?.captions?.getOrNull(1)),
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
-            StatCell(
-                label = "今日 Token",
-                value = stats?.tokens ?: "—",
-                note = statNoteOrBlank(stats?.captions?.getOrNull(2)),
-                modifier = Modifier.weight(1f),
-            )
-            StatCell(
-                label = "会话",
-                value = stats?.sessions ?: "—",
-                note = statNoteOrBlank(stats?.captions?.getOrNull(3)),
-                modifier = Modifier.weight(1f),
-            )
+        cells.chunked(columns).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
+                row.forEach { (label, value, note) ->
+                    StatCell(
+                        label = label,
+                        value = value,
+                        note = note,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
         }
     }
 }
 
-/** 一格数字：说明 → 大数字（单位降级）→ 只有缺失时才写一行注解。 */
+/**
+ * 一格数字：说明 → 大数字（单位降级）→ 只有缺失时才写一行注解。
+ *
+ * 值和它的单位用**同一段 AnnotatedString**：早先是三个并排的 `Text` + `Alignment.Bottom`，
+ * 小号前缀（`$`）在大号数字旁会沉到基线以下，看着像两块错位的东西。同一段文字里用
+ * SpanStyle 把单位降级，基线与行高由排版引擎保证，1.0×/1.3× 都不会错位。
+ */
 @Composable
 private fun StatCell(label: String, value: String, note: String, modifier: Modifier = Modifier) {
     val parts = statFocusParts(value)
+    val bigSize = MaterialTheme.typography.headlineSmall.fontSize
+    val smallSize = MaterialTheme.typography.labelSmall.fontSize
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(TightGap),
@@ -332,34 +340,29 @@ private fun StatCell(label: String, value: String, note: String, modifier: Modif
         Text(
             text = label,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Row(verticalAlignment = Alignment.Bottom) {
-            if (parts.prefix.isNotEmpty()) {
-                Text(
-                    text = parts.prefix,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                text = parts.number,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (parts.suffix.isNotEmpty()) {
-                Text(
-                    text = parts.suffix,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        Text(
+            text = buildAnnotatedString {
+                if (parts.prefix.isNotEmpty()) {
+                    withStyle(SpanStyle(fontSize = smallSize, color = onSurfaceVariant)) {
+                        append(parts.prefix)
+                    }
+                }
+                withStyle(SpanStyle(fontSize = bigSize, fontWeight = FontWeight.Bold, color = onSurface)) {
+                    append(parts.number)
+                }
+                if (parts.suffix.isNotEmpty()) {
+                    withStyle(SpanStyle(fontSize = smallSize, color = onSurfaceVariant)) {
+                        append(parts.suffix)
+                    }
+                }
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         if (note.isNotEmpty()) {
             Text(
                 text = note,
@@ -367,7 +370,7 @@ private fun StatCell(label: String, value: String, note: String, modifier: Modif
                 color = if (note.contains("读不到")) {
                     MaterialTheme.colorScheme.error
                 } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                    onSurfaceVariant
                 },
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

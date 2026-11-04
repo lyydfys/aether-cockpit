@@ -537,7 +537,7 @@ private fun AgentsHeadline(
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
                 title = "Agent 接入",
-                subtitle = "本机 agent 的接入与模型 · 只读",
+                subtitle = "本机 Agent 只读",
             )
         }
         McaIconButton(

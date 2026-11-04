@@ -1,4 +1,4 @@
-﻿package com.muyuchat.aether.runtime
+package com.muyuchat.aether.runtime
 
 import org.json.JSONArray
 import org.json.JSONObject
@@ -18,7 +18,7 @@ import java.net.URL
 enum class CustomProviderProtocol(
     /** 请求体里承载 Base URL 的字段名（服务端真字段）。 */
     val jsonField: String,
-    /** LocalProviderSwitch 风格的接口类型文案。 */
+    /** 接口类型文案（表单二选一：OpenAI 兼容 / Anthropic 兼容）。 */
     val label: String,
     /** 服务端最终把账号挂到哪个内置渠道（用于成功回执）。 */
     val coreProvider: String,
@@ -27,7 +27,7 @@ enum class CustomProviderProtocol(
     ANTHROPIC_COMPAT("anthropic", "Anthropic 兼容", "claude-sub"),
 }
 
-/** 表单只列这两种（用户点名 LocalProviderSwitch 的二选一）；服务端另支持 responses/gemini/decide，未在表单暴露。 */
+/** 自定义渠道表单只列这两种接口类型；服务端另支持 responses/gemini/decide，未在表单暴露。 */
 internal val CUSTOM_PROVIDER_FORM_PROTOCOLS: List<CustomProviderProtocol> =
     listOf(CustomProviderProtocol.OPENAI_COMPAT, CustomProviderProtocol.ANTHROPIC_COMPAT)
 
@@ -71,7 +71,7 @@ internal fun parseProviderModelList(raw: String): List<String> {
 /**
  * 表单校验。返回第一条人类可读的问题；null 表示可以提交。
  *
- * LocalProviderSwitch 顺序：名称 → 接口类型 → Base URL → API Key → 模型（选填）。
+ * 自定义渠道表单：名称 → 接口类型 → Base URL → API Key → 模型（选填）。
  * 必填项与服务端硬性要求一致：至少一个 Base URL；API Key 按桌面「手动凭据」口径必填。
  */
 internal fun validateCustomProviderDraft(

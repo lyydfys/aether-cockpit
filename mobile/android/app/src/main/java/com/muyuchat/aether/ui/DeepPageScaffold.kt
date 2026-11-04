@@ -1,5 +1,6 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -17,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.muyuchat.core.designsystem.McaButton
@@ -44,14 +46,28 @@ import com.muyuchat.core.designsystem.McaTonal
 /** 卡片水平内边距：统一 16dp。 */
 internal val DeepCardPadding: Dp = 16.dp
 
-/** 卡片垂直内边距：16 + 上下各 4，内容不贴边。 */
-internal val DeepCardVerticalPadding: Dp = 20.dp
+/** 卡片垂直内边距：**16**（与水平一致）。
+ *
+ * 曾经为了让 1.3× 下内容不贴边抬到 20；但验收口径是「1.0× 与 1.3× 同等对待」，
+ * 20 在 1.0× 下明显偏松（一屏少一条）。两档都用 16。
+ */
+internal val DeepCardVerticalPadding: Dp = 16.dp
 
-/** 列表卡片内边距：水平 16，垂直只留 4（行自己带 16 的垂直内边距，外缘合计 20）。 */
+/** 列表卡片内边距：水平 16、垂直 0。
+ *
+ * 行自己带 [DeepRowVertical] 的垂直内边距，卡片再给 4 就是重复留白（首行外缘 24）。
+ * 归零后首末行外缘正好等于 [DeepCardVerticalPadding]。
+ */
 internal val DeepListCardPadding: PaddingValues =
-    PaddingValues(horizontal = DeepCardPadding, vertical = 4.dp)
+    PaddingValues(horizontal = DeepCardPadding, vertical = 0.dp)
 
-/** 卡片之间的间距：统一 16dp。 */
+/**
+ * 卡片之间的间距：**16dp**（Lead 裁决，以 16 为准）。
+ *
+ * 为什么不回到 12：用户这轮的核心反馈是"过于密集拥挤"，块与块之间需要呼吸感；
+ * 密度靠**卡内**收紧（垂直内边距 20→16、列表卡垂直 4→0）实现，块间保持 16。
+ * 1.3× 下这条尤其重要：字大了若块间只有 12，相邻卡片会视觉粘连。
+ */
 internal val DeepCardGap: Dp = 16.dp
 
 /** 区块之间的间距：统一 24dp（由「列表 16dp + 标题上内距 8dp」组成）。 */
@@ -61,12 +77,12 @@ internal val DeepBlockGap: Dp = 24.dp
 internal val DeepRowVertical: Dp = 16.dp
 
 /**
- * 页面主标题到首个内容块的间距：16dp（标题层瘦身后从 24 降为 16）。
+ * 页面主标题到首个内容块的间距：**与 [DeepCardGap] 同一个数**（当前 16dp）。
  *
- * 页面级 LazyColumn 用 `spacedBy(DeepCardGap)` 时天然就是 16；只有少数手写标题块
- * 需要显式引用这个常量，保持全站一致。
+ * 两者刻意共用同一个常量：一个变量只有一种含义，避免"标题间距"和"卡间"各自漂移。
+ * 页面级 LazyColumn 用 `spacedBy(DeepCardGap)` 时天然一致。
  */
-internal val DeepPageTitleGap: Dp = 16.dp
+internal val DeepPageTitleGap: Dp = DeepCardGap
 
 /**
  * 页面级标题：**全站唯一实现**，不要在页面里自己写 `Text(style = headlineXxx)`。
@@ -133,6 +149,16 @@ internal fun bubbleSafeContentPadding(
 internal enum class DeepTone { Neutral, Info, Danger }
 
 /**
+ * 1.3× 档的判定口径：系统字体缩放 ≥ 1.25。
+ *
+ * 全站**只允许一种**两档差异：列数（2 列 ↔ 1 列、横向滚动 ↔ 换行）。
+ * 需要按档位切列数的地方调它；不要用它去改字号、字重或内边距。
+ */
+@Composable
+internal fun isLargeFontScale(threshold: Float = 1.25f): Boolean =
+    LocalDensity.current.fontScale >= threshold
+
+/**
  * 区块标题：`titleMedium + Bold`，右侧可选计数或动作。
  *
  * 上内距 = 24 - 16，配合 LazyColumn 的 16dp 列表间距凑出「区块间 24dp」；
@@ -145,10 +171,35 @@ internal fun DeepSectionTitle(
     trailing: String? = null,
     action: (@Composable () -> Unit)? = null,
 ) {
+    val base = modifier
+        .fillMaxWidth()
+        .padding(top = DeepBlockGap - DeepCardGap)
+    // 1.3× 下标题与计数挤一行会把标题压成两行：计数降到标题下一行（允许的"换行"差异）。
+    if (isLargeFontScale() && !trailing.isNullOrBlank()) {
+        Column(modifier = base, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f),
+                )
+                if (action != null) {
+                    Spacer(Modifier.width(8.dp))
+                    action()
+                }
+            }
+            Text(
+                text = trailing,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
     Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(top = DeepBlockGap - DeepCardGap),
+        modifier = base,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

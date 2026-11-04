@@ -32,7 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 接入页的本地状态：搜索词 + 自定义渠道表单（LocalProviderSwitch 结构）。
+ * 接入页的本地状态：搜索词 + 自定义渠道表单。
  *
  * 为什么单独一个 ViewModel：`OnboardPage` 的 providers/accounts 来自 ChannelsViewModel，
  * 而搜索与表单是页面本地的，不该把参数塞进 GatewayHome（写集也不允许改它）。
@@ -46,6 +46,15 @@ class OnboardViewModel(application: Application) : AndroidViewModel(application)
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
+
+    /**
+     * 筛选与排序（对标 MCA 模型推荐页的「筛选 · N / 排序」工具行）。
+     *
+     * 与搜索词分开两个 State：搜索是输入过程，筛选是一次性提交的草稿（面板里点「应用」才生效），
+     * 两者叠加但互不覆盖。
+     */
+    private val _filters = MutableStateFlow(OnboardQuery())
+    internal val filters: StateFlow<OnboardQuery> = _filters.asStateFlow()
 
     private val _draft = MutableStateFlow<CustomProviderDraft?>(null)
 
@@ -78,9 +87,19 @@ class OnboardViewModel(application: Application) : AndroidViewModel(application)
         _query.value = value
     }
 
+    /** 应用一次「筛选与排序」面板的草稿结果。 */
+    internal fun setFilters(value: OnboardQuery) {
+        _filters.value = value
+    }
+
+    /** 清空筛选、保留排序（MCA 面板「重置」的口径：重置只清条件，不回退排序）。 */
+    internal fun clearFilters() {
+        _filters.value = OnboardQuery(sort = _filters.value.sort)
+    }
+
     fun openForm() {
         _formError.value = null
-        // LocalProviderSwitch 第 1 项给默认值：名称默认「自定义渠道」。
+        // 表单第 1 项给默认值：名称默认「自定义渠道」。
         _draft.value = CustomProviderDraft(name = "自定义渠道")
     }
 

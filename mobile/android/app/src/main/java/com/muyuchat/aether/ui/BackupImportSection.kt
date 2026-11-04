@@ -3,6 +3,7 @@ package com.muyuchat.aether.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -118,14 +119,38 @@ internal fun BackupImportSection(
                 )
             }
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                McaButton(
-                    onClick = { picker.launch(arrayOf("*/*")) },
-                    style = McaButtonStyle.Primary,
-                    enabled = status.running && state !is BackupImportUiState.Importing,
-                ) { Text(if (state is BackupImportUiState.Importing) "导入中…" else "选择备份文件…") }
-                if (state is BackupImportUiState.Done || state is BackupImportUiState.Failed) {
-                    McaButton(onClick = viewModel::resetImport, style = McaButtonStyle.Outlined) { Text("关闭") }
+            // M3：1.3× 下「选择备份文件…／导入中…」加「关闭」并排会各折两行、把卡片顶乱。
+            // 宽度不足就改成一列，每项 fillMaxWidth（与 BackupPage 导出区同一手法）。
+            BoxWithConstraints {
+                val stacked = maxWidth < 340.dp
+                val showClose = state is BackupImportUiState.Done || state is BackupImportUiState.Failed
+                val pickButton: @Composable (Modifier) -> Unit = { m ->
+                    McaButton(
+                        onClick = { picker.launch(arrayOf("*/*")) },
+                        modifier = m,
+                        style = McaButtonStyle.Primary,
+                        enabled = status.running && state !is BackupImportUiState.Importing,
+                    ) { Text(if (state is BackupImportUiState.Importing) "导入中…" else "选择备份文件…") }
+                }
+                val closeButton: @Composable (Modifier) -> Unit = { m ->
+                    McaButton(onClick = viewModel::resetImport, modifier = m, style = McaButtonStyle.Outlined) {
+                        Text("关闭")
+                    }
+                }
+                if (stacked) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        pickButton(Modifier.fillMaxWidth())
+                        if (showClose) {
+                            closeButton(Modifier.fillMaxWidth())
+                        }
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        pickButton(Modifier)
+                        if (showClose) {
+                            closeButton(Modifier)
+                        }
+                    }
                 }
             }
             when (val current = state) {

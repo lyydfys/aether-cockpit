@@ -101,6 +101,7 @@ internal fun OnboardPage(
     LaunchedRefresh(status, onRefresh)
 
     val query by viewModel.query.collectAsStateWithLifecycle()
+    val filters by viewModel.filters.collectAsStateWithLifecycle()
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val saving by viewModel.saving.collectAsStateWithLifecycle()
     val formError by viewModel.formError.collectAsStateWithLifecycle()
@@ -108,16 +109,24 @@ internal fun OnboardPage(
     val connect by viewModel.connect.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    var showFilterPanel by remember { mutableStateOf(false) }
 
-    val filtered = filterOnboardProviders(providers, query)
-    val groups = groupOnboardProviders(filtered)
-    val rows: List<OnboardListRow> = buildList {
-        groups.forEach { group ->
-            add(OnboardListRow.Letter(group.letter))
-            group.providers.forEach { add(OnboardListRow.Provider(it)) }
+    val filtered = applyOnboardQuery(providers, accounts, query, filters)
+    // 与 MCA 推荐页一致：名称排序按字母分组（目录顺序），显式排序则平铺比较列表。
+    val grouped = filters.sort == OnboardSort.NAME
+    val groups = if (grouped) groupOnboardProviders(filtered) else emptyList()
+    val rows: List<OnboardListRow> = if (grouped) {
+        buildList {
+            groups.forEach { group ->
+                add(OnboardListRow.Letter(group.letter))
+                group.providers.forEach { add(OnboardListRow.Provider(it)) }
+            }
         }
+    } else {
+        filtered.map { OnboardListRow.Provider(it) }
     }
-    // 字母条点击跳转：前 6 个 item 固定（MobileHeader / 页头 / 搜索 / 自定义入口 / 区块标题 / 字母条）。
+    // 字母条点击跳转：前 7 个 item 固定（MobileHeader / 页头 / 搜索 / 筛选工具行 /
+    // 自定义入口 / 区块标题 / 字母条）。
     val rowIndexByLetter: Map<String, Int> = rows.withIndex()
         .filter { it.value is OnboardListRow.Letter }
         .associate { (rows[it.index] as OnboardListRow.Letter).letter to (OnboardRowsBase + it.index) }
@@ -169,6 +178,13 @@ internal fun OnboardPage(
             )
         }
         item {
+            OnboardFilterToolbar(
+                state = filters,
+                onOpenPanel = { showFilterPanel = true },
+                onClearFilters = viewModel::clearFilters,
+            )
+        }
+        item {
             OnboardCustomProviderCard(
                 notice = notice,
                 canAdd = status.running,
@@ -176,7 +192,16 @@ internal fun OnboardPage(
                 onDismissNotice = viewModel::dismissNotice,
             )
         }
-        item { DeepSectionTitle(text = "按渠道接入", trailing = "${filtered.size} 个渠道") }
+        item {
+            DeepSectionTitle(
+                text = "按渠道接入",
+                trailing = onboardCountLabel(
+                    visible = filtered.size,
+                    total = providers.size,
+                    searching = query.isNotBlank() || filters.filterCount > 0,
+                ),
+            )
+        }
         if (providers.isEmpty()) {
             item {
                 DeepStateCard(
@@ -186,24 +211,30 @@ internal fun OnboardPage(
                     onAction = onRefresh,
                 )
             }
-        } else if (groups.isEmpty()) {
+        } else if (filtered.isEmpty()) {
             item {
                 DeepStateCard(
                     title = "没有匹配的渠道",
-                    detail = "换个关键词试试；搜索只匹配渠道名、描述与 id。",
-                    actionLabel = "清除搜索",
-                    onAction = { viewModel.setQuery("") },
+                    detail = "搜索只匹配渠道名、描述与 id；筛选按「接入方式」和「接入状态」收窄列表。" +
+                        "清掉条件就能看到全部渠道。",
+                    actionLabel = "清除条件",
+                    onAction = {
+                        viewModel.setQuery("")
+                        viewModel.setFilters(OnboardQuery(sort = filters.sort))
+                    },
                 )
             }
         } else {
-            item {
-                OnboardLetterBar(
-                    letters = groups.map { it.letter },
-                    onJump = { letter ->
-                        val target = rowIndexByLetter[letter] ?: return@OnboardLetterBar
-                        scope.launch { listState.animateScrollToItem(target) }
-                    },
-                )
+            if (grouped) {
+                item {
+                    OnboardLetterBar(
+                        letters = groups.map { it.letter },
+                        onJump = { letter ->
+                            val target = rowIndexByLetter[letter] ?: return@OnboardLetterBar
+                            scope.launch { listState.animateScrollToItem(target) }
+                        },
+                    )
+                }
             }
             items(rows.size) { index ->
                 when (val row = rows[index]) {
@@ -245,6 +276,17 @@ internal fun OnboardPage(
         item { AccountExportSection(status = status) }
     }
 
+    if (showFilterPanel) {
+        OnboardFilterPanel(
+            applied = filters,
+            previewCount = { draftQuery -> applyOnboardQuery(providers, accounts, query, draftQuery).size },
+            onApply = {
+                viewModel.setFilters(it)
+                showFilterPanel = false
+            },
+            onDismiss = { showFilterPanel = false },
+        )
+    }
     connect?.let { current ->
         OnboardConnectDialog(
             state = current,
@@ -305,8 +347,8 @@ internal fun OnboardPage(
     bundleHost()
 }
 
-/** 固定 item 数：MobileHeader / 页头 / 搜索 / 自定义入口 / 区块标题 / 字母条。 */
-private const val OnboardRowsBase = 6
+/** 固定 item 数：MobileHeader / 页头 / 搜索 / 筛选工具行 / 自定义入口 / 区块标题 / 字母条。 */
+private const val OnboardRowsBase = 7
 
 /** 列表行：字母分组头 或 渠道卡。 */
 internal sealed interface OnboardListRow {
@@ -422,6 +464,165 @@ private fun OnboardLetterBar(letters: List<String>, onJump: (String) -> Unit) {
     }
 }
 
+/**
+ * 筛选 / 排序工具行。
+ *
+ * 形态照 MCA 模型推荐页的工具行（`feature/modelhub/RecommendationFilterSheet.kt:64-160`）：
+ * 左侧「筛选 · N」（有条件时高亮），右侧显示当前排序；一行放不下就各自成 chip 按钮，
+ * 不加第三个下拉。条件已生效时额外给一个「清除」，与 MCA 的「全部」入口同义。
+ */
+@Composable
+private fun OnboardFilterToolbar(
+    state: OnboardQuery,
+    onOpenPanel: () -> Unit,
+    onClearFilters: () -> Unit,
+) {
+    Row(
+        // 1.3× 下三个按钮放不下同一行：整行横向滚动（允许的「横向滚动 ↔ 换行」差异）。
+        // 注意：滚动容器里不能用 weight，所以「清除」紧跟排序，不做右对齐。
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        McaButton(
+            onClick = onOpenPanel,
+            style = if (state.filterCount > 0) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+            size = McaButtonSize.CardAction,
+        ) { Text(onboardFilterChipLabel(state)) }
+        McaButton(
+            onClick = onOpenPanel,
+            style = if (state.sort != OnboardSort.NAME) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+            size = McaButtonSize.CardAction,
+        ) { Text(if (state.sort == OnboardSort.NAME) "排序" else state.sort.label) }
+        if (!state.isPristine) {
+            McaButton(onClick = onClearFilters, style = McaButtonStyle.Text, size = McaButtonSize.CardAction) {
+                Text("清除")
+            }
+        }
+    }
+}
+
+/**
+ * 「筛选与排序」面板。
+ *
+ * 照 MCA `RecommendationFilterSheet.kt:174-360` 的事务口径：面板里改的是**草稿**，
+ * 只有点「应用」才回写给页面；「重置」只清筛选、保留排序（MCA 同款）。
+ * 面板内是两栏（筛选 / 排序）而不是两个弹窗，一次提交。
+ */
+@Composable
+private fun OnboardFilterPanel(
+    applied: OnboardQuery,
+    previewCount: (OnboardQuery) -> Int,
+    onApply: (OnboardQuery) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var draft by remember(applied) { mutableStateOf(applied) }
+    var tab by remember { mutableStateOf(0) }
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("筛选与排序", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    McaButton(
+                        onClick = { tab = 0 },
+                        style = if (tab == 0) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                    ) { Text("筛选") }
+                    McaButton(
+                        onClick = { tab = 1 },
+                        style = if (tab == 1) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                    ) { Text("排序") }
+                }
+                if (tab == 0) {
+                    Text(
+                        text = "接入方式",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OnboardMethodFilter.entries.forEach { option ->
+                            McaChip(
+                                selected = draft.method == option,
+                                onClick = { draft = draft.copy(method = option) },
+                                label = { Text(option.label) },
+                            )
+                        }
+                    }
+                    Text(
+                        text = "接入状态",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OnboardStatusFilter.entries.forEach { option ->
+                            McaChip(
+                                selected = draft.status == option,
+                                onClick = { draft = draft.copy(status = option) },
+                                label = { Text(option.label) },
+                            )
+                        }
+                    }
+                    Text(
+                        text = "「仅桌面端」= 该渠道声明的方式在手机上全部不可用（典型是只支持读桌面登录态文件）。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        text = "排序",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OnboardSort.entries.forEach { option ->
+                            McaChip(
+                                selected = draft.sort == option,
+                                onClick = { draft = draft.copy(sort = option) },
+                                label = { Text(option.label) },
+                            )
+                        }
+                    }
+                    Text(
+                        text = onboardSortSummaryLine(draft.sort, previewCount(draft)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = "当前条件会命中 ${previewCount(draft)} 个渠道。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                McaButton(
+                    onClick = { draft = OnboardQuery(sort = draft.sort) },
+                    style = McaButtonStyle.Text,
+                    size = McaButtonSize.CardAction,
+                ) { Text("重置筛选") }
+            }
+        },
+        confirmButton = {
+            McaButton(onClick = { onApply(draft) }, style = McaButtonStyle.Primary) { Text("应用") }
+        },
+        dismissButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("取消") }
+        },
+    )
+}
+
 /** 自定义渠道入口卡：桌面对应「手动凭据」，保存走 `POST /api/provider/save`。 */
 @Composable
 private fun OnboardCustomProviderCard(
@@ -434,7 +635,7 @@ private fun OnboardCustomProviderCard(
         DeepCardTitle("自定义渠道")
         Spacer(Modifier.height(4.dp))
         DeepCardBody(
-            "桌面对应渠道抽屉里的「手动凭据」。按 LocalProviderSwitch 结构填名称 / 接口类型 / Base URL / API Key / 模型；" +
+            "桌面对应渠道抽屉里的「手动凭据」。按渠道填写：名称 / 接口类型 / Base URL / Key / 模型（选填）；" +
                 "服务端没有 type 字段，接口类型会落到真实的 chat 或 anthropic 请求字段上。",
         )
         if (notice != null) {
@@ -459,7 +660,7 @@ private fun OnboardCustomProviderCard(
 }
 
 /**
- * 自定义渠道表单：结构照 LocalProviderSwitch（名称 → 接口类型 → Base URL → API Key → 模型 → 保存/取消）。
+ * 自定义渠道表单：名称 → 接口类型 → Base URL → API Key → 模型 → 保存/取消。
  *
  * 字段以服务端为准（`providerDraft`，provider_api.go:23-92）：只有 `name` / `key` /
  * `chat` 或 `anthropic` / 可选 `models`；**没有** `type`、`apiKey`、`baseURL`、`note`。
@@ -1042,7 +1243,7 @@ private fun OnboardManualBody(
     }
     Spacer(Modifier.height(6.dp))
     Text(
-        text = "Base URL 型网关用上面「自定义渠道」：那里按 LocalProviderSwitch 结构填名称 / 接口类型 / Base URL / Key。",
+        text = "Base URL 型网关用上面「自定义渠道」：那里按渠道填写名称 / 接口类型 / Base URL / Key。",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -1175,3 +1376,159 @@ internal fun groupOnboardProviders(providers: List<ProviderSummary>): List<Onboa
     val orderedLetters = byLetter.keys.sortedWith(compareBy({ it == "#" }, { it }))
     return orderedLetters.map { letter -> OnboardProviderGroup(letter, byLetter.getValue(letter)) }
 }
+
+/* ============================================================================
+ * 筛选 / 排序（对标 MCA 模型推荐页：`feature/modelhub/RecommendationQuery.kt` +
+ * `RecommendationFilterSheet.kt` 的「筛选 · N」工具行 + 一个面板两栏）
+ *
+ * 与 MCA 的对应关系：
+ *  - `RecommendationSort`  → [OnboardSort]（单一维度枚举 + 中文 label + 摘要句）
+ *  - `filterCount` / `筛选 · N` → [OnboardQuery.filterCount] / [onboardFilterChipLabel]
+ *  - `isPristine` + 「重置」只清筛选、保留排序 → [OnboardQuery.isPristine] / [OnboardViewModel.clearFilters]
+ *  - 目录顺序分组、显式排序平铺 → 排序 = 名称时按字母分组，其它排序平铺（见页面 rows 构建）
+ * ========================================================================== */
+
+/** 手机端**真正可用**的接入方式（`local_import` 与缺 OAuth 参数的方式已被过滤掉）。 */
+internal fun onboardUsableMethods(provider: ProviderSummary): List<String> =
+    onboardMethods(provider).filter { onboardMethodBlockedBy(it, provider) == null }
+
+/** 一键授权类方式：不需要用户手抄 Key 就能拿到账号。 */
+private val ONBOARD_AUTO_METHODS: Set<String> = setOf(
+    "oauth_pkce",
+    "device_code",
+    "minimax_device",
+    "qoder_device",
+    "workbuddy_device",
+    "codebuddy_device",
+    "zed_device",
+    "kiro_device",
+    "trae_device",
+    "windsurf_login",
+)
+
+/** 「接入方式」筛选：三档互斥，覆盖手机端所有可能。 */
+internal enum class OnboardMethodFilter(val label: String) {
+    ALL("全部"),
+    AUTO("可自动授权"),
+    MANUAL("需手动凭据"),
+    DESKTOP_ONLY("仅桌面端"),
+}
+
+/** 「接入状态」筛选。 */
+internal enum class OnboardStatusFilter(val label: String) {
+    ALL("全部"),
+    CONNECTED("已接入"),
+    NOT_CONNECTED("未接入"),
+}
+
+/** 排序：默认名称 A–Z（与字母条同一顺序）。 */
+internal enum class OnboardSort(val label: String) {
+    NAME("名称 A–Z"),
+    ACCOUNTS("账号数"),
+    RECENT("最近使用"),
+}
+
+/** 一次已应用的筛选 + 排序。 */
+internal data class OnboardQuery(
+    val method: OnboardMethodFilter = OnboardMethodFilter.ALL,
+    val status: OnboardStatusFilter = OnboardStatusFilter.ALL,
+    val sort: OnboardSort = OnboardSort.NAME,
+) {
+    /** 已应用的筛选条件数（排序不计入，与 MCA `filterCount` 同口径）。 */
+    val filterCount: Int
+        get() = (if (method != OnboardMethodFilter.ALL) 1 else 0) +
+            (if (status != OnboardStatusFilter.ALL) 1 else 0)
+
+    /** 无筛选且默认排序 = 未改动原始目录。 */
+    val isPristine: Boolean
+        get() = filterCount == 0 && sort == OnboardSort.NAME
+}
+
+/**
+ * 渠道归类：有可用的一键方式 → 可自动授权；否则有手动方式 → 需手动凭据；
+ * 一个可用方式都没有（声明的方式全被平台门禁挡住，典型是只支持本机导入）→ 仅桌面端。
+ */
+internal fun onboardMethodCategory(provider: ProviderSummary): OnboardMethodFilter {
+    val usable = onboardUsableMethods(provider)
+    if (usable.any { it in ONBOARD_AUTO_METHODS }) {
+        return OnboardMethodFilter.AUTO
+    }
+    if (usable.isNotEmpty()) {
+        return OnboardMethodFilter.MANUAL
+    }
+    return OnboardMethodFilter.DESKTOP_ONLY
+}
+
+/** 某渠道在给定账号列表里的账号数。 */
+internal fun onboardAccountCount(provider: ProviderSummary, accounts: List<AccountQuotaRow>): Int =
+    accounts.count { it.providerId == provider.id }
+
+/** 某渠道最近一次使用（取该渠道下账号 `lastUsed` 的最大值；0 = 从未使用）。 */
+internal fun onboardLastUsed(provider: ProviderSummary, accounts: List<AccountQuotaRow>): Long =
+    accounts.filter { it.providerId == provider.id }.maxOfOrNull { it.lastUsed } ?: 0L
+
+/**
+ * 搜索 + 筛选 + 排序一次做完（顺序与 MCA 一致：先筛后排；搜索与两者叠加）。
+ * 空搜索 / 全部筛选时行为与旧实现完全一致。
+ */
+internal fun applyOnboardQuery(
+    providers: List<ProviderSummary>,
+    accounts: List<AccountQuotaRow>,
+    query: String,
+    state: OnboardQuery,
+): List<ProviderSummary> {
+    val searched = filterOnboardProviders(providers, query)
+    val filtered = searched.filter { provider ->
+        val methodOk = state.method == OnboardMethodFilter.ALL ||
+            onboardMethodCategory(provider) == state.method
+        if (!methodOk) {
+            return@filter false
+        }
+        val count = onboardAccountCount(provider, accounts)
+        when (state.status) {
+            OnboardStatusFilter.ALL -> true
+            OnboardStatusFilter.CONNECTED -> count > 0
+            OnboardStatusFilter.NOT_CONNECTED -> count == 0
+        }
+    }
+    return sortOnboardProviders(filtered, accounts, state.sort)
+}
+
+/**
+ * 排序。`NAME` 用显示名不区分大小写；`ACCOUNTS` 账号多在前；`RECENT` 最近用过的在前。
+ * 三者都以名称做稳定的次级键，避免同值时顺序抖动。
+ */
+internal fun sortOnboardProviders(
+    providers: List<ProviderSummary>,
+    accounts: List<AccountQuotaRow>,
+    sort: OnboardSort,
+): List<ProviderSummary> {
+    val byName = compareBy<ProviderSummary>(
+        { it.name.ifBlank { it.id }.lowercase() },
+        { it.id },
+    )
+    return when (sort) {
+        OnboardSort.NAME -> providers.sortedWith(byName)
+        OnboardSort.ACCOUNTS -> providers.sortedWith(
+            compareByDescending<ProviderSummary> { onboardAccountCount(it, accounts) }.then(byName),
+        )
+        OnboardSort.RECENT -> providers.sortedWith(
+            compareByDescending<ProviderSummary> { onboardLastUsed(it, accounts) }.then(byName),
+        )
+    }
+}
+
+/** 工具行左侧按钮文案（MCA `recommendationFilterChipLabel` 同形）。 */
+internal fun onboardFilterChipLabel(state: OnboardQuery): String =
+    if (state.filterCount > 0) "筛选 · ${state.filterCount}" else "筛选"
+
+/** 面板里排序那一栏的摘要句（MCA `recommendationSortSummaryLine` 同形）。 */
+internal fun onboardSortSummaryLine(sort: OnboardSort, count: Int): String = when (sort) {
+    OnboardSort.NAME -> "按名称 A–Z 显示 $count 个渠道，字母条可用"
+    OnboardSort.ACCOUNTS -> "账号多的排前面；未接入的排后面（共 $count 个）"
+    OnboardSort.RECENT -> "最近用过的排前面；从未使用的按名称排（共 $count 个）"
+}
+
+/** 渠道列表标题右侧的计数：有筛选/搜索时显示 `命中 / 总数`。 */
+internal fun onboardCountLabel(visible: Int, total: Int, searching: Boolean): String =
+    if (searching && total > 0) "$visible / $total 个渠道" else "$visible 个渠道"

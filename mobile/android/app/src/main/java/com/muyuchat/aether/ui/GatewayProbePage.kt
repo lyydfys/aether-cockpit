@@ -1,5 +1,6 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -216,7 +217,7 @@ private fun ProbeHeadline(
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
                 title = "网关与探针",
-                subtitle = "监听、探针、指标与版本",
+                subtitle = "监听、探针与版本",
             )
             if (state is ProbeUiState.Ready) {
                 Text(
@@ -318,7 +319,10 @@ private fun SnippetCard(
             )
         }
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             ProbeProtocols.forEach { (id, label, _) ->
                 McaButton(
                     onClick = { onProtocol(id) },
@@ -470,27 +474,27 @@ private fun VersionProbeCard(state: ProbeUiState.Ready, onOpenEndpoint: (String)
         Spacer(Modifier.height(10.dp))
         ProbeFieldRow("版本", version?.version?.ifBlank { "dev" } ?: "—")
         ProbeFieldRow("构建时间", version?.buildTime?.ifBlank { "—" } ?: "—")
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = "存活 / 就绪",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.widthIn(min = 96.dp),
             )
-            McaButton(
-                onClick = { onOpenEndpoint("/healthz") },
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-            ) { Text("查看 /healthz") }
-            Spacer(Modifier.width(6.dp))
-            McaButton(
-                onClick = { onOpenEndpoint("/readyz") },
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-            ) { Text("查看 /readyz") }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                McaButton(
+                    onClick = { onOpenEndpoint("/healthz") },
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text("查看 /healthz") }
+                McaButton(
+                    onClick = { onOpenEndpoint("/readyz") },
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text("查看 /readyz") }
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 10.dp),

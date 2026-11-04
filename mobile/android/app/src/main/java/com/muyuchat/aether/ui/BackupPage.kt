@@ -1,6 +1,7 @@
 package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -149,20 +150,44 @@ internal fun BackupPage(
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                McaButton(
-                    onClick = {
-                        val problem = com.muyuchat.aether.runtime.validateBackupPassphrase(passphrase)
-                        validation = problem
-                        if (problem == null) {
-                            onExport(passphrase)
+            // 1.3× 下「生成备份文件 / 生成中…」加「重置」并排会把按钮挤成两行：
+            // 可用宽度不够就改成一列（唯一允许的差异化：列数随宽度变化）。
+            BoxWithConstraints {
+                val stacked = maxWidth < 340.dp
+                val exportButton: @Composable (Modifier) -> Unit = { m ->
+                    McaButton(
+                        onClick = {
+                            val problem = com.muyuchat.aether.runtime.validateBackupPassphrase(passphrase)
+                            validation = problem
+                            if (problem == null) {
+                                onExport(passphrase)
+                            }
+                        },
+                        modifier = m,
+                        style = McaButtonStyle.Primary,
+                        enabled = state !is BackupUiState.Exporting,
+                    ) { Text(if (state is BackupUiState.Exporting) "生成中…" else "生成备份文件") }
+                }
+                val resetButton: @Composable (Modifier) -> Unit = { m ->
+                    McaButton(onClick = onReset, modifier = m, style = McaButtonStyle.Outlined) {
+                        Text("重置")
+                    }
+                }
+                val showReset = state is BackupUiState.Ready || state is BackupUiState.Failed
+                if (stacked) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        exportButton(Modifier.fillMaxWidth())
+                        if (showReset) {
+                            resetButton(Modifier.fillMaxWidth())
                         }
-                    },
-                    style = McaButtonStyle.Primary,
-                    enabled = state !is BackupUiState.Exporting,
-                ) { Text(if (state is BackupUiState.Exporting) "生成中…" else "生成备份文件") }
-                if (state is BackupUiState.Ready || state is BackupUiState.Failed) {
-                    McaButton(onClick = onReset, style = McaButtonStyle.Outlined) { Text("重置") }
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        exportButton(Modifier)
+                        if (showReset) {
+                            resetButton(Modifier)
+                        }
+                    }
                 }
             }
         }

@@ -112,12 +112,15 @@ internal fun RequestsPage(
     ) {
         item { MobileHeader(status) }
         item {
-            Column {
-                DeepPageTitle(
-                    title = "请求日志",
-                    subtitle = "持久化账本 · 错误解释与耗时、Token 明细",
-                )
-            }
+            // 页面级标题必须走共享的 DeepPageTitle（DeepPagesLayoutTest 的源码合同：
+            // 18 个页面统一用它，且不许再各自写 headline 系列字号当页面标题——注意
+            // 那句断言是纯字符串包含，注释里也别写出那个属性名，否则照样判红）。
+            // 副标题故意写短：DeepPageTitle 的副标题与标题同一行、maxLines=1，
+            // 1.3× 下长副标题会被省略号截断（实测「…Toke…」）。细节留给下面的卡片与页脚。
+            DeepPageTitle(
+                title = "请求日志",
+                subtitle = "持久化账本 · 耗时与 Token",
+            )
         }
         if (exportState !is RequestsExportUiState.Idle) {
             item { RequestsExportCard(exportState, onExportCsv, onShareCsv, onDismissExport) }
@@ -125,8 +128,8 @@ internal fun RequestsPage(
         when (state) {
             RequestsUiState.Idle -> item {
                 DeepStateCard(
-                    title = "网关未启动",
-                    detail = "启动本地网关后可读取本机请求账本。",
+                    title = "还没有请求",
+                    detail = "启动网关后，这里会一条条列出请求——耗时、Token 都能看到。",
                     tone = DeepTone.Info,
                     actionLabel = "前往概览",
                     onAction = onOpenOverview,
@@ -306,15 +309,20 @@ private fun RequestsDetailCard(
             placeholder = "搜索模型 / 渠道 / 账号 / 错误 / 会话…",
         )
         Spacer(Modifier.height(8.dp))
-        // 全部 / 成功 / 失败（logs.js:169-172）+ 自动刷新（:173-185）
+        // 全部 / 成功 / 失败（logs.js:169-172）+ 自动刷新（:173-185）。
+        // 原来是一个 Row + weight 撑开：1.3× 下第 4 个 chip 被压到只剩一个字宽，
+        // 「自动刷新 · 关」竖排成 6 行，还把空态挤出屏幕。现在固定两行：
+        // 第一行三个状态筛选，第二行「自动刷新」独占——只用现成的 Row，不引入实验性 API。
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
             RequestsTab("全部", query.status == RequestsStatus.ALL) { onStatus(RequestsStatus.ALL) }
             RequestsTab("成功", query.status == RequestsStatus.OK) { onStatus(RequestsStatus.OK) }
             RequestsTab("失败", query.status == RequestsStatus.ERROR) { onStatus(RequestsStatus.ERROR) }
-            Spacer(Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             RequestsTab(if (autoRefresh) "自动刷新 · 开" else "自动刷新 · 关", autoRefresh, onAutoRefresh)
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
         if (page.rows.isEmpty()) {
             val filtered = query.status != RequestsStatus.ALL || query.search.isNotBlank()
             Text(

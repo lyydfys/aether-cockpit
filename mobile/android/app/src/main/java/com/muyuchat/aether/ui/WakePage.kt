@@ -1,6 +1,8 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -109,7 +111,8 @@ internal fun WakePage(
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
                         title = "唤醒队列",
-                        subtitle = "查看 / 新建 / 删除 · 手动触发",
+                        // 1.3× 下再长会在标题行被省略号截断；细节由下方卡片正文承担。
+                        subtitle = "定时唤醒 · 可手动触发",
                     )
                 }
                 McaIconButton(
@@ -288,7 +291,7 @@ private fun WakeKpiRow(label: String, value: String, detail: String) {
                 text = detail,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -364,7 +367,10 @@ private fun SchedulerSection(
             }
         }
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             McaButton(
                 onClick = onRunCheckin,
                 style = McaButtonStyle.Primary,
@@ -475,8 +481,10 @@ private fun WakeTaskCard(
         )
         Spacer(Modifier.height(12.dp))
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth(),
         ) {
             McaButton(
                 onClick = onRun,

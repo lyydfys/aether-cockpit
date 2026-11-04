@@ -1,7 +1,9 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -100,15 +102,24 @@ internal fun WakeCreateDialog(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    accounts.take(12).forEach { account ->
-                        McaButton(
-                            onClick = { accountId = account.id },
-                            style = if (account.id == accountId) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                        ) {
-                            Text(
-                                text = account.label.ifBlank { account.id },
-                                maxLines = 1,
-                            )
+                    // 账号 chip 一条横滚带：12 个账号在 1.3× 下竖排会撑成十几行，
+                    // 横滚保持一行，也不截断标签。
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        accounts.take(12).forEach { account ->
+                            McaButton(
+                                onClick = { accountId = account.id },
+                                style = if (account.id == accountId) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                            ) {
+                                Text(
+                                    text = account.label.ifBlank { account.id },
+                                    maxLines = 1,
+                                )
+                            }
                         }
                     }
                     if (accounts.size > 12) {

@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -377,22 +378,50 @@ private fun TotpEntryCard(
                 color = MaterialTheme.colorScheme.error,
             )
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = formatTotpCode(code.code),
-                    style = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 4.sp),
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(8.dp))
-                McaButton(
-                    onClick = { onCopy(code.code) },
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                    enabled = code.code.isNotBlank(),
-                ) { Text("复制") }
+            // 验证码一行放不下时（1.3× 字体下 8 位码 + 复制按钮会挤出卡片），
+            // 按可用宽度改成两行：码在上、复制按钮在下。唯一允许的差异化是列数随宽度变化。
+            BoxWithConstraints {
+                val narrow = maxWidth < 300.dp
+                if (narrow) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(
+                            text = formatTotpCode(code.code),
+                            style = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 2.sp),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        McaButton(
+                            onClick = { onCopy(code.code) },
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            enabled = code.code.isNotBlank(),
+                        ) { Text("复制") }
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = formatTotpCode(code.code),
+                            style = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 2.sp),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        McaButton(
+                            onClick = { onCopy(code.code) },
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            enabled = code.code.isNotBlank(),
+                        ) { Text("复制") }
+                    }
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {

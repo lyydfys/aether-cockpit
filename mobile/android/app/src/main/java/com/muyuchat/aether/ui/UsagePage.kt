@@ -23,9 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -251,14 +254,14 @@ private fun UsageScopeBar(
                 ) { Text(if (code == "USD") "\$ USD" else "¥ CNY") }
                 Spacer(Modifier.width(TightGap))
             }
-            Text(
-                text = usageRateText(usdCny, pricingKnown),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
+        // 汇率单独一行：1.3× 下与币种按钮挤同一行会被省略号截断（「汇率 1 USD = 7…」）。
+        // 这一行允许折行：它是说明，折成两行也比截断成"汇率 1 USD = 7…"更诚实。
+        Text(
+            text = usageRateText(usdCny, pricingKnown),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -266,46 +269,48 @@ private fun UsageScopeBar(
  * KPI 四格：请求数 / 成功率 / Token / 费用（桌面 `usage.js:96-101`）。
  *
  * 成本口径跟随计价币种：`formatUsageAmount` 与桌面 `fmtCost` 同一套（CNY 先乘汇率）。
+ * 列数随字号：1.0× 两列、1.3× 单列（`100.0%` 这类值在两列里会被省略号吃掉）。
  */
 @Composable
 private fun UsageKpiCard(summary: UsageSummary, period: UsagePeriod, currency: String, rate: Double) {
+    val cells = listOf(
+        // 请求数不再写「今日」注解：卡片标题已经交代了周期，同一句写两遍只是噪音。
+        Triple("请求数", formatUsageCount(summary.calls), ""),
+        Triple("成功率", usageSuccessRateText(summary), "失败 ${formatUsageCount(summary.errors)} 次"),
+        Triple("Token", formatUsageCount(summary.totalTokens), usageTokensNoteText(summary)),
+        Triple("费用", formatUsageAmount(summary.cost, currency, rate), usageCostNoteText(summary)),
+    )
+    val columns = if (isLargeFontScale()) 1 else 2
     DeepCard {
         DeepCardTitle(usagePeriodScopeLabel(period))
-        Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
-            UsageStatCell(
-                label = "请求数",
-                value = formatUsageCount(summary.calls),
-                note = usagePeriodScopeLabel(period),
-                modifier = Modifier.weight(1f),
-            )
-            UsageStatCell(
-                label = "成功率",
-                value = usageSuccessRateText(summary),
-                note = "失败 ${formatUsageCount(summary.errors)} 次",
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
-            UsageStatCell(
-                label = "Token",
-                value = formatUsageCount(summary.totalTokens),
-                note = usageTokensNoteText(summary),
-                modifier = Modifier.weight(1f),
-            )
-            UsageStatCell(
-                label = "费用",
-                value = formatUsageAmount(summary.cost, currency, rate),
-                note = usageCostNoteText(summary),
-                modifier = Modifier.weight(1f),
-            )
+        cells.chunked(columns).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
+                row.forEach { (label, value, note) ->
+                    UsageStatCell(
+                        label = label,
+                        value = value,
+                        note = note,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
         }
     }
 }
 
-/** 一格数字：说明 → 大数字（单位降级）→ 注解。 */
+/**
+ * 一格数字：说明 → 大数字（单位降级）→ 注解。
+ *
+ * 值和单位是**同一段 AnnotatedString**（早先三个并排 `Text` + `Alignment.Bottom`，
+ * 小号 `$` 在大号数字旁会沉到基线以下）。同一段文字里降级单位，基线与行高由排版引擎保证。
+ */
 @Composable
 private fun UsageStatCell(label: String, value: String, note: String, modifier: Modifier = Modifier) {
     val parts = statFocusParts(value)
+    val bigSize = MaterialTheme.typography.headlineSmall.fontSize
+    val smallSize = MaterialTheme.typography.labelSmall.fontSize
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -313,39 +318,37 @@ private fun UsageStatCell(label: String, value: String, note: String, modifier: 
         Text(
             text = label,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = onSurfaceVariant,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
-        Row(verticalAlignment = Alignment.Bottom) {
-            if (parts.prefix.isNotEmpty()) {
-                Text(
-                    text = parts.prefix,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                text = parts.number,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (parts.suffix.isNotEmpty()) {
-                Text(
-                    text = parts.suffix,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
         Text(
-            text = note,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
+            text = buildAnnotatedString {
+                if (parts.prefix.isNotEmpty()) {
+                    withStyle(SpanStyle(fontSize = smallSize, color = onSurfaceVariant)) {
+                        append(parts.prefix)
+                    }
+                }
+                withStyle(SpanStyle(fontSize = bigSize, fontWeight = FontWeight.Bold, color = onSurface)) {
+                    append(parts.number)
+                }
+                if (parts.suffix.isNotEmpty()) {
+                    withStyle(SpanStyle(fontSize = smallSize, color = onSurfaceVariant)) {
+                        append(parts.suffix)
+                    }
+                }
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
+        if (note.isNotEmpty()) {
+            Text(
+                text = note,
+                style = MaterialTheme.typography.labelSmall,
+                color = onSurfaceVariant,
+                maxLines = 2,
+            )
+        }
     }
 }
 

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,6 +39,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -705,15 +707,23 @@ private fun CallerKeysSection(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
+                                // M2：1.3× 下「名称 + 掩码·状态·tokens·费用」会折行把卡片顶高。
+                                // 单行 + 省略永不折行；被省略的细节在删除确认框里仍能看到完整名称。
                                 Text(
                                     text = key.name.ifBlank { key.id },
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
                                     text = callerKeyMetaLine(key),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
@@ -1411,20 +1421,27 @@ private fun SettingsToggleRow(
             text = label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
+        // 右值单行右对齐，动作按钮固定最小宽：1.3× 下「端口 / 开关 / 状态」这些值
+        // 与上一行严格落在同一条竖线上，也不会因为 3 字动作词把值挤成两行。
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            softWrap = false,
         )
         Spacer(Modifier.width(8.dp))
         McaButton(
             onClick = onAction,
+            modifier = Modifier.widthIn(min = 64.dp),
             style = McaButtonStyle.Outlined,
             enabled = enabled,
-        ) { Text(actionLabel) }
+        ) { Text(actionLabel, maxLines = 1) }
     }
 }
 
@@ -1440,6 +1457,7 @@ private fun SettingsRow(label: String, value: String) {
             text = label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
@@ -1447,6 +1465,9 @@ private fun SettingsRow(label: String, value: String) {
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }

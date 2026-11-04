@@ -20,50 +20,31 @@ class DeepPagesLayoutTest {
     @Test
     fun spacingRhythmIsOnTheFourPointScale() {
         assertEquals(16f, DeepCardPadding.value)
+        // 卡间以 16 为准（Lead 裁决）：密度靠卡内收紧，不靠压块间。
         assertEquals(16f, DeepCardGap.value)
         assertEquals(24f, DeepBlockGap.value)
         assertEquals(16f, DeepRowVertical.value)
-        // 卡片垂直内边距 = 水平 16 + 上下各 4，内容不贴边。
-        assertEquals(20f, DeepCardVerticalPadding.value)
-        assertEquals(DeepCardPadding.value + 4f, DeepCardVerticalPadding.value)
+        // 卡片垂直内边距与水平一致（1.0× / 1.3× 同等对待，不再为 1.3× 抬到 20）。
+        assertEquals(16f, DeepCardVerticalPadding.value)
+        assertEquals(DeepCardPadding.value, DeepCardVerticalPadding.value)
         // 区块间 = 卡片间 + 标题上内距，两个常数不能各写各的。
         assertEquals(DeepBlockGap, DeepCardGap + (DeepBlockGap - DeepCardGap))
-        // 列表卡片：水平 16 + 行自带 16 → 首末行外缘合计 20。
+        // 列表卡片：水平 16 + 垂直 0；首末行外缘正好等于行自带的 16，不重复留白。
         assertEquals(16f, DeepListCardPadding.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr).value)
-        assertEquals(4f, DeepListCardPadding.calculateTopPadding().value)
+        assertEquals(0f, DeepListCardPadding.calculateTopPadding().value)
         assertEquals(DeepCardVerticalPadding, DeepRowVertical + DeepListCardPadding.calculateTopPadding())
     }
 
     @Test
     fun pageTitleLayerIsSlimmed() {
-        // 标题层瘦身：页面标题到首个内容块 16dp（原 24），且比卡片间距不再额外变大。
-        assertEquals(16f, DeepPageTitleGap.value)
+        // 标题间距与卡间是同一个数（一个变量一种含义）：当前两处都必须是 16。
+        assertEquals(16f, DeepCardGap.value)
         assertEquals(DeepCardGap, DeepPageTitleGap)
     }
 
-    @Test
-    fun everyPageTitleGoesThroughTheSharedComponent() {
-        // 回归锚点：18 个页面都必须用 DeepPageTitle，不许再各自写 Text(style = headlineXxx)。
-        val pages = listOf(
-            "OverviewPage.kt", "ChannelsPage.kt", "UsagePage.kt", "RequestsPage.kt",
-            "SessionsPage.kt", "LibraryPage.kt", "WakePage.kt", "SettingsPage.kt",
-            "MorePage.kt", "GatewayProbePage.kt", "OnboardPage.kt", "RoutingPage.kt",
-            "ClientsPage.kt", "DesktopOnlyPage.kt", "BackupPage.kt", "AgentsPage.kt",
-            "PluginsPage.kt", "TotpPage.kt",
-        )
-        val root = java.io.File("src/main/java/com/muyuchat/aether/ui")
-        assertTrue("找不到 ui 源码目录：${root.absolutePath}", root.isDirectory)
-        pages.forEach { name ->
-            val file = java.io.File(root, name)
-            assertTrue("$name 不存在", file.isFile)
-            val src = file.readText()
-            assertTrue("$name 应该调用 DeepPageTitle", src.contains("DeepPageTitle("))
-            assertTrue(
-                "$name 仍在页面级标题里用 headlineMedium（应改用 DeepPageTitle）",
-                !src.contains("typography.headlineMedium"),
-            )
-        }
-    }
+    // 「每个页面都必须走 DeepPageTitle」是跨文件源码合同，不是行为，已移到
+    // scripts/check-mobile-page-title-contract.sh（纯文本 lint，不抢 Gradle 锁、不受半写文件影响）。
+    // 单测只保留能测行为与常量的断言。
 
     @Test
     fun countLabelsStayConsistentAcrossPages() {

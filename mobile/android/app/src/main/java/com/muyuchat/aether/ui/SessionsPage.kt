@@ -2,6 +2,7 @@ package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -345,9 +347,19 @@ private fun SessionsDetailDialog(
             )
         },
         text = {
-            Column {
+            // 1.3× 字号下整段正文都要能滚：外层统一滚动，正文片段改成顺序 Column，
+            // 避免「外层 scroll + 内层 LazyColumn」的嵌套测量冲突。
+            Column(
+                Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 // 动作在上、正文在下：桌面把按钮组放在用量与正文之前（`sessions.js:409-478`）。
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 两个按钮文字在 1.3× 下可能超宽：允许横向滚动，不换行也不挤压。
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     val usage = (detail as? SessionDetailUiState.Ready)?.usage
                     if (usage != null && usage.resume.isNotBlank()) {
                         McaButton(
@@ -422,21 +434,19 @@ private fun SessionsDetailDialog(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         } else {
-                            LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
-                                items(detail.parts.size) { index ->
-                                    val part = detail.parts[index]
-                                    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                                        Text(
-                                            text = sessionTranscriptRoleLine(part),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                        Text(
-                                            text = sessionTranscriptBody(part),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                        )
-                                    }
+                            // 正文片段：去掉内层 LazyColumn（外层已统一滚动），逐条排开。
+                            detail.parts.forEach { part ->
+                                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                                    Text(
+                                        text = sessionTranscriptRoleLine(part),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        text = sessionTranscriptBody(part),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
                                 }
                             }
                             Text(
@@ -771,6 +781,8 @@ private fun SessionUsageTable(
             DeepCard { DeepCardBody("暂无数据 · 当前时间范围内没有对应的会话用量。") }
             return@Column
         }
+        // 列宽随字体缩放线性放大：1.3× 下数字不会被固定 dp 列宽裁掉，表格整体仍可横滚。
+        val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.3f)
         DeepCard {
             Column(Modifier.horizontalScroll(rememberScrollState())) {
                 Row {
@@ -780,7 +792,7 @@ private fun SessionUsageTable(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
-                            modifier = Modifier.width(sessionUsageColumnWidth(index)),
+                            modifier = Modifier.width(sessionUsageColumnWidth(index, fontScale)),
                         )
                     }
                 }
@@ -794,7 +806,7 @@ private fun SessionUsageTable(
                                 color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.width(sessionUsageColumnWidth(index)),
+                                modifier = Modifier.width(sessionUsageColumnWidth(index, fontScale)),
                             )
                         }
                     }
@@ -804,8 +816,9 @@ private fun SessionUsageTable(
     }
 }
 
-/** 首列（名称）宽一些，数字列等宽。 */
-private fun sessionUsageColumnWidth(index: Int) = if (index == 0) 104.dp else 84.dp
+/** 首列（名称）宽一些，数字列等宽；`fontScale` 用于 1.3× 时同步放宽，避免裁字。 */
+private fun sessionUsageColumnWidth(index: Int, fontScale: Float = 1f) =
+    (if (index == 0) 104.dp else 84.dp) * fontScale
 
 /** 列表计数文案：0 条时不写「共 0 条」，交给空态卡解释。 */
 internal fun sessionCountLabel(count: Int): String = "$count 条"
@@ -887,7 +900,7 @@ private fun SessionKpiRow(label: String, value: String, detail: String) {
                 text = detail,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }

@@ -245,7 +245,7 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
                 title = "客户端",
-                subtitle = "接入片段 · 只读",
+                subtitle = "复制即用的接入片段 · 不会改动你的配置",
             )
         }
         McaIconButton(
@@ -274,7 +274,7 @@ private fun ClientRow(entry: ClientEntry) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = DeepRowVertical),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
         Column(Modifier.weight(1f)) {
             Text(
@@ -308,6 +308,7 @@ private fun ClientRow(entry: ClientEntry) {
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+            modifier = Modifier.padding(top = 4.dp),
         )
     }
 }

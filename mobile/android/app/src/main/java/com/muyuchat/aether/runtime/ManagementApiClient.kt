@@ -25,16 +25,16 @@ data class ProviderSummary(
     /**
      * 该渠道声明的登录方式（`supported_auths`，`provider/manifest.go:132`）。
      *
-     * 取值：`local_import` / `oauth_pkce` / `device_code` / `manual_input` / `webview_login`。
+     * 取值：`local_import` / `oauth_pkce` / `device_code` / `manual_input`。
      * `xxx_device` 不在这里 —— 桌面是按 id 前缀补的（`onboard.js:207-216`）。
+     * `webview_login` 也不在这里：全仓没有渠道声明它（`AuthWebViewLogin` 常量无使用点），
+     * 桌面 `onboard.js:777-784` 对它只开系统浏览器，属两端一致的死分支。
      */
     val supportedAuths: List<String> = emptyList(),
     /** 能力位图（`capabilities`）：chat / check_in / quota / local_import / local_inject / … */
     val capabilities: Map<String, Boolean> = emptyMap(),
     /** 手动凭据表单（`auth_form_schema`）：手动与 Token 两种接入据此决定字段名。 */
     val authFormSchema: List<ProviderFormField> = emptyList(),
-    /** 网页登录地址（`webview_login_url`）；手机端不做 WebView，只用于如实说明。 */
-    val webviewLoginUrl: String = "",
     /** 是否声明了 OAuth 参数（服务端能代跑 PKCE / 设备码）。 */
     val hasOAuth: Boolean = false,
 )
@@ -337,7 +337,6 @@ internal fun parseProviders(body: String): List<ProviderSummary> {
             supportedAuths = parseStringArray(item.optJSONArray("supported_auths")),
             capabilities = parseBoolMap(item.optJSONObject("capabilities")),
             authFormSchema = parseAuthFormSchema(item.optJSONArray("auth_form_schema")),
-            webviewLoginUrl = item.optString("webview_login_url").trim(),
             hasOAuth = item.optBoolean("oauth", false),
         )
     }

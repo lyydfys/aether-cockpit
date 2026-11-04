@@ -318,7 +318,7 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
                 title = "路由",
-                subtitle = "模型路由组 · 可改组名与成员",
+                subtitle = "模型路由组与成员",
             )
         }
         McaIconButton(

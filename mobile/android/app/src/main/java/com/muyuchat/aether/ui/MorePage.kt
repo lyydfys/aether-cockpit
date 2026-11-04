@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +25,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
@@ -255,6 +257,9 @@ private fun DirectoryRow(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
+                // 1.3× 下标题不许被右侧状态挤成竖排单字：最多两行并允许省略。
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = subtitle,
@@ -273,6 +278,13 @@ private fun DirectoryRow(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+            // 状态词与箭头右缘同一条竖线：状态右对齐、单行、不换行；
+            // 最短留 72dp 让「已接入 / 后续阶段 / 仅 Windows」在 1.0× 与 1.3× 都右缘对齐。
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier.widthIn(min = 72.dp),
         )
         Spacer(Modifier.width(4.dp))
         Icon(
