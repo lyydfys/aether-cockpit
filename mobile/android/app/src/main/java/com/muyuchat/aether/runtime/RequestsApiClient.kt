@@ -1,5 +1,6 @@
 package com.muyuchat.aether.runtime
 
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
@@ -64,6 +65,38 @@ data class RequestRow(
     val ok: Boolean get() = status in 200..299
 }
 
+/**
+ * 逐日序列点，来自 `/api/usage/requests` 的 `series[]`（`ledger.go:387-399`）。
+ *
+ * `time` 是 `YYYY-MM-DD`（`bucket=hour` 时是 `YYYY-MM-DDTHH`），也是 `chartBy.model`
+ * 每个点的 `t`，两边按这个键对表。
+ */
+data class RequestsSeriesPoint(
+    val time: String,
+    val label: String,
+    val calls: Long,
+    val errors: Long,
+    val cost: Double,
+)
+
+/** `chartBy.model[].points[]` 的一个点（`ledger.go:409-413`）：`t` 日期、`c` 调用数、`m` 成本。 */
+data class RequestsModelSeriesPoint(
+    val time: String,
+    val calls: Long,
+    val cost: Double,
+)
+
+/**
+ * `chartBy.model[]` 的一条模型序列（`ledger.go:404-413`）。
+ *
+ * 服务端只给调用量前 5 的模型，其余并成一条 `其他`（`ledger.go:599-641`）；
+ * 每条 `points` 的天数与 `series[]` 对齐，可以直接按 `time` 对表。
+ */
+data class RequestsModelSeries(
+    val name: String,
+    val points: List<RequestsModelSeriesPoint>,
+)
+
 /** `/api/usage/requests` 的一页 + 该周期的服务端汇总（汇总不受本地筛选影响，与桌面一致）。 */
 data class RequestsPage(
     val rows: List<RequestRow>,
@@ -81,6 +114,9 @@ data class RequestsPage(
     val cacheWrite: Long = 0L,
     val reasoningTokens: Long = 0L,
     val unpriced: Long = 0L,
+    /** 逐日序列（图表用）；老响应没有这两个字段时是空列表，页面按"没有趋势"处理。 */
+    val series: List<RequestsSeriesPoint> = emptyList(),
+    val modelSeries: List<RequestsModelSeries> = emptyList(),
 )
 
 /** 账本允许的周期白名单：与 `ledgerRange` 一致，其余一律回落 today。 */
@@ -255,5 +291,59 @@ internal fun parseRequests(body: String): RequestsPage {
         cacheWrite = root.optLong("cache_write", 0L).coerceAtLeast(0L),
         reasoningTokens = root.optLong("reasoning", 0L).coerceAtLeast(0L),
         unpriced = root.optLong("unpriced", 0L).coerceAtLeast(0L),
+        series = parseRequestsSeries(root.optJSONArray("series")),
+        modelSeries = parseRequestsModelSeries(root.optJSONObject("chartBy")),
     )
+}
+
+/** `series[]`：逐日（或逐小时）汇总。字段名见 `ledger.go:387-399`。 */
+internal fun parseRequestsSeries(array: JSONArray?): List<RequestsSeriesPoint> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val time = item.optString("time").trim()
+        if (time.isEmpty()) {
+            return@mapNotNull null
+        }
+        RequestsSeriesPoint(
+            time = time,
+            label = item.optString("label").trim().ifBlank { time },
+            calls = item.optLong("calls", 0L).coerceAtLeast(0L),
+            errors = item.optLong("errors", 0L).coerceAtLeast(0L),
+            cost = item.optDouble("cost", 0.0).coerceAtLeast(0.0),
+        )
+    }
+}
+
+/** `chartBy.model[]`：`{model:[{name, points:[{t,c,m}]}]}`（`ledger.go:404-413, 595`）。 */
+internal fun parseRequestsModelSeries(chartBy: JSONObject?): List<RequestsModelSeries> {
+    val array = chartBy?.optJSONArray("model") ?: return emptyList()
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val name = item.optString("name").trim()
+        if (name.isEmpty()) {
+            return@mapNotNull null
+        }
+        val points = ArrayList<RequestsModelSeriesPoint>()
+        val pointArray = item.optJSONArray("points")
+        if (pointArray != null) {
+            for (i in 0 until pointArray.length()) {
+                val point = pointArray.optJSONObject(i) ?: continue
+                val time = point.optString("t").trim()
+                if (time.isEmpty()) {
+                    continue
+                }
+                points.add(
+                    RequestsModelSeriesPoint(
+                        time = time,
+                        calls = point.optLong("c", 0L).coerceAtLeast(0L),
+                        cost = point.optDouble("m", 0.0).coerceAtLeast(0.0),
+                    ),
+                )
+            }
+        }
+        RequestsModelSeries(name = name, points = points)
+    }
 }

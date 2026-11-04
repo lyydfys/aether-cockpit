@@ -1,6 +1,8 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,6 +31,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +46,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.RequestRow
+import com.muyuchat.aether.runtime.RequestsModelSeries
 import com.muyuchat.aether.runtime.RequestsPage as RequestsData
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
@@ -139,6 +146,8 @@ internal fun RequestsPage(
             is RequestsUiState.Failed -> item { RequestsErrorCard(state.code, state.message, onRefresh) }
             is RequestsUiState.Ready -> {
                 item { RequestsKpiCard(state.page, query.period) }
+                // 趋势卡放在 KPI 之后、明细之前（桌面 logs.js 也是这个顺序）。
+                item { RequestsTrendCard(state.page, query.period) }
                 item {
                     RequestsDetailCard(
                         page = state.page,
@@ -237,6 +246,370 @@ private fun RequestsKpiCard(page: RequestsData, period: String) {
                     textAlign = TextAlign.End,
                 )
             }
+        }
+    }
+}
+
+/* ---------------- 趋势图 ---------------- */
+
+/**
+ * 趋势图的两种指标 / 两种形态（桌面 `usage.js:137-168` 的两组 seg 控件）。
+ *
+ * 只改画法，不重新取数：数据都来自同一次 `/api/usage/requests`（`series[]` 与 `chartBy.model`）。
+ * 项目里没有图表库，也不打算引入——这里用 Canvas 自绘。
+ */
+internal enum class RequestsChartMetric(val label: String) {
+    TOTAL("总计"),
+    BY_MODEL("按模型"),
+}
+
+internal enum class RequestsChartForm(val label: String) {
+    BARS("柱状"),
+    AREA("面积"),
+}
+
+/** 一根柱在画布上的矩形（像素，原点左上）。 */
+internal data class RequestsChartBar(val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+/** 折线/面积的一个顶点。 */
+internal data class RequestsChartDot(val x: Float, val y: Float)
+
+/** 图表固定高度：字号放大不改变画布高度，只用 x 轴标签稀疏化来避免拥挤。 */
+private val TrendChartHeight = 132.dp
+
+/** 峰值：空列表或全 0 → 0（画的时候按 0 处理，不编造比例尺）。 */
+internal fun requestsChartPeak(values: List<Double>): Double =
+    values.maxOrNull()?.coerceAtLeast(0.0) ?: 0.0
+
+/** 失败占比：柱顶按这个比例染红；没有调用就是 0（不是 100%）。 */
+internal fun requestsFailureRatio(calls: Long, errors: Long): Float {
+    if (calls <= 0L || errors <= 0L) {
+        return 0f
+    }
+    return (errors.toDouble() / calls.toDouble()).coerceIn(0.0, 1.0).toFloat()
+}
+
+private fun requestsBarHeight(value: Double, max: Double, height: Float): Float =
+    if (max <= 0.0 || height <= 0f) 0f else (value.coerceIn(0.0, max) / max * height).toFloat()
+
+/** 单序列柱：每天一根，柱宽 = 槽宽 ×(1-gap)。 */
+internal fun requestsBarRects(
+    values: List<Double>,
+    max: Double,
+    width: Float,
+    height: Float,
+    gapRatio: Float = 0.3f,
+): List<RequestsChartBar> {
+    if (values.isEmpty() || width <= 0f || height <= 0f) {
+        return emptyList()
+    }
+    val slot = width / values.size
+    val barWidth = slot * (1f - gapRatio.coerceIn(0f, 0.9f))
+    return values.mapIndexed { index, value ->
+        val left = index * slot + (slot - barWidth) / 2f
+        val barHeight = requestsBarHeight(value, max, height)
+        RequestsChartBar(left = left, top = height - barHeight, right = left + barWidth, bottom = height)
+    }
+}
+
+/** 分组柱：同一天并排 [groupCount] 根，第 [groupIndex] 根的位置。 */
+internal fun requestsGroupedBarRects(
+    values: List<Double>,
+    max: Double,
+    width: Float,
+    height: Float,
+    groupCount: Int,
+    groupIndex: Int,
+    gapRatio: Float = 0.22f,
+): List<RequestsChartBar> {
+    if (values.isEmpty() || width <= 0f || height <= 0f || groupCount <= 0 || groupIndex !in 0 until groupCount) {
+        return emptyList()
+    }
+    val slot = width / values.size
+    val inner = slot * (1f - gapRatio.coerceIn(0f, 0.9f))
+    val barWidth = inner / groupCount
+    return values.mapIndexed { index, value ->
+        val left = index * slot + (slot - inner) / 2f + groupIndex * barWidth
+        val barHeight = requestsBarHeight(value, max, height)
+        RequestsChartBar(left = left, top = height - barHeight, right = left + barWidth, bottom = height)
+    }
+}
+
+/** 折线顶点：只有一个点时居中；多个点等距铺满宽度。 */
+internal fun requestsLineDots(
+    values: List<Double>,
+    max: Double,
+    width: Float,
+    height: Float,
+): List<RequestsChartDot> {
+    if (values.isEmpty() || width <= 0f || height <= 0f) {
+        return emptyList()
+    }
+    val step = if (values.size <= 1) 0f else width / (values.size - 1)
+    return values.mapIndexed { index, value ->
+        val x = if (values.size <= 1) width / 2f else index * step
+        val y = height - requestsBarHeight(value, max, height)
+        RequestsChartDot(x = x, y = y)
+    }
+}
+
+/** 面积图的闭合顶点：折线 + 右下拉回左下（画填充用）。 */
+internal fun requestsAreaDots(
+    values: List<Double>,
+    max: Double,
+    width: Float,
+    height: Float,
+): List<RequestsChartDot> {
+    val line = requestsLineDots(values, max, width, height)
+    if (line.isEmpty()) {
+        return emptyList()
+    }
+    return line + listOf(
+        RequestsChartDot(x = line.last().x, y = height),
+        RequestsChartDot(x = line.first().x, y = height),
+    )
+}
+
+/**
+ * x 轴要显示的下标：最多 [maxLabels] 个，首尾必含、中间均匀取。
+ *
+ * 1.3× 时标签更宽，靠"少画几个"而不是"挤在一起"来避免重叠（图表高度与字号无关）。
+ */
+internal fun requestsChartLabelIndices(count: Int, maxLabels: Int = 4): List<Int> {
+    if (count <= 0) {
+        return emptyList()
+    }
+    val limit = maxLabels.coerceIn(2, 12)
+    if (count <= limit) {
+        return (0 until count).toList()
+    }
+    val step = (count - 1).toFloat() / (limit - 1).toFloat()
+    return (0 until limit).map { i -> Math.round(i * step).toInt().coerceIn(0, count - 1) }.distinct()
+}
+
+/** 图例：只列按模型时的序列名（成本线固定一条，单独写文案）。 */
+internal fun requestsChartLegendNames(series: List<RequestsModelSeries>): List<String> =
+    series.map { it.name }
+
+/** 右轴成本线在图例里的固定文案。 */
+internal const val REQUESTS_CHART_COST_LEGEND: String = "成本（右轴）"
+
+@Composable
+private fun RequestsTrendCard(page: RequestsData, period: String) {
+    var metric by remember { mutableStateOf(RequestsChartMetric.TOTAL) }
+    var form by remember { mutableStateOf(RequestsChartForm.BARS) }
+    val scheme = MaterialTheme.colorScheme
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("趋势")
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "总计 ${requestsCount(page.calls)} 次 · ${requestsCost(page.cost)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+            )
+        }
+        // 两组切换放在**可横滚的单行**里：1.3× 下按钮变宽，横滚比折行更省纵向空间，
+        // 也满足"图例/控件单行不截断"。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            RequestsChartMetric.entries.forEach { value ->
+                RequestsTab(value.label, metric == value) { metric = value }
+            }
+            Spacer(Modifier.width(8.dp))
+            RequestsChartForm.entries.forEach { value ->
+                RequestsTab(value.label, form == value) { form = value }
+            }
+        }
+        if (page.series.isEmpty()) {
+            Text(
+                text = "这个周期里还没有按天的调用量，所以趋势是空的。" +
+                    "下一步：发出请求后回来刷新，或把周期切成「今日 / 近 7 天 / 近 30 天」对比。",
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+            )
+            return@DeepCard
+        }
+        val totalCalls = page.series.map { it.calls.toDouble() }
+        val totalCost = page.series.map { it.cost }
+        val labels = page.series.map { it.label }
+        val byModel = metric == RequestsChartMetric.BY_MODEL && page.modelSeries.isNotEmpty()
+        val peakCalls = if (byModel) {
+            requestsChartPeak(page.modelSeries.flatMap { s -> s.points.map { it.calls.toDouble() } })
+        } else {
+            requestsChartPeak(totalCalls)
+        }
+        val peakCost = requestsChartPeak(totalCost)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "峰值 ${requestsCount(peakCalls.toLong())} 次",
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "成本 ${requestsCost(peakCost)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+                textAlign = TextAlign.End,
+            )
+        }
+        val palette = listOf(
+            scheme.primary,
+            scheme.tertiary,
+            scheme.secondary,
+            scheme.primary.copy(alpha = 0.55f),
+            scheme.tertiary.copy(alpha = 0.55f),
+            scheme.outline,
+        )
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(TrendChartHeight),
+        ) {
+            val chartWidth = size.width
+            val chartHeight = size.height
+            // 基线：给柱/面积一个落脚点，也让"0"有视觉参照。
+            drawLine(
+                color = scheme.outlineVariant.copy(alpha = 0.6f),
+                start = Offset(0f, chartHeight),
+                end = Offset(chartWidth, chartHeight),
+                strokeWidth = 1f,
+            )
+            if (byModel) {
+                if (form == RequestsChartForm.AREA) {
+                    page.modelSeries.forEachIndexed { index, series ->
+                        val color = palette[index % palette.size]
+                        val dots = requestsAreaDots(
+                            values = series.points.map { it.calls.toDouble() },
+                            max = peakCalls,
+                            width = chartWidth,
+                            height = chartHeight,
+                        )
+                        if (dots.size >= 3) {
+                            val path = Path().apply {
+                                moveTo(dots.first().x, dots.first().y)
+                                dots.drop(1).forEach { lineTo(it.x, it.y) }
+                                close()
+                            }
+                            drawPath(path, color = color.copy(alpha = 0.28f))
+                        }
+                    }
+                } else {
+                    page.modelSeries.forEachIndexed { index, series ->
+                        val color = palette[index % palette.size]
+                        requestsGroupedBarRects(
+                            values = series.points.map { it.calls.toDouble() },
+                            max = peakCalls,
+                            width = chartWidth,
+                            height = chartHeight,
+                            groupCount = page.modelSeries.size,
+                            groupIndex = index,
+                        ).forEach { bar ->
+                            drawRect(
+                                color = color,
+                                topLeft = Offset(bar.left, bar.top),
+                                size = Size(
+                                    width = (bar.right - bar.left).coerceAtLeast(0f),
+                                    height = (bar.bottom - bar.top).coerceAtLeast(0f),
+                                ),
+                            )
+                        }
+                    }
+                }
+            } else {
+                val bars = requestsBarRects(totalCalls, peakCalls, chartWidth, chartHeight)
+                page.series.forEachIndexed { index, point ->
+                    val bar = bars.getOrNull(index) ?: return@forEachIndexed
+                    drawRect(
+                        color = scheme.primary,
+                        topLeft = Offset(bar.left, bar.top),
+                        size = Size(
+                            width = (bar.right - bar.left).coerceAtLeast(0f),
+                            height = (bar.bottom - bar.top).coerceAtLeast(0f),
+                        ),
+                    )
+                    // 失败日：柱顶按失败占比染红（桌面同一语义，不把整天算失败）。
+                    val ratio = requestsFailureRatio(point.calls, point.errors)
+                    if (ratio > 0f) {
+                        val failedHeight = (bar.bottom - bar.top) * ratio
+                        drawRect(
+                            color = scheme.error,
+                            topLeft = Offset(bar.left, bar.top),
+                            size = Size(
+                                width = (bar.right - bar.left).coerceAtLeast(0f),
+                                height = failedHeight.coerceAtLeast(0f),
+                            ),
+                        )
+                    }
+                }
+            }
+            // 成本右轴折线：与柱子共用 x，但 y 按自己的峰值缩放。
+            val costDots = requestsLineDots(totalCost, peakCost, chartWidth, chartHeight)
+            if (costDots.size >= 2) {
+                val costPath = Path().apply {
+                    moveTo(costDots.first().x, costDots.first().y)
+                    costDots.drop(1).forEach { lineTo(it.x, it.y) }
+                }
+                drawPath(
+                    path = costPath,
+                    color = scheme.tertiary,
+                    style = Stroke(width = 2f),
+                )
+            }
+        }
+        // x 轴标签：只画稀疏后的下标，1.3× 也不会挤成一片或截断。
+        val indices = requestsChartLabelIndices(labels.size)
+        if (indices.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                indices.forEach { index ->
+                    Text(
+                        text = labels.getOrElse(index) { "" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+        // 图例：单行、可横滚（按模型时列出模型名，成本线固定标注）。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (totalCalls.any { it > 0.0 }) "调用（左轴）" else "调用（左轴）· 本周期无调用",
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+            )
+            Text(
+                text = REQUESTS_CHART_COST_LEGEND,
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+            )
+            if (byModel) {
+                requestsChartLegendNames(page.modelSeries).forEachIndexed { index, name ->
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette[index % palette.size],
+                    )
+                }
+            }
+        }
+        if (period.isBlank()) {
+            Text(
+                text = "周期未知：趋势按服务端返回的 series 原样画，不推算。",
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+            )
         }
     }
 }

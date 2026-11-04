@@ -164,6 +164,13 @@ data class OverviewQuotaRow(
     /** 剩余百分比（0–100，一位小数）。 */
     val remainingPct: Double,
     val resetNote: String,
+    /**
+     * 这条窗口属于哪个渠道（服务端 `/api/usage/quotas` 回包的 `provider` 字段，
+     * 见 `usage_quota_api.go:59-61` 的 `quotaCard.Provider`）。
+     *
+     * 概览「聚合链路」按它过滤出单个渠道的窗口再算最低剩余（桌面 `overview.js:377`）。
+     */
+    val providerId: String = "",
 )
 
 /**
@@ -211,6 +218,7 @@ internal fun overviewQuotaRows(
                 name = name,
                 remainingPct = remaining,
                 resetNote = formatQuotaReset(window.resetsAt).ifEmpty { "未提供重置时间" },
+                providerId = group.provider,
             )
         }
     }

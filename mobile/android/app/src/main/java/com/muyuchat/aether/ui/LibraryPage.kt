@@ -251,12 +251,11 @@ internal fun LibraryPage(
                         )
                     }
                 }
-                // 桌面脚注（library.js:102-103）：手机端把「发现/下发」两件事说清。
+                // 脚注只讲库内条目（「本机已有（未入库）」在手机上恒空，已从页面移除）。
                 item {
                     Text(
-                        text = "库里的条目可在本机查看、新增与删除；「本机已有（未入库）」的发现与" +
-                            "「写入各 agent」都要以桌面用户目录为根，手机端不做。MCP 的完整配置可能含密钥，" +
-                            "不在页面上显示。",
+                        text = "这里是网关自有的库：条目存在 App 自己的数据目录里，新增与删除都是真实写入。" +
+                            "MCP 的完整配置可能含密钥，不在页面上显示。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

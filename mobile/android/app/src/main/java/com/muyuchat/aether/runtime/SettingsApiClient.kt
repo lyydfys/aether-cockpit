@@ -68,19 +68,81 @@ data class SettingsSummary(
     val privacyMaskEnabled: Boolean = false,
     /** `settings.ui.hooks`：请求管线钩子（`pipeline_hooks.go:44` 读同一个键）。 */
     val hooks: PipelineHooks = PipelineHooks(),
+    /** `otlp`：OTLP 导出（headers 会被服务端整体打码，只回 `headersMasked`）。 */
+    val otlp: OtlpConfig = OtlpConfig(),
+    /** `tools`：网络搜索 / 图像 / 音频 / 视频 / 实时语音（密钥只回「是否已保存」）。 */
+    val tools: ToolsConfig = ToolsConfig(),
 )
 
-/** 请求管线钩子（桌面 `settings.js:468-485` 的四项）。 */
+/** 请求管线钩子（桌面 `settings.js:468-485` 四项 + 服务端第五项 `guard_accounts`）。 */
 data class PipelineHooks(
     val dropReasoning: Boolean = false,
     /** 0 = 不限制。 */
     val clampOutput: Int = 0,
     val blockModels: List<String> = emptyList(),
     val guardProviders: List<String> = emptyList(),
+    /**
+     * `guard_accounts`：服务端 `syncHooks` 也认这个键（`pipeline_hooks.go:61-63`）。
+     *
+     * 桌面保存用 `{...hooksCfg}` 整体回写，会**原样保留**它；手机端若只回写前四项，
+     * 用户点一次「丢弃推理增量」就会把它悄悄删掉。所以必须带着往返（页面不提供编辑入口）。
+     */
+    val guardAccounts: List<String> = emptyList(),
 )
 
 /** 模型重定向（桌面「模型目录」tab，`settings.js:400-446`）：虚拟名 → {渠道: 上游模型名}。 */
 data class ModelRedirects(val redirects: Map<String, Map<String, String>> = emptyMap())
+
+/**
+ * OTLP 导出配置（桌面 `settings.js:504-540`）。
+ *
+ * 语义已核：保存时 `headers` **未携带**或为打码形态（`{"___masked___":"true"}`）→ 服务端沿用旧值
+ * （`settings.go:515-516`、`:716-729`）。所以客户端只写 endpoint/批参数是安全的；
+ * 要清空 headers 就显式发 `{}`。
+ */
+data class OtlpConfig(
+    val endpoint: String = "",
+    val batchSize: Int = 0,
+    val flushSeconds: Int = 0,
+    val queueMax: Int = 0,
+    val headersMasked: Boolean = false,
+) {
+    val enabled: Boolean get() = endpoint.isNotBlank()
+}
+
+/** 工具服务（桌面 `settings.js:275-398`）：只读投影，密钥只回「是否已保存」。 */
+data class ToolsConfig(
+    val webSearchProvider: String = "",
+    val webSearchEndpoint: String = "",
+    val webSearchMaxResults: Int = 0,
+    val webSearchKeyOrder: String = "",
+    val webSearchKeyCount: Int = 0,
+    val imageBaseUrl: String = "",
+    val imageModel: String = "",
+    val imageKeySaved: Boolean = false,
+    val audioBaseUrl: String = "",
+    val audioModel: String = "",
+    val audioKeySaved: Boolean = false,
+    val videoBaseUrl: String = "",
+    val videoModel: String = "",
+    val videoKeySaved: Boolean = false,
+    val realtimeBaseUrl: String = "",
+    val realtimeModel: String = "",
+    val realtimeKeySaved: Boolean = false,
+)
+
+/** 一个请求预设（桌面 `settings.js:847-884`）。 */
+data class PresetSummary(
+    val id: String,
+    val name: String,
+    val description: String = "",
+    val enabled: Boolean = true,
+    val bodyCount: Int = 0,
+    val headerCount: Int = 0,
+    val hasSystemPrompt: Boolean = false,
+    val attachedProviders: Int = 0,
+    val attachedRoutes: Int = 0,
+)
 
 class SettingsApiClient(
     private val connectTimeoutMs: Int = 5_000,
@@ -164,6 +226,68 @@ class SettingsApiClient(
         parseModelRedirectsSnapshot(
             requestJson(status, "/api/model-redirects", "POST", buildModelRedirectsJson(redirects)),
         )
+
+    /** 刷新全部渠道模型目录（`POST /api/providers/models/refresh-all`，桌面 `settings.js:430`）。 */
+    fun refreshAllModelCatalogs(status: GatewayStatus): String {
+        val body = requestJson(status, "/api/providers/models/refresh-all", "POST", "{}")
+        val root = runCatching { org.json.JSONObject(body.trim()) }.getOrNull()
+        val refreshed = root?.optInt("refreshed", 0) ?: 0
+        val failed = root?.optInt("failed", 0) ?: 0
+        return if (failed > 0) "模型目录：$refreshed 个渠道成功，$failed 个失败" else "模型目录：$refreshed 个渠道已刷新"
+    }
+
+    /** OTLP 保存（不带 headers → 服务端沿用旧鉴权头；`clearHeaders` 显式清空）。 */
+    fun saveOtlp(status: GatewayStatus, otlp: OtlpConfig, clearHeaders: Boolean = false): SettingsSummary =
+        parseSettings(
+            requestJson(
+                status,
+                "/api/settings",
+                "POST",
+                buildOtlpJson(otlp.endpoint, otlp.batchSize, otlp.flushSeconds, otlp.queueMax, clearHeaders),
+            ),
+        )
+
+    /** 预设列表（`GET /api/presets`）。 */
+    fun fetchPresets(status: GatewayStatus): PresetsSnapshot =
+        parsePresetsSnapshot(requestJson(status, "/api/presets", "GET", null))
+
+    /** 启停预设：整对象回写（只改 enabled）。 */
+    fun togglePreset(status: GatewayStatus, snapshot: PresetsSnapshot, id: String, enabled: Boolean): PresetsSnapshot {
+        val payload = presetToggleBody(snapshot.rawBody, id, enabled)
+            ?: throw ManagementApiException("preset_missing", "预设「$id」已不存在，请刷新列表")
+        return parsePresetsSnapshot(requestJson(status, "/api/presets/save", "POST", payload))
+    }
+
+    /** 删除预设（二次确认在页面上，不在这里）。 */
+    fun deletePreset(status: GatewayStatus, id: String): PresetsSnapshot =
+        parsePresetsSnapshot(requestJson(status, "/api/presets/delete", "POST", buildPresetDeleteJson(id)))
+
+    /** 网络搜索测试（桌面 `settings.js:297-306`）→ 一行人类可读结果；失败抛服务端原文。 */
+    fun testWebSearch(status: GatewayStatus): String {
+        val body = requestJson(
+            status,
+            "/api/tools/web-search",
+            "POST",
+            "{\"query\":\"Aether Cockpit\",\"max_results\":3}",
+        )
+        val root = runCatching { org.json.JSONObject(body.trim()) }.getOrNull()
+        val results = root?.optJSONArray("results")
+        val provider = root?.optString("provider").orEmpty().trim()
+        val first = results?.optJSONObject(0)?.optString("title").orEmpty().trim()
+        return buildString {
+            append("搜索成功")
+            if (provider.isNotEmpty()) append(" · ").append(provider)
+            append(" · ").append(results?.length() ?: 0).append(" 条")
+            if (first.isNotEmpty()) append(" · ").append(first)
+        }
+    }
+
+    /** 图像服务测试（桌面 `settings.js:355-362`）→ 服务端 summary 或通用成功文案。 */
+    fun testImageService(status: GatewayStatus): String {
+        val body = requestJson(status, "/api/tools/image-test", "POST", "{}")
+        val root = runCatching { org.json.JSONObject(body.trim()) }.getOrNull()
+        return root?.optString("summary").orEmpty().trim().ifBlank { "图像测试成功" }
+    }
 
     fun replaceRedactRules(status: GatewayStatus, rules: List<RedactCustomRule>): List<RedactCustomRule> =
         parseSettings(requestJson(status, "/api/settings/redact-rules", "POST", buildRedactRulesJson(rules))).customRules
@@ -528,8 +652,138 @@ internal fun parseSettings(body: String): SettingsSummary {
         redactShape = root.optBoolean("redactShape", false),
         privacyMaskEnabled = root.optJSONObject("privacy_mask")?.optBoolean("enabled", false) ?: false,
         hooks = parsePipelineHooks(root.optJSONObject("hooks")),
+        otlp = parseOtlpConfig(root.optJSONObject("otlp")),
+        tools = parseToolsConfig(root.optJSONObject("tools")),
     )
 }
+
+/* ---------------- OTLP / 工具服务 / 预设的解析与构造（纯函数，单测覆盖） ---------------- */
+
+internal fun parseOtlpConfig(obj: org.json.JSONObject?): OtlpConfig {
+    if (obj == null) {
+        return OtlpConfig()
+    }
+    val headers = obj.optJSONObject("headers")
+    return OtlpConfig(
+        endpoint = obj.optString("endpoint").trim(),
+        batchSize = obj.optInt("batch_size", 0).coerceAtLeast(0),
+        flushSeconds = obj.optInt("flush_interval_seconds", 0).coerceAtLeast(0),
+        queueMax = obj.optInt("queue_max", 0).coerceAtLeast(0),
+        headersMasked = headers != null && headers.has("___masked___"),
+    )
+}
+
+/**
+ * OTLP 保存 JSON：**不带 headers**（服务端据此沿用旧值，`settings.go:728`）。
+ * 要清空鉴权头时传 `clearHeaders = true`（显式发空对象）。
+ */
+internal fun buildOtlpJson(
+    endpoint: String,
+    batchSize: Int,
+    flushSeconds: Int,
+    queueMax: Int,
+    clearHeaders: Boolean = false,
+): String = buildString {
+    append("{\"otlp\":{\"endpoint\":")
+    append(quoteJson(endpoint.trim()))
+    if (batchSize > 0) append(",\"batch_size\":").append(batchSize)
+    if (flushSeconds > 0) append(",\"flush_interval_seconds\":").append(flushSeconds)
+    if (queueMax > 0) append(",\"queue_max\":").append(queueMax)
+    if (clearHeaders) append(",\"headers\":{}")
+    append("}}")
+}
+
+internal fun parseToolsConfig(obj: org.json.JSONObject?): ToolsConfig {
+    if (obj == null) {
+        return ToolsConfig()
+    }
+    fun keySaved(name: String): Boolean {
+        val sub = obj.optJSONObject(name) ?: return false
+        val key = sub.optString("api_key").trim()
+        return key.isNotEmpty() && key != "******"
+    }
+    val web = obj.optJSONObject("web_search")
+    val image = obj.optJSONObject("image")
+    val audio = obj.optJSONObject("audio")
+    val video = obj.optJSONObject("video")
+    val realtime = obj.optJSONObject("realtime")
+    return ToolsConfig(
+        webSearchProvider = web?.optString("provider").orEmpty().trim(),
+        webSearchEndpoint = web?.optString("endpoint").orEmpty().trim(),
+        webSearchMaxResults = web?.optInt("max_results", 0) ?: 0,
+        webSearchKeyOrder = web?.optString("key_order").orEmpty().trim(),
+        webSearchKeyCount = web?.optInt("key_count", 0) ?: 0,
+        imageBaseUrl = image?.optString("base_url").orEmpty().trim(),
+        imageModel = image?.optString("model").orEmpty().trim(),
+        imageKeySaved = keySaved("image"),
+        audioBaseUrl = audio?.optString("base_url").orEmpty().trim(),
+        audioModel = audio?.optString("model").orEmpty().trim(),
+        audioKeySaved = keySaved("audio"),
+        videoBaseUrl = video?.optString("base_url").orEmpty().trim(),
+        videoModel = video?.optString("model").orEmpty().trim(),
+        videoKeySaved = keySaved("video"),
+        realtimeBaseUrl = realtime?.optString("base_url").orEmpty().trim(),
+        realtimeModel = realtime?.optString("model").orEmpty().trim(),
+        realtimeKeySaved = keySaved("realtime"),
+    )
+}
+
+/** 预设列表的只读投影 + 原始响应（启停要把整对象回写，见 [presetToggleBody]）。 */
+data class PresetsSnapshot(
+    val presets: List<PresetSummary> = emptyList(),
+    val rawBody: String = "",
+)
+
+internal fun parsePresetsSnapshot(body: String): PresetsSnapshot {
+    val root = try {
+        org.json.JSONObject(body.trim())
+    } catch (_: org.json.JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的预设格式不正确")
+    }
+    val array = root.optJSONArray("presets") ?: return PresetsSnapshot(rawBody = body)
+    val list = (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id").trim()
+        if (id.isEmpty()) {
+            return@mapNotNull null
+        }
+        PresetSummary(
+            id = id,
+            name = item.optString("name").trim().ifBlank { id },
+            description = item.optString("description").trim(),
+            enabled = item.optBoolean("enabled", true),
+            bodyCount = item.optJSONObject("body")?.length() ?: 0,
+            headerCount = item.optJSONObject("headers")?.length() ?: 0,
+            hasSystemPrompt = item.optString("system_prompt").trim().isNotEmpty(),
+            attachedProviders = 0,
+            attachedRoutes = 0,
+        )
+    }
+    return PresetsSnapshot(presets = list, rawBody = body)
+}
+
+/**
+ * 启停预设：服务端 `presets/save` 收的是**整个预设对象**，所以从原始响应里取出那一条，
+ * 只翻转 `enabled` 后原样回写（不改 body/headers/提示词）。找不到返回 null。
+ */
+internal fun presetToggleBody(rawBody: String, id: String, enabled: Boolean): String? {
+    val root = runCatching { org.json.JSONObject(rawBody.trim()) }.getOrNull() ?: return null
+    val array = root.optJSONArray("presets") ?: return null
+    for (index in 0 until array.length()) {
+        val item = array.optJSONObject(index) ?: continue
+        if (item.optString("id").trim() != id) {
+            continue
+        }
+        val copy = org.json.JSONObject(item.toString())
+        copy.put("enabled", enabled)
+        return copy.toString()
+    }
+    return null
+}
+
+/** 删除预设的请求体（桌面 `settings.js:877`）。 */
+internal fun buildPresetDeleteJson(id: String): String = "{\"id\":${quoteJson(id)}}"
+
 
 /* ---------------- 新增字段的解析与 JSON 构造（纯函数，单测覆盖） ---------------- */
 
@@ -548,6 +802,8 @@ internal fun parsePipelineHooks(obj: org.json.JSONObject?): PipelineHooks {
         clampOutput = obj.optInt("clamp_output", 0).coerceAtLeast(0),
         blockModels = list("block_models"),
         guardProviders = list("guard_providers"),
+        // 服务端第五个键：不读出来，回写时就会把它抹掉（`pipeline_hooks.go:61-63`）。
+        guardAccounts = list("guard_accounts"),
     )
 }
 
@@ -565,12 +821,21 @@ internal fun buildRedactShapeJson(enabled: Boolean): String = "{\"redactShape\":
 
 internal fun buildPrivacyMaskJson(enabled: Boolean): String = "{\"privacy_mask\":{\"enabled\":$enabled}}"
 
+/**
+ * 钩子保存体：**必须是 `{"hooks":{...}}` 包裹**（服务端读 `settings.ui["hooks"]`，
+ * 桌面 `saveHooks` 也发 `{hooks: cfg}`）。键名照 `pipeline_hooks.go:26-34` 的注释逐字：
+ * `drop_reasoning` / `clamp_output` / `block_models` / `guard_providers` / `guard_accounts`。
+ *
+ * 注意：第五项 `guard_accounts` 必须一起写回，否则手机端改任意开关都会把它删掉。
+ */
 internal fun buildHooksJson(hooks: PipelineHooks): String {
     val blocks = hooks.blockModels.joinToString(",") { quoteJson(it) }
     val guards = hooks.guardProviders.joinToString(",") { quoteJson(it) }
+    val accounts = hooks.guardAccounts.joinToString(",") { quoteJson(it) }
     return "{\"hooks\":{\"drop_reasoning\":${hooks.dropReasoning}," +
         "\"clamp_output\":${hooks.clampOutput.coerceAtLeast(0)}," +
-        "\"block_models\":[$blocks],\"guard_providers\":[$guards]}}"
+        "\"block_models\":[$blocks],\"guard_providers\":[$guards]," +
+        "\"guard_accounts\":[$accounts]}}"
 }
 
 internal fun buildModelRedirectsJson(redirects: Map<String, Map<String, String>>): String {

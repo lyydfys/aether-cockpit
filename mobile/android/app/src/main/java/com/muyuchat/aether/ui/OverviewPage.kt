@@ -45,6 +45,9 @@ import com.muyuchat.aether.runtime.formatUsageCost
 import com.muyuchat.aether.runtime.formatUsageCount
 import com.muyuchat.aether.runtime.overviewEndpoints
 import com.muyuchat.aether.runtime.overviewOnboardingSteps
+import com.muyuchat.aether.runtime.ONBOARDING_STEP_ONBOARD
+import com.muyuchat.aether.runtime.ONBOARDING_STEP_SETTINGS
+import com.muyuchat.aether.runtime.onboardingStepActionLabel
 import com.muyuchat.aether.runtime.stateLabel
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
@@ -84,6 +87,10 @@ internal fun OverviewPage(
     stats: OverviewStats? = null,
     // 桌面概览没有「最近一次请求」卡；参数保留只为不改 GatewayHome 的调用点（写集外）。
     latestRequest: String? = null,
+    // 三步接入的跳转（桌面 overview.js:183-185 的 navigate 目标）；GatewayHome 负责接线。
+    onGotoSettings: () -> Unit = {},
+    onGotoOnboard: () -> Unit = {},
+    onGotoProbe: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: OverviewViewModel = viewModel(),
 ) {
@@ -117,7 +124,15 @@ internal fun OverviewPage(
         item { KpiCard(stats) }
         // ② 三步接入：桌面只在账号库为空时出现（overview.js:167）
         if (links?.providersLoaded == true && links?.totalAccounts == 0) {
-            item { OnboardingCard(status = state.status, links = links) }
+            item {
+                OnboardingCard(
+                    status = state.status,
+                    links = links,
+                    onGotoSettings = onGotoSettings,
+                    onGotoOnboard = onGotoOnboard,
+                    onGotoProbe = onGotoProbe,
+                )
+            }
         }
         // ③ 聚合链路（桌面 overview.js:169/225）
         item {
@@ -387,7 +402,13 @@ private fun StatCell(label: String, value: String, note: String, modifier: Modif
  * 桌面每步带一个跳转按钮；手机的导航回调在 `GatewayHome`（写集外），因此这里只留状态词。
  */
 @Composable
-private fun OnboardingCard(status: GatewayStatus, links: OverviewLinksState?) {
+private fun OnboardingCard(
+    status: GatewayStatus,
+    links: OverviewLinksState?,
+    onGotoSettings: () -> Unit = {},
+    onGotoOnboard: () -> Unit = {},
+    onGotoProbe: () -> Unit = {},
+) {
     val steps = overviewOnboardingSteps(
         running = status.running,
         linksLoaded = links != null,
@@ -444,6 +465,21 @@ private fun OnboardingCard(status: GatewayStatus, links: OverviewLinksState?) {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
                     )
+                    // 桌面每步带一个跳转按钮（overview.js:183-185）：按 step.id 分发，不按下标。
+                    McaButton(
+                        onClick = {
+                            when (step.id) {
+                                ONBOARDING_STEP_SETTINGS -> onGotoSettings()
+                                ONBOARDING_STEP_ONBOARD -> onGotoOnboard()
+                                else -> onGotoProbe()
+                            }
+                        },
+                        style = if (step.id == ONBOARDING_STEP_ONBOARD) {
+                            McaButtonStyle.Primary
+                        } else {
+                            McaButtonStyle.Text
+                        },
+                    ) { Text(onboardingStepActionLabel(step.id)) }
                 }
             }
             if (index != steps.lastIndex) {

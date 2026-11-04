@@ -255,12 +255,16 @@ internal fun SettingsPage(
                         onRemove = onRemoveCallerKey,
                     )
                 }
-                // —— 桌面设置 tab 补齐：常规 → 定价 → 隐私补充 ——
-                // 每个 section 自加载各自端点（GET /api/settings、GET /api/pricing），
-                // 失败只在本卡报服务端原文，不连坐整页。
+                // —— 桌面设置 tab 补齐：常规 → 定价 → 隐私补充 → 工具服务 → 预设 → 模型目录 → 可观测 ——
+                // 每个 section 自加载各自端点（GET /api/settings、GET /api/pricing、GET /api/presets、
+                // GET /api/model-redirects），失败只在本卡报服务端原文，不连坐整页。
                 item { SettingsGeneralSection(status = status) }
                 item { SettingsPricingSection(status = status) }
                 item { SettingsPrivacySection(status = status) }
+                item { SettingsToolsSection(status = status) }
+                item { SettingsPresetsSection(status = status) }
+                item { SettingsModelsSection(status = status) }
+                item { SettingsObservabilitySection(status = status) }
             }
         }
         // 桌面设置的第 9 个 tab「同步与备份」（settings.js:45 TABS）。

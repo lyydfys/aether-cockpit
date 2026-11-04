@@ -659,6 +659,10 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onSearch = { selectedTab = MobileTab.MORE },
                     stats = overviewStats,
                     latestRequest = overviewLatest,
+                    // 桌面 overview.js:183-185 的三步接入各带跳转按钮，这里接到同名目的地。
+                    onGotoSettings = { showSettings = true },
+                    onGotoOnboard = { showOnboard = true },
+                    onGotoProbe = { showProbe = true },
                     modifier = modifier,
                 )
             }

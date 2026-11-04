@@ -37,6 +37,14 @@ data class ProviderSummary(
     val authFormSchema: List<ProviderFormField> = emptyList(),
     /** 是否声明了 OAuth 参数（服务端能代跑 PKCE / 设备码）。 */
     val hasOAuth: Boolean = false,
+    /**
+     * 渠道声明的模型 id（`models[].id`，`admin.go:54` 的 `providerView` 内嵌 manifest）。
+     *
+     * 概览页「聚合链路」用它推断这个渠道汇入哪些端点（桌面 `overview.js:364-374`
+     * 的 `familiesOf`：id 里含 `claude` → Anthropic、含 `gemini` → Gemini、其余 → OpenAI）。
+     * 只留 id 字符串——完整模型清单不在这里解析，避免把大对象带进 UI 状态。
+     */
+    val modelIds: List<String> = emptyList(),
 )
 
 /** 渠道自定义登录表单的一项（对应 `provider.FormFieldSchema`）。 */
@@ -338,6 +346,7 @@ internal fun parseProviders(body: String): List<ProviderSummary> {
             capabilities = parseBoolMap(item.optJSONObject("capabilities")),
             authFormSchema = parseAuthFormSchema(item.optJSONArray("auth_form_schema")),
             hasOAuth = item.optBoolean("oauth", false),
+            modelIds = parseModelIds(item.optJSONArray("models")),
         )
     }
     return out
@@ -352,8 +361,25 @@ private fun parseStringArray(array: JSONArray?): List<String> {
     }
 }
 
-private fun parseBoolMap(obj: JSONObject?): Map<String, Boolean> {
-    if (obj == null) {
+/**
+ * 渠道声明的模型 id。服务端 `models` 是**对象数组**（每个含 `id`），也可能给字符串数组，
+ * 两种都吃；缺 `id` 的条目直接丢掉（概览端点推断只认 id）。
+ */
+internal fun parseModelIds(array: JSONArray?): List<String> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index)
+        if (item != null) {
+            item.optString("id").trim().ifBlank { null }
+        } else {
+            array.optString(index).trim().ifBlank { null }
+        }
+    }.distinct()
+}
+
+private fun parseBoolMap(obj: JSONObject?): Map<String, Boolean> {    if (obj == null) {
         return emptyMap()
     }
     val out = LinkedHashMap<String, Boolean>(obj.length())
