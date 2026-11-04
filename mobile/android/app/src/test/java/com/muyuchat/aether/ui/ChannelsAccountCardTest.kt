@@ -3,6 +3,7 @@ package com.muyuchat.aether.ui
 import com.muyuchat.aether.runtime.AccountCheckin
 import com.muyuchat.aether.runtime.AccountQuotaRow
 import com.muyuchat.aether.runtime.AccountQuotaWindow
+import com.muyuchat.aether.runtime.QUOTA_UNSUPPORTED_COPY
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -31,6 +32,7 @@ class ChannelsAccountCardTest {
         used: Int = 0,
         unit: String = "",
         message: String = "",
+        quotaReadAt: Long = 0L,
     ) = AccountQuotaRow(
         accountId = accountId,
         providerId = providerId,
@@ -47,6 +49,7 @@ class ChannelsAccountCardTest {
         quotaUsed = used,
         quotaUnit = unit,
         quotaMessage = message,
+        quotaReadAt = quotaReadAt,
     )
 
     private fun window(name: String = "5 小时", used: Double = 37.5, resetsAt: Long = 0L) =
@@ -76,11 +79,11 @@ class ChannelsAccountCardTest {
         assertNull(accountRemainingPercent(row(total = 0, used = 0)))
     }
 
-    /** 红线：`quota_supported == false` 只能写「该渠道不提供额度数据」，绝不能画成 0%。 */
+    /** 红线：`quota_supported == false` 只能写「该渠道不提供额度接口」，绝不能画成 0%。 */
     @Test
     fun unsupportedQuotaNeverRendersZeroPercent() {
         val unsupported = row(quotaSupported = false, total = 0, used = 0)
-        assertEquals("该渠道不提供额度数据", accountQuotaNote(unsupported))
+        assertEquals(QUOTA_UNSUPPORTED_COPY, accountQuotaNote(unsupported))
         // 支持额度、但真的读到 0% 时才允许出现 0
         val exhausted = row(quotaSupported = true, total = 100, used = 100)
         assertEquals(0, accountRemainingPercent(exhausted))
@@ -97,8 +100,11 @@ class ChannelsAccountCardTest {
         assertNull(accountQuotaNote(row(quotaError = "upstream 401")))
         // 服务端给了说明 → 原样用
         assertEquals("积分制渠道，无重置窗口", accountQuotaNote(row(message = "积分制渠道，无重置窗口")))
-        // 什么都没有 → 说清"没有可读窗口"
-        assertEquals("这个账号没有可读的额度窗口", accountQuotaNote(row()))
+        // 支持额度、但一次都没读过 → 提示可以主动读一次（与"上游不提供"区分）
+        assertTrue(accountQuotaNote(row())!!.contains("还没读过"))
+        // 读过了但没有窗口 → 另一种说法，且带上读取时间
+        val readButEmpty = accountQuotaNote(row(quotaReadAt = 1762290000L))!!
+        assertTrue(readButEmpty.contains("上次读取没有返回可用窗口"))
     }
 
     @Test

@@ -22,7 +22,10 @@ import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.ProviderModels
 import com.muyuchat.aether.runtime.ProviderModelsApiClient
 import com.muyuchat.aether.runtime.ProviderSummary
+import com.muyuchat.aether.runtime.QUOTA_UNSUPPORTED_COPY
 import com.muyuchat.aether.runtime.parseAccountBundle
+import com.muyuchat.aether.runtime.quotaReadFailure
+import com.muyuchat.aether.runtime.withQuotaRead
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -71,6 +74,9 @@ sealed interface AccountActionUiState {
 enum class AccountActionKind {
     TOGGLE,
     CHECKIN,
+
+    /** 单账号「读一次额度」（`POST /api/accounts/{id}/refresh`）。 */
+    QUOTA,
 }
 
 /**
@@ -108,6 +114,9 @@ sealed interface ChannelsAction {
     data class SetAccountDisabled(val accountId: String, val disabled: Boolean) : ChannelsAction
 
     data class CheckinAccount(val accountId: String) : ChannelsAction
+
+    /** 单账号读一次额度：只用这一个账号的 id，不牵动别的卡片。 */
+    data class ReadAccountQuota(val accountId: String) : ChannelsAction
 
     data class BatchRefresh(val ids: List<String>) : ChannelsAction
     data class BatchSetDisabled(val ids: List<String>, val disabled: Boolean) : ChannelsAction
@@ -390,6 +399,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             ChannelsAction.Refresh -> invalidate()
             is ChannelsAction.SetAccountDisabled -> setAccountDisabled(action.accountId, action.disabled)
             is ChannelsAction.CheckinAccount -> checkinAccount(action.accountId)
+            is ChannelsAction.ReadAccountQuota -> readAccountQuota(action.accountId)
             is ChannelsAction.BatchRefresh -> runBatch(BatchKind.REFRESH, action.ids)
             is ChannelsAction.BatchSetDisabled ->
                 runBatch(if (action.disabled) BatchKind.DISABLE else BatchKind.ENABLE, action.ids)
@@ -530,6 +540,56 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message)
             } catch (_: Exception) {
                 accountAction.value = AccountActionUiState.Failed(accountId, "unknown", "签到失败，请重试")
+            }
+        }
+    }
+
+    /**
+     * 单账号「读一次额度」。
+     *
+     * 端点：`POST /api/accounts/{id}/refresh`（`auth_api.go:290-353`，续期凭证 + 同步读额度）。
+     * 回包自带 `quota` 快照，所以成功后**就地**把那一行的额度字段换掉，不整页重建。
+     *
+     * 同一时刻只允许一个账号在读取：其它卡片的「读取额度」按钮据此禁用。
+     * 渠道 `quota_supported == false` 时一次请求都不发，直接给「该渠道不提供额度接口」，
+     * 与"还没读过"在文案上区分开。
+     */
+    fun readAccountQuota(accountId: String) {
+        if (accountId.isBlank() || accountAction.value is AccountActionUiState.Busy) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            accountAction.value = AccountActionUiState.Failed(accountId, "gateway_not_running", "网关未启动")
+            return
+        }
+        val row = currentAccountRows().firstOrNull { it.accountId == accountId }
+        if (row != null && !row.quotaSupported) {
+            accountAction.value = AccountActionUiState.Failed(accountId, "quota_unsupported", QUOTA_UNSUPPORTED_COPY)
+            return
+        }
+        accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.QUOTA)
+        viewModelScope.launch {
+            try {
+                val read = withContext(Dispatchers.IO) { accountsClient.readQuota(status, accountId) }
+                if (row != null) {
+                    mergeAccountRow(row.withQuotaRead(read))
+                } else {
+                    // 没有可比对的行（列表还没到）：让它去重拉，别丢掉读到的结果。
+                    refetchAccounts()
+                }
+                val failure = quotaReadFailure(read)
+                accountAction.value = if (failure == null) {
+                    AccountActionUiState.Idle
+                } else {
+                    AccountActionUiState.Failed(accountId, failure.first, failure.second)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message)
+            } catch (_: Exception) {
+                accountAction.value = AccountActionUiState.Failed(accountId, "unknown", "读取额度失败，请重试")
             }
         }
     }

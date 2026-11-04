@@ -44,6 +44,7 @@ import com.muyuchat.aether.runtime.AccountQuotaRow
 import com.muyuchat.aether.runtime.AccountQuotaWindow
 import com.muyuchat.aether.runtime.ChannelProbe
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.QUOTA_UNSUPPORTED_COPY
 import com.muyuchat.aether.runtime.ProviderSummary
 import com.muyuchat.aether.runtime.channelProbeAgeLabel
 import com.muyuchat.aether.runtime.channelProbeSummary
@@ -268,6 +269,7 @@ internal fun ChannelsPage(
                                     onAction(ChannelsAction.SetAccountDisabled(row.accountId, disabled))
                                 },
                                 onCheckin = { onAction(ChannelsAction.CheckinAccount(row.accountId)) },
+                                onReadQuota = { onAction(ChannelsAction.ReadAccountQuota(row.accountId)) },
                                 onLoadModels = { onLoadModels(row.providerId) },
                                 onToggleProvider = { enable -> onToggleProvider(row.providerId, enable) },
                                 onTest = { onTestProvider(row.providerId) },
@@ -607,7 +609,9 @@ private fun SectionHeader(title: String, note: String) {
  * 只显示核实过的字段：名称、启用开关（`disabled`）、额度百分比条与窗口、
  * 重置时间（`reset_at`）、最近使用（`last_used`）、额度错误原文（`quota_error`）、
  * 签到入口（仅 `checkin_supported`）。`quota_supported == false` 时写
- * 「该渠道不提供额度数据」并且**不画 0% 的空条**。
+ * 「该渠道不提供额度接口」并且**不画 0% 的空条**，也不给「读取额度」按钮（点了也没用）。
+ *
+ * 「读取额度」是单账号动作：走 `POST /api/accounts/{id}/refresh`，成功用回包快照就地重画。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -625,6 +629,7 @@ private fun AccountQuotaCard(
     onLongPress: () -> Unit = {},
     onSetDisabled: (Boolean) -> Unit,
     onCheckin: () -> Unit,
+    onReadQuota: () -> Unit,
     onLoadModels: () -> Unit,
     onToggleProvider: (Boolean) -> Unit,
     onTest: () -> Unit,
@@ -636,6 +641,11 @@ private fun AccountQuotaCard(
     val busyCheckin = action is AccountActionUiState.Busy &&
         action.accountId == row.accountId &&
         action.kind == AccountActionKind.CHECKIN
+    val busyQuota = action is AccountActionUiState.Busy &&
+        action.accountId == row.accountId &&
+        action.kind == AccountActionKind.QUOTA
+    // 同一时刻只允许一个账号在动：别的卡片在忙时，这一张的写操作一起禁用。
+    val anyBusy = action is AccountActionUiState.Busy
     val failure = (action as? AccountActionUiState.Failed)?.takeIf { it.accountId == row.accountId }
     val headingColor = if (row.disabled) {
         MaterialTheme.colorScheme.onSurfaceVariant
@@ -766,44 +776,55 @@ private fun AccountQuotaCard(
             // 选择态下整行隐藏：这时候点卡片是勾选，误触渠道启停的代价太大。
             if (!selectionMode) {
                 Spacer(Modifier.height(12.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // 三个按钮的左右内边距压到 8dp：1.3× 字号下「查看模型 · 停用渠道 · 测试」
-                    // 用默认 16dp 会顶到卡片右边缘（360dp 屏），压到 8dp 后仍留 30dp 余量。
-                    McaButton(
-                        onClick = onLoadModels,
-                        style = McaButtonStyle.Outlined,
-                        size = McaButtonSize.CardAction,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                        enabled = provider != null && modelsState !is ProviderModelsUiState.Loading,
-                    ) {
-                        Text(if (modelsState is ProviderModelsUiState.Loading) "读取中…" else "查看模型")
+                // 四个动作排成两行 × 两列：1.3× 字号下四个中文按钮并排放进 288dp 会顶边
+                // （读取额度 89 + 查看模型 89 + 停用渠道 89 + 测试 58 + 间距 24 = 349dp），
+                // 所以让它们换行，而不是横滚或被压成分行单字。
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (row.quotaSupported) {
+                            McaButton(
+                                onClick = onReadQuota,
+                                style = McaButtonStyle.Outlined,
+                                size = McaButtonSize.CardAction,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                                enabled = quotaReadEnabled(row.quotaSupported, anyBusy),
+                            ) { Text(quotaReadLabel(busyQuota)) }
+                        }
+                        McaButton(
+                            onClick = onLoadModels,
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                            enabled = provider != null && modelsState !is ProviderModelsUiState.Loading,
+                        ) {
+                            Text(if (modelsState is ProviderModelsUiState.Loading) "读取中…" else "查看模型")
+                        }
                     }
-                    McaButton(
-                        onClick = { confirmToggle = true },
-                        style = McaButtonStyle.Outlined,
-                        size = McaButtonSize.CardAction,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                        enabled = provider != null && !toggling,
-                    ) {
-                        Text(
-                            when {
-                                toggling -> "切换中…"
-                                provider?.off == true -> "启用渠道"
-                                else -> "停用渠道"
-                            },
-                        )
-                    }
-                    McaButton(
-                        onClick = onTest,
-                        style = McaButtonStyle.Outlined,
-                        size = McaButtonSize.CardAction,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                        enabled = provider != null && !probing,
-                    ) {
-                        Text(if (probing) "探测中…" else "测试")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        McaButton(
+                            onClick = { confirmToggle = true },
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                            enabled = provider != null && !toggling,
+                        ) {
+                            Text(
+                                when {
+                                    toggling -> "切换中…"
+                                    provider?.off == true -> "启用渠道"
+                                    else -> "停用渠道"
+                                },
+                            )
+                        }
+                        McaButton(
+                            onClick = onTest,
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                            enabled = provider != null && !probing,
+                        ) {
+                            Text(if (probing) "探测中…" else "测试")
+                        }
                     }
                 }
             }
@@ -848,7 +869,7 @@ private fun AccountQuotaCard(
 private fun QuotaBlock(row: AccountQuotaRow) {
     if (!row.quotaSupported) {
         Text(
-            text = "该渠道不提供额度数据",
+            text = QUOTA_UNSUPPORTED_COPY,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1191,18 +1212,32 @@ internal fun accountRemainingPercent(row: AccountQuotaRow): Int? {
     return percent.roundToInt().coerceIn(0, 100)
 }
 
+/** 「读取额度」按钮文案：进行中就写进行中，别让用户重复点。 */
+internal fun quotaReadLabel(reading: Boolean): String = if (reading) "读取中…" else "读取额度"
+
+/**
+ * 只有「渠道有额度接口」且「当前没有任何账号在动」时才可点。
+ * 同一时刻只允许一个账号在读取，所以别的卡片在忙时这里也要禁用。
+ */
+internal fun quotaReadEnabled(quotaSupported: Boolean, anyBusy: Boolean): Boolean =
+    quotaSupported && !anyBusy
+
 /**
  * 没有额度条可画时的说明文案；有条可画就返回 null（不再叠一句话）。
  *
- * `quota_supported == false` 是**能力缺失**而不是"读到 0%"，必须说清楚。
+ * 三句话互不相同，因为它们说的是三件事：
+ * - `quota_supported == false` → 渠道**没有额度接口**（能力缺失，不是读到 0%）；
+ * - `quota.read_at == 0` → **还没读过**（用户点「读取额度」就能拉一次）；
+ * - 读过了但没有窗口 → 上游这次确实没给窗口。
  */
 internal fun accountQuotaNote(row: AccountQuotaRow): String? = when {
-    !row.quotaSupported -> "该渠道不提供额度数据"
+    !row.quotaSupported -> QUOTA_UNSUPPORTED_COPY
     row.quotaWindows.isNotEmpty() -> null
     accountRemainingPercent(row) != null -> null
     row.quotaError.isNotBlank() -> null
     row.quotaMessage.isNotBlank() -> row.quotaMessage
-    else -> "这个账号没有可读的额度窗口"
+    row.quotaReadAt <= 0L -> "还没读过额度，点「读取额度」拉一次"
+    else -> "上次读取没有返回可用窗口（读于 ${accountTimeLabel(row.quotaReadAt) ?: "未知时间"}）"
 }
 
 /**

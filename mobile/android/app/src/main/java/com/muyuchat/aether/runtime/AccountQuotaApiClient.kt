@@ -65,6 +65,38 @@ data class AccountQuotaRow(
     val quotaUsed: Int,
     val quotaUnit: String,
     val quotaMessage: String,
+    /** `quota.read_at`（`contract.go:249`）：>0 表示这个账号**被读过**额度，用来区分"没读过"与"读了但没有窗口"。 */
+    val quotaReadAt: Long = 0L,
+)
+
+/**
+ * 一次「读额度」拿到的快照（`QuotaStatus`，`contract.go:228-252`）。
+ * 只带卡片要渲染的字段，不搬整个对象图。
+ */
+data class AccountQuotaSnapshot(
+    val windows: List<AccountQuotaWindow>,
+    val total: Int,
+    val used: Int,
+    val unit: String,
+    val message: String,
+    val readAt: Long,
+)
+
+/**
+ * 单账号「读一次额度」的结果。
+ *
+ * 端点：`POST /api/accounts/{id}/refresh`（`gateway.go:1116` → `auth_api.go:290-353`
+ * `handleTokenRefresh`：「能续期凭证就续期，然后同步读一次额度」）。回包字段：
+ * `refreshed / refresh_supported / quota / quota_supported / quota_read`，
+ * 失败时另带 `quota_error`（额度读取失败）或 `warning`（凭据续期失败）。
+ */
+data class AccountQuotaRead(
+    val accountId: String,
+    val quotaSupported: Boolean,
+    val quotaRead: Boolean,
+    val quotaError: String,
+    val warning: String,
+    val snapshot: AccountQuotaSnapshot?,
 )
 
 /**
@@ -117,6 +149,8 @@ class AccountQuotaApiClient(
     private val checkinReadTimeoutMs: Int = 100_000,
     /** 批量刷新由服务端逐条串行执行（`accounts_api.go:186-189` 每条还 sleep 1s+），要给足时间。 */
     private val batchReadTimeoutMs: Int = 120_000,
+    /** 单账号读额度：服务端 45s 预算（`auth_api.go:307-308`）内先续期凭证再读额度，读超时必须更长。 */
+    private val accountRefreshTimeoutMs: Int = 60_000,
 ) {
     fun fetchAccounts(status: GatewayStatus): List<AccountQuotaRow> {
         val guard = guardOf(status)
@@ -251,6 +285,30 @@ class AccountQuotaApiClient(
         return AccountBatchOutcome(results = results, checkins = checkins)
     }
 
+    /**
+     * 单账号读一次额度。
+     *
+     * 走**真单账号端点** `POST /api/accounts/{id}/refresh`（`gateway.go:1116` →
+     * `auth_api.go:290-353`）：服务端能续期凭证就续期，然后同步读一次额度，并把
+     * `quota`（读后快照）/`quota_supported`/`quota_read`/`quota_error` 一起回给客户端。
+     * 因此**不需要**再拉一次 `/api/accounts`，卡片可以直接用回包快照就地重画。
+     */
+    fun readQuota(status: GatewayStatus, accountId: String): AccountQuotaRead {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateAccountId(accountId)?.let { code -> throw ManagementApiException(code, "账号 id 不合法") }
+        val response = request(
+            status = status,
+            method = "POST",
+            path = accountRefreshPath(accountId),
+            body = "{}",
+            timeoutMs = accountRefreshTimeoutMs,
+        )
+        return parseQuotaRead(accountId, response)
+    }
+
     /** 网关没跑 / 没有会话凭据时一次请求都不发。 */
     private fun guardOf(status: GatewayStatus): ManagementApiException? = when {
         !status.running || status.addr.isBlank() -> ManagementApiException("gateway_not_running", "网关未启动")
@@ -320,6 +378,16 @@ internal fun accountSettingsPath(accountId: String): String =
 
 /** 批量端点路径（`gateway.go:1073` `POST /api/accounts/batch`）。 */
 internal fun accountsBatchPath(): String = "/api/accounts/batch"
+
+/** 单账号读额度路径（`gateway.go:1116` `POST /api/accounts/{id}/refresh`）。 */
+internal fun accountRefreshPath(accountId: String): String =
+    "/api/accounts/${encodeAccountSegment(accountId)}/refresh"
+
+/**
+ * 渠道根本没有额度接口时的统一文案。
+ * 必须与"没读过额度"用不同句子说，否则用户分不清"上游不提供"和"还没拉过"。
+ */
+internal const val QUOTA_UNSUPPORTED_COPY = "该渠道不提供额度接口"
 
 /** 服务端只认 delete / refresh / ready；本 App 只用 refresh（另外两个会删账号/重置状态，不在移动端做）。 */
 internal fun buildAccountBatchJson(action: String, ids: List<String>): String {
@@ -434,6 +502,55 @@ internal fun parseCheckinAck(body: String): AccountCheckin? {
     return root.optJSONObject("checkin")?.let(::parseCheckin)
 }
 
+/**
+ * `POST /api/accounts/{id}/refresh` → `{"refreshed","refresh_supported","quota","quota_supported",
+ * "quota_read","quota_error"?,"warning"?}`（`auth_api.go:339-352`）。
+ *
+ * `quota_supported` 是这个端点唯一必带的字段（同一份 map 里恒定写出），缺了就是坏回包。
+ */
+internal fun parseQuotaRead(accountId: String, body: String): AccountQuotaRead {
+    val root = objectOrThrow(body, "额度读取")
+    if (!root.has("quota_supported")) {
+        throw ManagementApiException("invalid_response", "额度读取没有返回 quota_supported")
+    }
+    return AccountQuotaRead(
+        accountId = accountId,
+        quotaSupported = root.optBoolean("quota_supported", false),
+        quotaRead = root.optBoolean("quota_read", false),
+        quotaError = root.optString("quota_error").trim().take(400),
+        warning = root.optString("warning").trim().take(200),
+        snapshot = parseQuotaSnapshot(root.optJSONObject("quota")),
+    )
+}
+
+/** 把一次读取的结果合并回卡片行（就地更新，不整页重建）。 */
+internal fun AccountQuotaRow.withQuotaRead(read: AccountQuotaRead): AccountQuotaRow {
+    val snapshot = read.snapshot
+    return copy(
+        quotaSupported = read.quotaSupported,
+        // 读取成功时服务端不会带 quota_error（空串）→ 这里正好把上一次的错误清掉。
+        quotaError = read.quotaError,
+        quotaWindows = snapshot?.windows ?: quotaWindows,
+        quotaTotal = snapshot?.total ?: quotaTotal,
+        quotaUsed = snapshot?.used ?: quotaUsed,
+        quotaUnit = snapshot?.unit ?: quotaUnit,
+        quotaMessage = snapshot?.message ?: quotaMessage,
+        quotaReadAt = snapshot?.readAt ?: quotaReadAt,
+    )
+}
+
+/**
+ * 读取结果 → 卡片上要显示的失败（null = 成功且没有需要报告的问题）。
+ *
+ * 三种情况互斥且文案不同：渠道没额度接口 / 上游读失败（原文）/ 凭证续期失败（原文）。
+ */
+internal fun quotaReadFailure(read: AccountQuotaRead): Pair<String, String>? = when {
+    !read.quotaSupported -> "quota_unsupported" to QUOTA_UNSUPPORTED_COPY
+    read.quotaError.isNotBlank() -> "quota_read_failed" to read.quotaError
+    read.warning.isNotBlank() -> "credential_refresh_warning" to read.warning
+    else -> null
+}
+
 internal fun parseCheckin(item: JSONObject): AccountCheckin = AccountCheckin(
     day = item.optString("day").trim(),
     outcome = item.optString("outcome").trim(),
@@ -449,9 +566,7 @@ private fun parseAccountObject(item: JSONObject): AccountQuotaRow? {
         return null
     }
     val quota = item.optJSONObject("quota")
-    val windows = quota?.optJSONArray("windows")?.let { array ->
-        (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.let(::parseQuotaWindow) }
-    }.orEmpty()
+    val snapshot = parseQuotaSnapshot(quota)
     return AccountQuotaRow(
         accountId = accountId,
         providerId = item.optString("provider_id").trim(),
@@ -459,7 +574,7 @@ private fun parseAccountObject(item: JSONObject): AccountQuotaRow? {
         disabled = item.optBoolean("disabled", false),
         resetAt = item.optLong("reset_at", 0L).coerceAtLeast(0L),
         lastUsed = item.optLong("last_used", 0L).coerceAtLeast(0L),
-        // 老版本没有 quota_supported 字段时，按"有 quota 对象"推断，避免误报「不提供额度数据」。
+        // 老版本没有 quota_supported 字段时，按"有 quota 对象"推断，避免误报「不提供额度接口」。
         quotaSupported = if (item.has("quota_supported")) {
             item.optBoolean("quota_supported", false)
         } else {
@@ -468,11 +583,30 @@ private fun parseAccountObject(item: JSONObject): AccountQuotaRow? {
         quotaError = item.optString("quota_error").trim().take(400),
         checkinSupported = item.optBoolean("checkin_supported", false),
         checkin = item.optJSONObject("checkin")?.let(::parseCheckin),
-        quotaWindows = windows,
-        quotaTotal = quota?.optInt("total", 0)?.coerceAtLeast(0) ?: 0,
-        quotaUsed = quota?.optInt("used", 0)?.coerceAtLeast(0) ?: 0,
-        quotaUnit = quota?.optString("unit").orEmpty().trim(),
-        quotaMessage = quota?.optString("message").orEmpty().trim().take(200),
+        quotaWindows = snapshot?.windows.orEmpty(),
+        quotaTotal = snapshot?.total ?: 0,
+        quotaUsed = snapshot?.used ?: 0,
+        quotaUnit = snapshot?.unit ?: "",
+        quotaMessage = snapshot?.message ?: "",
+        quotaReadAt = snapshot?.readAt ?: 0L,
+    )
+}
+
+/** `quota` 对象（`QuotaStatus`，`contract.go:228-252`）→ 卡片要用的精简快照。 */
+private fun parseQuotaSnapshot(quota: JSONObject?): AccountQuotaSnapshot? {
+    if (quota == null) {
+        return null
+    }
+    val windows = quota.optJSONArray("windows")?.let { array ->
+        (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.let(::parseQuotaWindow) }
+    }.orEmpty()
+    return AccountQuotaSnapshot(
+        windows = windows,
+        total = quota.optInt("total", 0).coerceAtLeast(0),
+        used = quota.optInt("used", 0).coerceAtLeast(0),
+        unit = quota.optString("unit").trim(),
+        message = quota.optString("message").trim().take(200),
+        readAt = quota.optLong("read_at", 0L).coerceAtLeast(0L),
     )
 }
 
