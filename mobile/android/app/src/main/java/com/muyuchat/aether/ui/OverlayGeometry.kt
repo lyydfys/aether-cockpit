@@ -78,6 +78,24 @@ internal object OverlayGeometry {
         return (startOffsetPx + delta.roundToInt()).coerceIn(low, high)
     }
 
+    /** 全屏层 hit-test：指针与球矩形的纯浮点判断，命中才消费事件。 */
+    fun hitTest(
+        pointerX: Float,
+        pointerY: Float,
+        left: Float,
+        top: Float,
+        sizePx: Float,
+    ): Boolean {
+        if (!pointerX.isFinite() || !pointerY.isFinite()) {
+            return false
+        }
+        if (!left.isFinite() || !top.isFinite() || !sizePx.isFinite() || sizePx <= 0f) {
+            return false
+        }
+        return pointerX >= left && pointerX <= left + sizePx &&
+            pointerY >= top && pointerY <= top + sizePx
+    }
+
     /**
      * 横向吸附：拖完只落到最近的一条边（0 或 1）。
      *

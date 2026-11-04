@@ -50,7 +50,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
@@ -281,7 +280,21 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
             .padding(innerPadding)
             .imePadding()
             .padding(bottom = BubbleReservedBottom)
-        Box(Modifier.fillMaxSize()) {
+        GatewayBubble(
+            status = state.status,
+            overlayVisible = overlayVisible,
+            copied = copied,
+            onPrimaryAction = { requestPrimaryAction() },
+            onCopy = {
+                if (url.isNotEmpty()) {
+                    clipboard.setText(AnnotatedString(url))
+                    copied = true
+                }
+            },
+            onToggleOverlay = { toggleOverlay() },
+            modifier = Modifier.fillMaxSize(),
+            contentInsets = innerPadding,
+        ) {
         when {
             showBackup -> {
                 val backupViewModel: BackupViewModel = viewModel()
@@ -851,24 +864,6 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 },
             )
         }
-        GatewayBubble(
-            status = state.status,
-            overlayVisible = overlayVisible,
-            copied = copied,
-            onPrimaryAction = { requestPrimaryAction() },
-            onCopy = {
-                if (url.isNotEmpty()) {
-                    clipboard.setText(AnnotatedString(url))
-                    copied = true
-                }
-            },
-            onToggleOverlay = { toggleOverlay() },
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding()
-                .zIndex(2f),
-        )
         }
     }
 }

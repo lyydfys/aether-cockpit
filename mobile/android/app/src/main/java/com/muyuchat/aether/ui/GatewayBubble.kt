@@ -20,8 +20,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,8 +46,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -76,6 +87,18 @@ internal const val BubbleMarkDp = 64f
 /** 页面列表底部预留区：球高 + 默认边距，默认位置不会压住最后一张卡。 */
 internal val BubbleReservedBottom: Dp = 80.dp
 
+/** 页面球拖动时的活动区（root 坐标），由内层 BoxWithConstraints 上报。 */
+private data class BubbleMetrics(
+    val minX: Int,
+    val minY: Int,
+    val travelX: Int,
+    val travelY: Int,
+)
+
+/** 未运行时永远没有光晕；运行中才使用动画值。 */
+internal fun gatewayHaloAlpha(running: Boolean, animatedAlpha: Float): Float =
+    if (running) animatedAlpha.coerceIn(0f, 1f) else 0f
+
 /** 系统外显的前置条件；顺序就是用户实际会遇到的顺序（先有网关，再要权限）。 */
 internal enum class OverlayAvailability { Available, NeedGateway, NeedPermission }
 
@@ -104,12 +127,14 @@ internal fun gatewayBackgroundNote(): String =
         "停止后悬浮球会变灰。"
 
 /**
- * 页面内悬浮球：在页面根 Box 内绝对定位，可拖动、横向吸边、位置存比例。
+ * 页面内悬浮球宿主。
  *
- * - 运行中=primary 呼吸灯，已停止=静态灰；
- * - 位移 < 8dp 视为点击，展开菜单；≥8dp 只移动；
- * - 位置存 `xFraction/yFraction`（rememberSaveable），旋转/窗口变化后比例仍有效；
- * - 菜单用 Popup 锚在球上：球在右半屏往左弹、在左半屏往右弹。
+ * 关键：手势层是**覆盖全屏、位于内容之上的父节点**，节点本身不移动，所以 pointer 坐标稳定；
+ * 在 `awaitFirstDown` 时用球的 root 矩形 hit-test，命中才 consume 并拖动，未命中直接返回，
+ * 事件继续交给下层页面（父节点不消费，子节点照常收到）。
+ *
+ * 拖动全程只用像素（dragDx/dragDy + offset lambda），松手才换算比例并吸边。
+ * 运行中=primaryContainer/品牌色/呼吸灯；停止=surfaceVariant/onSurfaceVariant/无光晕。
  */
 @Composable
 internal fun GatewayBubble(
@@ -120,6 +145,8 @@ internal fun GatewayBubble(
     onCopy: () -> Unit,
     onToggleOverlay: () -> Unit,
     modifier: Modifier = Modifier,
+    contentInsets: PaddingValues = PaddingValues(0.dp),
+    content: @Composable () -> Unit = {},
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -142,172 +169,213 @@ internal fun GatewayBubble(
         }
     }
 
-    BoxWithConstraints(modifier) {
-        val markPx = with(density) { BubbleMarkDp.dp.toPx() }
-        val edgePx = with(density) { OverlayGeometry.EDGE_DP.dp.toPx() }.roundToInt()
-        val widthPx = with(density) { maxWidth.toPx() }
-        val heightPx = with(density) { maxHeight.toPx() }
-        val travelX = OverlayGeometry.travelPx(widthPx.roundToInt(), markPx.roundToInt(), edgePx)
-        val travelY = OverlayGeometry.travelPx(heightPx.roundToInt(), markPx.roundToInt(), edgePx)
-        val minX = edgePx
-        val minY = edgePx
-        val maxX = edgePx + travelX
-        val maxY = edgePx + travelY
-        var xFraction by rememberSaveable { mutableStateOf(1f) }
-        var yFraction by rememberSaveable { mutableStateOf(1f) }
+    var xFraction by rememberSaveable { mutableStateOf(1f) }
+    var yFraction by rememberSaveable { mutableStateOf(1f) }
+    var dragDx by remember { mutableIntStateOf(0) }
+    var dragDy by remember { mutableIntStateOf(0) }
+    var bubbleRect by remember { mutableStateOf(Rect.Zero) }
+    var hostOrigin by remember { mutableStateOf(Offset.Zero) }
+    var metrics by remember { mutableStateOf(BubbleMetrics(0, 0, 0, 0)) }
 
-        // 拖动全程只写像素（mutableIntStateOf + offset lambda，布局阶段读），
-        // 松手才换算成比例；避免每帧“像素→比例→像素”的取整抖动与组合重组。
-        var dragDx by remember { mutableIntStateOf(0) }
-        var dragDy by remember { mutableIntStateOf(0) }
-        val onRight = xFraction >= 0.5f
-        val menuAbove = yFraction >= 0.5f
-
-        Box(
-            modifier = Modifier
-                .offset {
-                    val baseX = minX + OverlayGeometry.offsetPx(xFraction, travelX)
-                    val baseY = minY + OverlayGeometry.offsetPx(yFraction, travelY)
-                    IntOffset(
-                        x = (baseX + dragDx).coerceIn(minX, maxX),
-                        y = (baseY + dragDy).coerceIn(minY, maxY),
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            .onGloballyPositioned { hostOrigin = it.positionInRoot() }
+            .pointerInput(Unit) {
+                val dragModeThresholdPx = 4.dp.toPx()
+                awaitEachGesture {
+                    val down = awaitFirstDown(
+                        requireUnconsumed = false,
+                        pass = PointerEventPass.Initial,
                     )
-                }
-                .zIndex(2f)
-                .size(BubbleMarkDp.dp)
-                .pointerInput(travelX, travelY, minX, minY, maxX, maxY) {
-                    val dragModeThresholdPx = 4.dp.toPx()
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        down.consume()
-                        val startPointerX = down.position.x
-                        val startPointerY = down.position.y
-                        val startAbsX = minX + OverlayGeometry.offsetPx(xFraction, travelX)
-                        val startAbsY = minY + OverlayGeometry.offsetPx(yFraction, travelY)
-                        var dragging = false
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) {
-                                if (dragging) {
-                                    val finalX = OverlayGeometry.dragOffsetPx(
-                                        startOffsetPx = startAbsX,
-                                        startPointerPx = startPointerX,
-                                        currentPointerPx = change.position.x,
-                                        minPx = minX,
-                                        maxPx = maxX,
-                                    )
-                                    val finalY = OverlayGeometry.dragOffsetPx(
-                                        startOffsetPx = startAbsY,
-                                        startPointerPx = startPointerY,
-                                        currentPointerPx = change.position.y,
-                                        minPx = minY,
-                                        maxPx = maxY,
-                                    )
-                                    xFraction = OverlayGeometry.snapFraction(
-                                        OverlayGeometry.fractionForOffset(finalX - minX, travelX),
-                                    )
-                                    yFraction = OverlayGeometry.fractionForOffset(finalY - minY, travelY)
-                                }
-                                dragDx = 0
-                                dragDy = 0
-                                if (!dragging) {
-                                    expanded = !expanded
-                                }
-                                return@awaitEachGesture
+                    val downInRoot = down.position + hostOrigin
+                    // 未命中小球：不消费、不拦事件，页面照常滚动/点击。
+                    if (!OverlayGeometry.hitTest(
+                            pointerX = downInRoot.x,
+                            pointerY = downInRoot.y,
+                            left = bubbleRect.left,
+                            top = bubbleRect.top,
+                            sizePx = bubbleRect.width,
+                        )
+                    ) {
+                        return@awaitEachGesture
+                    }
+                    down.consume()
+
+                    val startPointerX = down.position.x
+                    val startPointerY = down.position.y
+                    val m = metrics
+                    val startAbsX = m.minX + OverlayGeometry.offsetPx(xFraction, m.travelX)
+                    val startAbsY = m.minY + OverlayGeometry.offsetPx(yFraction, m.travelY)
+                    val maxAbsX = m.minX + m.travelX
+                    val maxAbsY = m.minY + m.travelY
+                    var dragging = false
+
+                    while (true) {
+                        // Initial pass：父节点先于页面子节点收到，命中后 consume 才能阻止页面滚动。
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            if (dragging) {
+                                val finalX = OverlayGeometry.dragOffsetPx(
+                                    startOffsetPx = startAbsX,
+                                    startPointerPx = startPointerX,
+                                    currentPointerPx = change.position.x,
+                                    minPx = m.minX,
+                                    maxPx = maxAbsX,
+                                )
+                                val finalY = OverlayGeometry.dragOffsetPx(
+                                    startOffsetPx = startAbsY,
+                                    startPointerPx = startPointerY,
+                                    currentPointerPx = change.position.y,
+                                    minPx = m.minY,
+                                    maxPx = maxAbsY,
+                                )
+                                xFraction = OverlayGeometry.snapFraction(
+                                    OverlayGeometry.fractionForOffset(finalX - m.minX, m.travelX),
+                                )
+                                yFraction = OverlayGeometry.fractionForOffset(finalY - m.minY, m.travelY)
                             }
-                            val dx = change.position.x - startPointerX
-                            val dy = change.position.y - startPointerY
-                            val distance = hypot(dx.toDouble(), dy.toDouble()).toFloat()
-                            if (!dragging && distance > dragModeThresholdPx) {
-                                dragging = true
-                                expanded = false
+                            dragDx = 0
+                            dragDy = 0
+                            if (!dragging) {
+                                expanded = !expanded
                             }
-                            // 第一帧移动就跟随；只有超过 4dp 才算进入拖动模式，
-                            // 未达阈值时松手会回弹并当作点击。
-                            val absX = OverlayGeometry.dragOffsetPx(
-                                startOffsetPx = startAbsX,
-                                startPointerPx = startPointerX,
-                                currentPointerPx = change.position.x,
-                                minPx = minX,
-                                maxPx = maxX,
-                            )
-                            val absY = OverlayGeometry.dragOffsetPx(
-                                startOffsetPx = startAbsY,
-                                startPointerPx = startPointerY,
-                                currentPointerPx = change.position.y,
-                                minPx = minY,
-                                maxPx = maxY,
-                            )
-                            dragDx = absX - startAbsX
-                            dragDy = absY - startAbsY
-                            change.consume()
+                            return@awaitEachGesture
                         }
-                        dragDx = 0
-                        dragDy = 0
-                    }
-                }
-                .semantics {
-                    contentDescription = if (status.running) {
-                        "网关运行中，打开网关操作"
-                    } else {
-                        "网关已停止，打开网关操作"
-                    }
-                    role = Role.Button
-                    onClick(label = "打开网关操作") {
-                        expanded = !expanded
-                        true
-                    }
-                },
-        ) {
-            GatewayOrb(running = status.running)
 
-            if (expanded) {
-                val gapPx = with(density) { 12.dp.roundToPx() }
-                Popup(
-                    alignment = when {
-                        onRight && menuAbove -> Alignment.BottomEnd
-                        onRight -> Alignment.TopEnd
-                        menuAbove -> Alignment.BottomStart
-                        else -> Alignment.TopStart
-                    },
-                    offset = IntOffset(
-                        x = 0,
-                        y = if (menuAbove) {
-                            -(markPx.roundToInt() + gapPx)
+                        val dx = change.position.x - startPointerX
+                        val dy = change.position.y - startPointerY
+                        val distance = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                        if (!dragging && distance > dragModeThresholdPx) {
+                            dragging = true
+                            expanded = false
+                        }
+                        // 第一帧就跟随；两轴各自独立累加，不存在斜拖时一轴被抵消的问题。
+                        val absX = OverlayGeometry.dragOffsetPx(
+                            startOffsetPx = startAbsX,
+                            startPointerPx = startPointerX,
+                            currentPointerPx = change.position.x,
+                            minPx = m.minX,
+                            maxPx = maxAbsX,
+                        )
+                        val absY = OverlayGeometry.dragOffsetPx(
+                            startOffsetPx = startAbsY,
+                            startPointerPx = startPointerY,
+                            currentPointerPx = change.position.y,
+                            minPx = m.minY,
+                            maxPx = maxAbsY,
+                        )
+                        dragDx = absX - startAbsX
+                        dragDy = absY - startAbsY
+                        change.consume()
+                    }
+                    dragDx = 0
+                    dragDy = 0
+                }
+            },
+    ) {
+        content()
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentInsets)
+                .imePadding()
+                .zIndex(2f),
+        ) {
+            val markPx = with(density) { BubbleMarkDp.dp.toPx() }
+            val edgePx = with(density) { OverlayGeometry.EDGE_DP.dp.toPx() }.roundToInt()
+            val widthPx = with(density) { maxWidth.toPx() }
+            val heightPx = with(density) { maxHeight.toPx() }
+            val travelX = OverlayGeometry.travelPx(widthPx.roundToInt(), markPx.roundToInt(), edgePx)
+            val travelY = OverlayGeometry.travelPx(heightPx.roundToInt(), markPx.roundToInt(), edgePx)
+            val minX = edgePx
+            val minY = edgePx
+            val maxX = edgePx + travelX
+            val maxY = edgePx + travelY
+            SideEffect {
+                metrics = BubbleMetrics(minX = minX, minY = minY, travelX = travelX, travelY = travelY)
+            }
+
+            val onRight = xFraction >= 0.5f
+            val menuAbove = yFraction >= 0.5f
+
+            Box(
+                modifier = Modifier
+                    .offset {
+                        val baseX = minX + OverlayGeometry.offsetPx(xFraction, travelX)
+                        val baseY = minY + OverlayGeometry.offsetPx(yFraction, travelY)
+                        IntOffset(
+                            x = (baseX + dragDx).coerceIn(minX, maxX),
+                            y = (baseY + dragDy).coerceIn(minY, maxY),
+                        )
+                    }
+                    .zIndex(2f)
+                    .size(BubbleMarkDp.dp)
+                    .onGloballyPositioned { bubbleRect = it.boundsInRoot() }
+                    .semantics {
+                        contentDescription = if (status.running) {
+                            "网关运行中，打开网关操作"
                         } else {
-                            markPx.roundToInt() + gapPx
+                            "网关已停止，打开网关操作"
+                        }
+                        role = Role.Button
+                        onClick(label = "打开网关操作") {
+                            expanded = !expanded
+                            true
+                        }
+                    },
+            ) {
+                GatewayOrb(running = status.running)
+
+                if (expanded) {
+                    val gapPx = with(density) { 12.dp.roundToPx() }
+                    Popup(
+                        alignment = when {
+                            onRight && menuAbove -> Alignment.BottomEnd
+                            onRight -> Alignment.TopEnd
+                            menuAbove -> Alignment.BottomStart
+                            else -> Alignment.TopStart
                         },
-                    ),
-                    onDismissRequest = { expanded = false },
-                    properties = PopupProperties(
-                        focusable = true,
-                        dismissOnBackPress = true,
-                        dismissOnClickOutside = true,
-                    ),
-                ) {
-                    BubbleMenu(
-                        status = status,
-                        overlayVisible = overlayVisible,
-                        copied = copied,
-                        permissionGranted = permissionGranted,
-                        onPrimaryAction = onPrimaryAction,
-                        onCopy = onCopy,
-                        onOverlayClick = {
-                            if (overlayVisible) {
-                                onToggleOverlay()
+                        offset = IntOffset(
+                            x = 0,
+                            y = if (menuAbove) {
+                                -(markPx.roundToInt() + gapPx)
                             } else {
-                                when (overlayAvailability(status.running, permissionGranted)) {
-                                    OverlayAvailability.NeedGateway -> Unit
-                                    OverlayAvailability.NeedPermission -> {
-                                        expanded = false
-                                        permissionDialog = true
+                                markPx.roundToInt() + gapPx
+                            },
+                        ),
+                        onDismissRequest = { expanded = false },
+                        properties = PopupProperties(
+                            focusable = true,
+                            dismissOnBackPress = true,
+                            dismissOnClickOutside = true,
+                        ),
+                    ) {
+                        BubbleMenu(
+                            status = status,
+                            overlayVisible = overlayVisible,
+                            copied = copied,
+                            permissionGranted = permissionGranted,
+                            onPrimaryAction = onPrimaryAction,
+                            onCopy = onCopy,
+                            onOverlayClick = {
+                                if (overlayVisible) {
+                                    onToggleOverlay()
+                                } else {
+                                    when (overlayAvailability(status.running, permissionGranted)) {
+                                        OverlayAvailability.NeedGateway -> Unit
+                                        OverlayAvailability.NeedPermission -> {
+                                            expanded = false
+                                            permissionDialog = true
+                                        }
+                                        OverlayAvailability.Available -> onToggleOverlay()
                                     }
-                                    OverlayAvailability.Available -> onToggleOverlay()
                                 }
-                            }
-                        },
-                    )
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -427,41 +495,79 @@ private fun BubbleMenu(
     }
 }
 
-/** 页面内浮球：MCA plate + 品牌标识；运行中才有呼吸光晕。触摸由外层手势层处理。 */
+/** 运行中才组合呼吸动画；停止态是单独的静态灰，不创建 InfiniteTransition。 */
 @Composable
 private fun GatewayOrb(running: Boolean) {
-    val accent = MaterialTheme.colorScheme.primary
-    val transition = rememberInfiniteTransition(label = "gatewayBreath")
-    val haloAlpha by transition.animateFloat(
-        initialValue = if (running) 0.18f else 0f,
-        targetValue = if (running) 0.55f else 0f,
-        animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-        label = "gatewayBreathAlpha",
-    )
-    val haloScale by transition.animateFloat(
-        initialValue = if (running) 0.92f else 1f,
-        targetValue = if (running) 1.08f else 1f,
-        animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-        label = "gatewayBreathScale",
-    )
-    Box(modifier = Modifier.size(BubbleMarkDp.dp), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .size(BubbleMarkDp.dp)
-                .scale(haloScale)
-                .background(accent.copy(alpha = haloAlpha), CircleShape),
+    if (running) {
+        val accent = MaterialTheme.colorScheme.primary
+        val transition = rememberInfiniteTransition(label = "gatewayBreath")
+        val haloAlpha by transition.animateFloat(
+            initialValue = 0.18f,
+            targetValue = 0.55f,
+            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
+            label = "gatewayBreathAlpha",
         )
+        val haloScale by transition.animateFloat(
+            initialValue = 0.92f,
+            targetValue = 1.08f,
+            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
+            label = "gatewayBreathScale",
+        )
+        OrbPlate(
+            running = true,
+            accent = accent,
+            haloAlpha = haloAlpha,
+            haloScale = haloScale,
+        )
+    } else {
+        OrbPlate(
+            running = false,
+            accent = MaterialTheme.colorScheme.onSurfaceVariant,
+            haloAlpha = 0f,
+            haloScale = 1f,
+        )
+    }
+}
+
+@Composable
+private fun OrbPlate(
+    running: Boolean,
+    accent: Color,
+    haloAlpha: Float,
+    haloScale: Float,
+) {
+    val container = if (running) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val border = if (running) McaHairline.selected(accent) else McaHairline.default()
+    Box(modifier = Modifier.size(BubbleMarkDp.dp), contentAlignment = Alignment.Center) {
+        if (running) {
+            Box(
+                Modifier
+                    .size(BubbleMarkDp.dp)
+                    .scale(haloScale)
+                    .background(accent.copy(alpha = gatewayHaloAlpha(running, haloAlpha)), CircleShape),
+            )
+        }
         McaIconPlate(
             size = 48.dp,
             shape = CircleShape,
             selected = running,
             accent = accent,
+            containerColor = container,
+            borderColor = border,
         ) {
             Image(
-                // 悬浮球（48dp plate）内用光学简化版（气泡+星芒）；28→32dp 让球内占比更合理。
-                painter = painterResource(R.drawable.ic_brand_mark),
+                painter = painterResource(R.drawable.ic_brand_avatar),
                 contentDescription = null,
-                modifier = Modifier.size(32.dp),
+                colorFilter = if (running) {
+                    null
+                } else {
+                    ColorFilter.tint(MaterialTheme.colorScheme.onSurfaceVariant)
+                },
+                modifier = Modifier.size(28.dp),
             )
         }
     }
@@ -474,8 +580,7 @@ private fun GatewayOrb(running: Boolean) {
  * context 是 Service（`view.context as Activity` 会崩）。颜色由页面从
  * `MaterialTheme.colorScheme` 取好后经 Intent 传进来，不新增颜色常量。
  *
- * 触摸/拖动由 Service 里的 OnTouchListener 处理；这里只保留无障碍点击语义，
- * 不再挂 Compose clickable（否则子 View 会吃掉 WindowManager overlay 的拖动事件）。
+ * 触摸/拖动由 Service 里的 OnTouchListener 处理；这里只保留无障碍点击语义。
  */
 @Composable
 internal fun GatewaySystemOverlayBubble(
@@ -485,19 +590,52 @@ internal fun GatewaySystemOverlayBubble(
     outline: Color,
     onClick: () -> Unit,
 ) {
-    val transition = rememberInfiniteTransition(label = "gatewayOverlayBreath")
-    val haloAlpha by transition.animateFloat(
-        initialValue = if (running) 0.18f else 0f,
-        targetValue = if (running) 0.55f else 0f,
-        animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-        label = "gatewayOverlayBreathAlpha",
-    )
-    val haloScale by transition.animateFloat(
-        initialValue = if (running) 0.92f else 1f,
-        targetValue = if (running) 1.08f else 1f,
-        animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-        label = "gatewayOverlayBreathScale",
-    )
+    if (running) {
+        val transition = rememberInfiniteTransition(label = "gatewayOverlayBreath")
+        val haloAlpha by transition.animateFloat(
+            initialValue = 0.18f,
+            targetValue = 0.55f,
+            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
+            label = "gatewayOverlayBreathAlpha",
+        )
+        val haloScale by transition.animateFloat(
+            initialValue = 0.92f,
+            targetValue = 1.08f,
+            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
+            label = "gatewayOverlayBreathScale",
+        )
+        SystemOrb(
+            running = true,
+            primary = primary,
+            surface = surface,
+            outline = outline,
+            haloAlpha = haloAlpha,
+            haloScale = haloScale,
+            onClick = onClick,
+        )
+    } else {
+        SystemOrb(
+            running = false,
+            primary = primary,
+            surface = surface,
+            outline = outline,
+            haloAlpha = 0f,
+            haloScale = 1f,
+            onClick = onClick,
+        )
+    }
+}
+
+@Composable
+private fun SystemOrb(
+    running: Boolean,
+    primary: Color,
+    surface: Color,
+    outline: Color,
+    haloAlpha: Float,
+    haloScale: Float,
+    onClick: () -> Unit,
+) {
     Box(
         modifier = Modifier
             .size(BubbleMarkDp.dp)
@@ -511,25 +649,31 @@ internal fun GatewaySystemOverlayBubble(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier
-                .size(BubbleMarkDp.dp)
-                .scale(haloScale)
-                .background(primary.copy(alpha = haloAlpha), CircleShape),
-        )
+        if (running) {
+            Box(
+                Modifier
+                    .size(BubbleMarkDp.dp)
+                    .scale(haloScale)
+                    .background(primary.copy(alpha = gatewayHaloAlpha(running, haloAlpha)), CircleShape),
+            )
+        }
         Box(
             modifier = Modifier
                 .size(48.dp)
                 .clip(CircleShape)
                 .background(surface)
-                .border(McaHairline.Width, outline, CircleShape),
+                .border(
+                    McaHairline.Width,
+                    if (running) primary.copy(alpha = 0.38f) else outline,
+                    CircleShape,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Image(
-                // 悬浮球（48dp plate）内用光学简化版（气泡+星芒）；28→32dp 让球内占比更合理。
-                painter = painterResource(R.drawable.ic_brand_mark),
+                painter = painterResource(R.drawable.ic_brand_avatar),
                 contentDescription = null,
-                modifier = Modifier.size(32.dp),
+                colorFilter = if (running) null else ColorFilter.tint(outline),
+                modifier = Modifier.size(28.dp),
             )
         }
     }

@@ -1,6 +1,7 @@
 package com.muyuchat.aether.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -73,6 +74,25 @@ class OverlayGeometryTest {
         assertEquals(100, OverlayGeometry.dragOffsetPx(100, 50f, Float.NaN, 16, 900))
         // 起点本身越界时也先夹到活动区。
         assertEquals(16, OverlayGeometry.dragOffsetPx(0, 50f, 50f, 16, 900))
+    }
+
+    @Test
+    fun dragOffsetHandlesDiagonalAxesIndependently() {
+        // 斜拖：x/y 各自从自己的起点和指针分量算，不允许一轴被另一轴抵消。
+        assertEquals(160, OverlayGeometry.dragOffsetPx(100, 100f, 160f, 16, 900))
+        assertEquals(240, OverlayGeometry.dragOffsetPx(100, 100f, 240f, 16, 900))
+    }
+
+    @Test
+    fun hitTestOnlyAcceptsInsideTheBubbleRect() {
+        assertTrue(OverlayGeometry.hitTest(110f, 110f, 100f, 100f, 64f))
+        assertTrue(OverlayGeometry.hitTest(100f, 100f, 100f, 100f, 64f))
+        assertTrue(OverlayGeometry.hitTest(164f, 164f, 100f, 100f, 64f))
+        assertFalse(OverlayGeometry.hitTest(99f, 110f, 100f, 100f, 64f))
+        assertFalse(OverlayGeometry.hitTest(165f, 110f, 100f, 100f, 64f))
+        assertFalse(OverlayGeometry.hitTest(110f, 99f, 100f, 100f, 64f))
+        assertFalse(OverlayGeometry.hitTest(Float.NaN, 110f, 100f, 100f, 64f))
+        assertFalse(OverlayGeometry.hitTest(110f, 110f, 100f, 100f, 0f))
     }
 
     @Test

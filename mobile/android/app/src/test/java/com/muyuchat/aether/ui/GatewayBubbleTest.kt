@@ -13,6 +13,14 @@ import org.junit.Test
  */
 class GatewayBubbleTest {
     @Test
+    fun stoppedBubbleNeverShowsAHalo() {
+        assertEquals(0f, gatewayHaloAlpha(running = false, animatedAlpha = 0.9f))
+        assertEquals(0f, gatewayHaloAlpha(running = false, animatedAlpha = Float.NaN))
+        assertEquals(0.55f, gatewayHaloAlpha(running = true, animatedAlpha = 0.55f))
+        assertEquals(1f, gatewayHaloAlpha(running = true, animatedAlpha = 2f))
+    }
+
+    @Test
     fun overlayNeedsGatewayBeforePermission() {
         assertEquals(OverlayAvailability.NeedGateway, overlayAvailability(running = false, permissionGranted = false))
         assertEquals(OverlayAvailability.NeedGateway, overlayAvailability(running = false, permissionGranted = true))
