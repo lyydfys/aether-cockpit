@@ -886,11 +886,23 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     }
 }
 
+/**
+ * 页面顶部条。
+ *
+ * 品牌行（app 名 + 搜索）**只在概览页保留**：其它页面由 [showBrand] = false 关掉，
+ * 直接把页面标题交还给各页自己的标题行（返回箭头已在该行里），首屏因此省下约 60dp。
+ * 网关状态由右下角悬浮球表达，不在这里画。
+ */
 @Composable
-internal fun MobileHeader(status: GatewayStatus, onSearch: (() -> Unit)? = null) {
-    // status 仍保留在签名里（十几个页面共用），但顶部不再画运行栏；
-    // 网关状态由右下角的悬浮球表达。
-    BrandHeader(onSearch = onSearch)
+internal fun MobileHeader(
+    status: GatewayStatus,
+    onSearch: (() -> Unit)? = null,
+    showBrand: Boolean = false,
+) {
+    // status 仍保留在签名里（十几个页面共用），但顶部不再画运行栏。
+    if (showBrand) {
+        BrandHeader(onSearch = onSearch)
+    }
 }
 
 @Composable

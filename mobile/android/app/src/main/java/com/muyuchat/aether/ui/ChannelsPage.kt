@@ -181,18 +181,11 @@ internal fun ChannelsPage(
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            // 与桌面端同名的页面标题：桌面导航写「账号与额度」，
-                            // 副标题也照抄桌面端的原句，避免两端对同一页有两种说法。
-                            text = "账号与额度",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
-                        Text(
-                            text = "账号、模型与余量，一眼看到底",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // 与桌面端同名的页面标题：桌面导航写「账号与额度」，
+                        // 副标题也照抄桌面端的原句，避免两端对同一页有两种说法。
+                        DeepPageTitle(
+                            title = "账号与额度",
+                            subtitle = "账号、模型与余量，一眼看到底",
                         )
                     }
                     McaIconButton(

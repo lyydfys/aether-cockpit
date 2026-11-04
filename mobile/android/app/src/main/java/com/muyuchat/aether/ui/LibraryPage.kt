@@ -123,16 +123,9 @@ internal fun LibraryPage(
                 }
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "资源库",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "查看 / 新增 / 删除 · 不下发给 Agent",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DeepPageTitle(
+                        title = "资源库",
+                        subtitle = "查看 / 新增 / 删除 · 不下发给 Agent",
                     )
                 }
                 McaButton(

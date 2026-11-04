@@ -535,7 +535,8 @@ internal fun orbTintsGlyph(): Boolean = false
 /**
  * 球内的品牌图标。
  *
- * 用球内专用的 [R.drawable.ic_brand_orb]：气泡 + 星芒 + **放大 1.7× 的 channel-route 徽标**。
+ * 用球内专用的 [R.drawable.ic_brand_orb]：气泡 + 星芒 + **放大 1.4× 的 channel-route 徽标**
+ * （直径 30.8 单位 ≈ 32dp 图标里的 9.1dp：看得出是圆形徽记，又不抢气泡主体）。
  * 不做任何 tint、不参与动画——灯光由外层圆环/内发光承担，图标本身保持品牌本色。
  * （`ic_brand_mark` 只有气泡 + 星芒，和 MCA 的图标撞脸；`ic_brand_avatar` 带背景矩形，小尺寸不能用。）
  */

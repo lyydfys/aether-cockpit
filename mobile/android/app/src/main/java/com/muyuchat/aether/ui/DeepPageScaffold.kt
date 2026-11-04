@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.muyuchat.core.designsystem.McaButton
@@ -58,6 +59,51 @@ internal val DeepBlockGap: Dp = 24.dp
 
 /** 列表行的垂直内边距：统一 16dp（行高约 52dp，顺带满足 48dp 触控下限）。 */
 internal val DeepRowVertical: Dp = 16.dp
+
+/**
+ * 页面主标题到首个内容块的间距：16dp（标题层瘦身后从 24 降为 16）。
+ *
+ * 页面级 LazyColumn 用 `spacedBy(DeepCardGap)` 时天然就是 16；只有少数手写标题块
+ * 需要显式引用这个常量，保持全站一致。
+ */
+internal val DeepPageTitleGap: Dp = 16.dp
+
+/**
+ * 页面级标题：**全站唯一实现**，不要在页面里自己写 `Text(style = headlineXxx)`。
+ *
+ * 字阶：`titleLarge`（22sp）+ Bold —— 比原来的 headlineSmall/headlineMedium 再降一档，
+ * 因为 28sp 标题会把首屏吃掉约 1/3 屏。
+ * 副标题：`labelSmall` + onSurfaceVariant，**放在标题同一行右侧**而不是单独一行，
+ * 这样每页少一行（约 20dp）；太长会自动省略号，不会把标题挤走。
+ *
+ * 卡片内标题请用 [DeepCardTitle]，本组件只用于页面级。
+ */
+@Composable
+internal fun DeepPageTitle(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        if (!subtitle.isNullOrBlank()) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
+    }
+}
 
 /**
  * 页面可滚动内容底部给悬浮球预留的空间：球 64 + 边距 8 + 余量 16 = 88。

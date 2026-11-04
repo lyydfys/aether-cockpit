@@ -108,16 +108,9 @@ internal fun SessionsPage(
                 }
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "会话",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "本机只读 · 不修改 Agent 记录",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DeepPageTitle(
+                        title = "会话",
+                        subtitle = "本机只读 · 不修改 Agent 记录",
                     )
                 }
                 McaIconButton(

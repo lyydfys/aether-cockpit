@@ -316,16 +316,9 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
         }
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                text = "路由",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                text = "模型路由组 · 可改组名与成员",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            DeepPageTitle(
+                title = "路由",
+                subtitle = "模型路由组 · 可改组名与成员",
             )
         }
         McaIconButton(

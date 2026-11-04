@@ -20,6 +20,34 @@ data class ProviderSummary(
     val off: Boolean,
     val brandColor: String,
     val accounts: List<AccountSummary> = emptyList(),
+    /** 渠道族（`family`）；服务端可能为空。 */
+    val family: String = "",
+    /**
+     * 该渠道声明的登录方式（`supported_auths`，`provider/manifest.go:132`）。
+     *
+     * 取值：`local_import` / `oauth_pkce` / `device_code` / `manual_input` / `webview_login`。
+     * `xxx_device` 不在这里 —— 桌面是按 id 前缀补的（`onboard.js:207-216`）。
+     */
+    val supportedAuths: List<String> = emptyList(),
+    /** 能力位图（`capabilities`）：chat / check_in / quota / local_import / local_inject / … */
+    val capabilities: Map<String, Boolean> = emptyMap(),
+    /** 手动凭据表单（`auth_form_schema`）：手动与 Token 两种接入据此决定字段名。 */
+    val authFormSchema: List<ProviderFormField> = emptyList(),
+    /** 网页登录地址（`webview_login_url`）；手机端不做 WebView，只用于如实说明。 */
+    val webviewLoginUrl: String = "",
+    /** 是否声明了 OAuth 参数（服务端能代跑 PKCE / 设备码）。 */
+    val hasOAuth: Boolean = false,
+)
+
+/** 渠道自定义登录表单的一项（对应 `provider.FormFieldSchema`）。 */
+data class ProviderFormField(
+    val key: String,
+    val label: String,
+    val type: String,
+    val placeholder: String = "",
+    val required: Boolean = false,
+    val help: String = "",
+    val options: List<String> = emptyList(),
 )
 
 /** One quota window of an account row; `used` may be a fraction or a percentage. */
@@ -118,6 +146,18 @@ class ManagementApiClient(
         } finally {
             connection.disconnect()
         }
+    }
+
+    /**
+     * 自定义渠道保存：`POST /api/provider/save`。
+     *
+     * 服务端对**未注册**的 id 走 `customCoreProvider`（`provider_api.go:234-265`）：
+     * 按「哪个 Base URL 字段非空」把账号落到内置协议渠道（openai-compat / codex /
+     * claude-sub / gemini-compat / typesafe），不动态注册新渠道。成功后列表里表现为
+     * 那个内置渠道多一个账号；调用方刷新列表即可看到账号数 +1。
+     */
+    fun saveCustomProvider(status: GatewayStatus, draft: CustomProviderDraft) {
+        ProviderSaveApiClient().save(status, draft)
     }
 
     fun importAccountBundle(
@@ -293,9 +333,56 @@ internal fun parseProviders(body: String): List<ProviderSummary> {
             off = item.optBoolean("off", false),
             brandColor = item.optString("brand_color").trim(),
             accounts = parseAccounts(item.optJSONArray("keyList")),
+            family = item.optString("family").trim(),
+            supportedAuths = parseStringArray(item.optJSONArray("supported_auths")),
+            capabilities = parseBoolMap(item.optJSONObject("capabilities")),
+            authFormSchema = parseAuthFormSchema(item.optJSONArray("auth_form_schema")),
+            webviewLoginUrl = item.optString("webview_login_url").trim(),
+            hasOAuth = item.optBoolean("oauth", false),
         )
     }
     return out
+}
+
+private fun parseStringArray(array: JSONArray?): List<String> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        array.optString(index).trim().ifBlank { null }
+    }
+}
+
+private fun parseBoolMap(obj: JSONObject?): Map<String, Boolean> {
+    if (obj == null) {
+        return emptyMap()
+    }
+    val out = LinkedHashMap<String, Boolean>(obj.length())
+    obj.keys().forEach { key -> out[key] = obj.optBoolean(key, false) }
+    return out
+}
+
+/** `auth_form_schema`：key / label / type / placeholder / required / help / options。 */
+private fun parseAuthFormSchema(array: JSONArray?): List<ProviderFormField> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val key = item.optString("key").trim()
+        if (key.isEmpty()) {
+            return@mapNotNull null
+        }
+        ProviderFormField(
+            key = key,
+            label = item.optString("label").trim().ifBlank { key },
+            type = item.optString("type").trim().ifBlank { "text" },
+            placeholder = item.optString("placeholder").trim(),
+            required = item.optBoolean("required", false),
+            help = item.optString("help").trim(),
+            options = parseStringArray(item.optJSONArray("options")),
+        )
+    }
 }
 
 private fun parseAccounts(array: JSONArray?): List<AccountSummary> {

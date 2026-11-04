@@ -535,16 +535,9 @@ private fun AgentsHeadline(
         }
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                text = "Agent 接入",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                text = "本机 agent 的接入与模型 · 只读",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            DeepPageTitle(
+                title = "Agent 接入",
+                subtitle = "本机 agent 的接入与模型 · 只读",
             )
         }
         McaIconButton(

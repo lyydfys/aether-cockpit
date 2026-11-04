@@ -35,6 +35,37 @@ class DeepPagesLayoutTest {
     }
 
     @Test
+    fun pageTitleLayerIsSlimmed() {
+        // 标题层瘦身：页面标题到首个内容块 16dp（原 24），且比卡片间距不再额外变大。
+        assertEquals(16f, DeepPageTitleGap.value)
+        assertEquals(DeepCardGap, DeepPageTitleGap)
+    }
+
+    @Test
+    fun everyPageTitleGoesThroughTheSharedComponent() {
+        // 回归锚点：18 个页面都必须用 DeepPageTitle，不许再各自写 Text(style = headlineXxx)。
+        val pages = listOf(
+            "OverviewPage.kt", "ChannelsPage.kt", "UsagePage.kt", "RequestsPage.kt",
+            "SessionsPage.kt", "LibraryPage.kt", "WakePage.kt", "SettingsPage.kt",
+            "MorePage.kt", "GatewayProbePage.kt", "OnboardPage.kt", "RoutingPage.kt",
+            "ClientsPage.kt", "DesktopOnlyPage.kt", "BackupPage.kt", "AgentsPage.kt",
+            "PluginsPage.kt", "TotpPage.kt",
+        )
+        val root = java.io.File("src/main/java/com/muyuchat/aether/ui")
+        assertTrue("找不到 ui 源码目录：${root.absolutePath}", root.isDirectory)
+        pages.forEach { name ->
+            val file = java.io.File(root, name)
+            assertTrue("$name 不存在", file.isFile)
+            val src = file.readText()
+            assertTrue("$name 应该调用 DeepPageTitle", src.contains("DeepPageTitle("))
+            assertTrue(
+                "$name 仍在页面级标题里用 headlineMedium（应改用 DeepPageTitle）",
+                !src.contains("typography.headlineMedium"),
+            )
+        }
+    }
+
+    @Test
     fun countLabelsStayConsistentAcrossPages() {
         assertEquals("0 条", sessionCountLabel(0))
         assertEquals("7 条", sessionCountLabel(7))

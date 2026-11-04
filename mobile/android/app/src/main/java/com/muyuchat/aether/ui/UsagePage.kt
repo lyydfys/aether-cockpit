@@ -186,16 +186,9 @@ private fun UsageTitle(state: UsageUiState, onRefresh: () -> Unit) {
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(TightGap),
         ) {
-            Text(
-                text = "用量",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                text = "本机账本 · 只读",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            DeepPageTitle(
+                title = "用量",
+                subtitle = "本机账本 · 只读",
             )
         }
         McaIconButton(

@@ -152,16 +152,9 @@ internal fun SettingsPage(
                 }
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "设置",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "本机配置 · 只读",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DeepPageTitle(
+                        title = "设置",
+                        subtitle = "本机配置 · 只读",
                     )
                 }
                 McaIconButton(

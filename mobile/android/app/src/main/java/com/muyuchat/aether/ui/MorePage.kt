@@ -72,16 +72,9 @@ internal fun MorePage(
             Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
                 MobileHeader(status)
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "更多",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "全部工作区与设置入口",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DeepPageTitle(
+                        title = "更多",
+                        subtitle = "全部工作区与设置入口",
                     )
                 }
                 SearchField(query, onQueryChange)

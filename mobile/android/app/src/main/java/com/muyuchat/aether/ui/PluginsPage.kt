@@ -226,16 +226,9 @@ internal fun PluginsPage(
                 }
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "插件",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "请求改写规则与内置能力",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DeepPageTitle(
+                        title = "插件",
+                        subtitle = "请求改写规则与内置能力",
                     )
                 }
                 McaIconButton(

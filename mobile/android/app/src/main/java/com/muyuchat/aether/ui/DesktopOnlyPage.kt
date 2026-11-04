@@ -105,16 +105,9 @@ private fun PageHeadline(onBack: () -> Unit) {
         }
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                text = "仅 Windows",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                text = "手机端做不到的能力与原因",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            DeepPageTitle(
+                title = "仅 Windows",
+                subtitle = "手机端做不到的能力与原因",
             )
         }
     }

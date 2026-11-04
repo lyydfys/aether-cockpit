@@ -1,5 +1,6 @@
 package com.muyuchat.aether.ui
 
+import com.muyuchat.aether.runtime.ProviderSummary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -56,20 +57,22 @@ class ChannelsLayoutOnboardTest {
     }
 
     @Test
-    fun providerMetaShowsAccountCountAndAvailableMethod() {
-        assertEquals("已有 2 个账号 · 可用：Qoder 登录", onboardProviderMeta("qoder-cn", 2))
-        assertEquals("已有 0 个账号 · 可用：账号包导入", onboardProviderMeta("claude-sub", 0))
-    }
-
-    @Test
-    fun methodsLineUsesDesktopLabels() {
-        val line = onboardMethodsLine("claude-sub")
-        for (label in listOf("本机导入", "浏览器授权", "设备码", "手动凭据")) {
-            assertTrue("$label in $line", line.contains(label))
-        }
-        assertTrue(line.startsWith("桌面端支持的接入方式："))
-        // Qoder 走设备码那条
-        assertTrue(onboardMethodsLine("qoder-cn").contains("Qoder 登录"))
+    fun providerMetaShowsAccountCountAndAvailableMethods() {
+        // 卡片副标题现在按「手机端真正能做的方式」拼（旧文案「可用：账号包导入」已废）：
+        // supported_auths 为空 → 兜底 manual_input（onboard.js:216），再加常驻的 Token / JSON。
+        assertEquals("已有 0 个账号 · 可用：手动凭据 / Token / JSON", onboardProviderMeta(provider("claude-sub"), 0))
+        // qoder- 前缀：设备码那条由 id 补进来（onboard.js:209）
+        val qoder = provider("qoder-cn", auths = listOf("oauth_pkce", "manual_input"))
+        assertEquals(
+            "已有 2 个账号 · 可用：手动凭据 / Qoder 登录 / Token / JSON",
+            onboardProviderMeta(qoder, 2),
+        )
+        // 声明了 OAuth 参数时浏览器授权才可用（onboardMethodBlockedBy）
+        val withOAuth = provider("claude-sub", auths = listOf("oauth_pkce", "manual_input")).copy(hasOAuth = true)
+        assertEquals(
+            "已有 0 个账号 · 可用：浏览器授权 / 手动凭据 / Token / JSON",
+            onboardProviderMeta(withOAuth, 0),
+        )
     }
 
     @Test
@@ -91,14 +94,18 @@ class ChannelsLayoutOnboardTest {
             "windsurf_login" to "Windsurf 登录",
             "token_json" to "Token / JSON",
         )
-        assertEquals(expected, ONBOARD_METHOD_LABELS)
+        assertEquals(expected, com.muyuchat.aether.runtime.ONBOARD_METHOD_LABELS)
     }
 
-    @Test
-    fun unsupportedHintNamesWhatPhonesCannotDo() {
-        val hint = onboardUnsupportedHint()
-        assertTrue(hint.contains("Qoder 设备码登录"))
-        assertTrue(hint.contains("账号包导入"))
-        assertTrue(hint.contains("桌面端"))
-    }
+    private fun provider(id: String, auths: List<String> = emptyList()): ProviderSummary = ProviderSummary(
+        id = id,
+        name = id,
+        description = "",
+        accountCount = 0,
+        readyCount = 0,
+        ready = false,
+        off = false,
+        brandColor = "",
+        supportedAuths = auths,
+    )
 }

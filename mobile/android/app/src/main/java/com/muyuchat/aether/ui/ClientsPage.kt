@@ -243,16 +243,9 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
         }
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                text = "客户端",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                text = "接入片段 · 只读",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            DeepPageTitle(
+                title = "客户端",
+                subtitle = "接入片段 · 只读",
             )
         }
         McaIconButton(

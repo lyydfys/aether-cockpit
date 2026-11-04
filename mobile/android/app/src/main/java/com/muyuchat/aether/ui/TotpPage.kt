@@ -155,16 +155,9 @@ internal fun TotpPage(
                 }
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "2FA 管理",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "本机 TOTP 验证码，密钥加密存储",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DeepPageTitle(
+                        title = "2FA 管理",
+                        subtitle = "本机 TOTP 验证码，密钥加密存储",
                     )
                 }
             }

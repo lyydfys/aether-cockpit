@@ -107,16 +107,9 @@ internal fun WakePage(
                 }
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "唤醒队列",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = "查看 / 新建 / 删除 · 手动触发",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DeepPageTitle(
+                        title = "唤醒队列",
+                        subtitle = "查看 / 新建 / 删除 · 手动触发",
                     )
                 }
                 McaIconButton(

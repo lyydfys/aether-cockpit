@@ -113,16 +113,9 @@ internal fun RequestsPage(
         item { MobileHeader(status) }
         item {
             Column {
-                Text(
-                    text = "请求日志",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Text(
-                    text = "持久化账本 · 错误解释与耗时、Token 明细",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                DeepPageTitle(
+                    title = "请求日志",
+                    subtitle = "持久化账本 · 错误解释与耗时、Token 明细",
                 )
             }
         }

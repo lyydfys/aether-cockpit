@@ -214,16 +214,9 @@ private fun ProbeHeadline(
         }
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                text = "网关与探针",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                text = "监听、探针、指标与版本",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            DeepPageTitle(
+                title = "网关与探针",
+                subtitle = "监听、探针、指标与版本",
             )
             if (state is ProbeUiState.Ready) {
                 Text(

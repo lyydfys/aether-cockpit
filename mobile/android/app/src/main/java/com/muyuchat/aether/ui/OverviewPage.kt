@@ -95,7 +95,8 @@ internal fun OverviewPage(
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(TightGap)) {
-                MobileHeader(state.status, onSearch = onSearch)
+                // 品牌行只在概览页出现（用户要求：其它页不要 app 名那一行）。
+                MobileHeader(state.status, onSearch = onSearch, showBrand = true)
                 OverviewTitle(state.status)
             }
         }
@@ -139,22 +140,11 @@ internal fun OverviewPage(
 
 @Composable
 private fun OverviewTitle(status: GatewayStatus) {
-    Column(verticalArrangement = Arrangement.spacedBy(TightGap)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "概览",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Spacer(Modifier.weight(1f))
-            StatusPill(status)
-        }
-        Text(
-            text = "此手机独立运行 · 无需电脑或云端",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    // 概览页保留品牌行，标题不再叠副标题（"此手机独立运行…"与下方卡片重复），
+    // 标题右侧继续挂网关状态点。
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        DeepPageTitle(title = "概览", modifier = Modifier.weight(1f))
+        StatusPill(status)
     }
 }
 
