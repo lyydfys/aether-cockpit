@@ -123,6 +123,12 @@ type ProviderManifest struct {
 	// NetworkPolicy 供 transport 层选择 Dialer。
 	NetworkPolicy NetworkPolicy `json:"network_policy"`
 
+	// BaseURL 是渠道的默认上游地址（账号没填 base_url 时生效）。
+	//
+	// 单独暴露出来是为了让"连接预热 / 网络诊断"这类通用能力知道往哪里打
+	// 探针——否则每个渠道都要再实现一遍同样的地址解析逻辑。
+	BaseURL string `json:"base_url,omitempty"`
+
 	SupportedAuths  []AuthMethod      `json:"supported_auths"`
 	AuthFormSchema  []FormFieldSchema `json:"auth_form_schema,omitempty"`
 	WebViewLoginURL string            `json:"webview_login_url,omitempty"`
@@ -157,7 +163,7 @@ type CapabilitySet struct {
 	OfficialFirst bool `json:"official_first"`
 	// OfficialBinding 是否支持解析官方绑定信息（配合 OfficialBindingCapability）。
 	OfficialBinding bool `json:"official_binding"`
-	Refresh       bool `json:"refresh"`
+	Refresh         bool `json:"refresh"`
 	// ResponsivePassthrough 是否支持 Responses 协议直通。
 	ResponsivePassthrough bool `json:"responses_passthrough"`
 	// ResponsesPassthroughNonStream 是否允许非流式 Responses 也走直通。

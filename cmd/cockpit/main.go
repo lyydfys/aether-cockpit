@@ -158,6 +158,10 @@ func main() {
 	// 以及"快用完了"的告警。5 分钟一轮，落盘去重。
 	stopQuotaAlerts := gw.StartQuotaAlertWatch(rootCtx, 5*time.Minute)
 	defer stopQuotaAlerts()
+	// 渠道连接预热：给跨境/中转渠道定期打一个不花额度的探针，把 TCP+TLS
+	// 连接保持在热态——否则用户隔一会儿提问，先白等一次 0.2~1.5s 握手。
+	stopChannelWarm := gw.StartChannelWarm(rootCtx, 15*time.Second)
+	defer stopChannelWarm()
 
 	// WebDAV 备份自动推送：未配置或 auto_push_minutes<=0 时是空操作，可无条件启动。
 	stopWebDAVPush := gw.StartWebDAVAutoPush(rootCtx, gw.WebDAVAutoPushInterval())

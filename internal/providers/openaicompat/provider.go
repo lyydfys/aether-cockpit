@@ -144,6 +144,7 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 		BrandColor:    cfg.BrandColor,
 		Description:   cfg.Description,
 		NetworkPolicy: provider.NetPolicySystem,
+		BaseURL:       cfg.BaseURL,
 		SupportedAuths: []provider.AuthMethod{
 			provider.AuthManualInput,
 		},

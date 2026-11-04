@@ -315,6 +315,12 @@ type Gateway struct {
 	hooks     *hooks.Registry
 	hooksOnce sync.Once
 
+	// 渠道网络档位与在途闸门（见 channel_net.go）。
+	netProfiles *channelNetStore
+	netOnce     sync.Once
+	gate        *inflightGate
+	gateOnce    sync.Once
+
 	// quota 额度卡片的后台补读去重（懒初始化）。
 	quotaOnce sync.Once
 	quota     *quotaRefreshState
@@ -1152,6 +1158,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/sessions/terminal", g.handleSessionTerminal)
 	// 请求管线插件钩子清单（确认配的钩子真的装上了）。
 	m.HandleFunc("GET /api/pipeline-hooks", g.handlePipelineHooks)
+	// 渠道网络档位与在途数（慢链路优化的可观测入口）。
+	m.HandleFunc("GET /api/channels/net", g.handleChannelNet)
 	m.HandleFunc("GET /api/context", g.handleContextEmpty)
 	m.HandleFunc("GET /api/tune", g.handleTuneEmpty)
 	m.HandleFunc("POST /api/tune/{path...}", g.handleTuneAction)
@@ -1968,10 +1976,30 @@ func (g *Gateway) openStream(ctx context.Context, h pipeline.StreamHandler, env 
 	// ctx.Done 分支负责，资源不会无限占用。
 	upCtx, cancelUp := context.WithCancel(context.WithoutCancel(ctx))
 
+	// 渠道网络档位：在途闸门。慢链路上放任并发只会互相拖死，这里按渠道
+	// 限制同时在跑的流数。拿不到槽位最多等 300ms，然后照样放行——
+	// 宁可慢一点，也绝不把请求卡死。槽位随流结束释放。
+	var releaseSlot func()
+	if env != nil {
+		if prof := g.channelNet().Get(env.ProviderID); prof.MaxInflight > 0 {
+			releaseSlot = g.channelGate().acquire(env.ProviderID, prof.MaxInflight, 300*time.Millisecond)
+		}
+	}
+	releaseNow := func() {
+		if releaseSlot != nil {
+			releaseSlot()
+			releaseSlot = nil
+		}
+	}
+
 	ch, err := h(upCtx, env, req)
 	if err != nil {
+		releaseNow()
 		cancelUp()
 		return nil, err
+	}
+	if releaseSlot != nil {
+		ch = releaseWhenClosed(ch, releaseNow)
 	}
 
 	timer := time.NewTimer(g.cfg.FirstByteTimeout)
