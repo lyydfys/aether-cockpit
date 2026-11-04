@@ -79,13 +79,14 @@ internal fun SettingsSecuritySection(
     LaunchedEffect(Unit) { viewModel.refresh() }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
             text = "局域网与访问控制",
-            style = MaterialTheme.typography.titleSmall,
+            // 区块标题：保持 titleMedium + 不加粗（Bold 只给卡片标题，正文级文字一律不加）
+            style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         when (val current = state) {
             SettingsSecurityUiState.Idle -> Text(
                 text = if (status.running) "正在读取…" else "网关未启动，读不到这些设置。",

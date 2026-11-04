@@ -274,13 +274,13 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
         Column(Modifier.weight(1f)) {
             Text(
                 text = "路由",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
                 text = "模型路由组 · 可改组名与成员",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -337,7 +337,7 @@ private fun RoutingGroupCard(group: RoutingGroup, onClick: () -> Unit) {
                 RoutingBadge(text = "已停用", error = true)
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             text = "${group.id} · ${routingStrategyLabel(group.routingEffective)}",
             style = MaterialTheme.typography.bodySmall,
@@ -356,7 +356,7 @@ private fun RoutingGroupCard(group: RoutingGroup, onClick: () -> Unit) {
             },
         )
         if (names.isNotEmpty()) {
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = names,
                 style = MaterialTheme.typography.bodySmall,
@@ -366,7 +366,7 @@ private fun RoutingGroupCard(group: RoutingGroup, onClick: () -> Unit) {
             )
         }
         group.warnings.forEach { warning ->
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = "! $warning",
                 style = MaterialTheme.typography.bodySmall,
@@ -396,7 +396,7 @@ private fun CountRow(
         Spacer(Modifier.width(8.dp))
         Text(
             text = value,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Medium,
             color = valueColor,
         )
@@ -412,7 +412,7 @@ private fun TemplatesCard(templates: List<RoutingTemplate>) {
             Spacer(Modifier.height(12.dp))
             Text(
                 text = routingTemplateLine(template),
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
@@ -441,7 +441,7 @@ private fun RoutingLoadingCard() {
             Spacer(Modifier.width(12.dp))
             Text(
                 text = "正在读取路由组…",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -496,10 +496,10 @@ private fun RoutePreviewDialog(
                 Spacer(Modifier.height(10.dp))
                 Text(
                     text = "解析结果（只读诊断）",
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 when (preview) {
                     RoutePreviewState.Idle, RoutePreviewState.Loading -> Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -545,7 +545,7 @@ private fun RoutePreviewDialog(
                                     Column(Modifier.weight(1f)) {
                                         Text(
                                             text = binding.name,
-                                            style = MaterialTheme.typography.bodyMedium,
+                                            style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurface,
                                         )
                                         Text(
@@ -571,7 +571,7 @@ private fun RoutePreviewDialog(
                 Spacer(Modifier.height(12.dp))
                 Text(
                     text = "生效策略 · 原策略：${routingStrategyLabel(group.routingEffective)}",
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(6.dp))
@@ -611,7 +611,7 @@ private fun RoutePreviewDialog(
                 Spacer(Modifier.height(16.dp))
                 Text(
                     text = "组名与成员",
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 RoutingMembersEditor(
@@ -666,7 +666,7 @@ private fun RoutingMembersEditor(
         value = draftName,
         onValueChange = onDraftNameChange,
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(12.dp))
     CountRow(
         label = "成员",
         value = "草稿 ${draftMembers.size} / 已保存 ${savedMembers.size}",
@@ -786,7 +786,7 @@ private fun RoutingEditorField(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Surface(
             shape = McaShape.CardAction,
             color = MaterialTheme.colorScheme.surface,
@@ -796,7 +796,7 @@ private fun RoutingEditorField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
                 modifier = Modifier
                     .fillMaxWidth()
                     // BasicTextField 不吃 Compose 的触摸目标扩展，自己撑到 48dp。
@@ -827,7 +827,7 @@ private fun RoutingMemberRow(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -881,7 +881,7 @@ private fun RoutingCatalogRow(
         Column(Modifier.weight(1f)) {
             Text(
                 text = model.name,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -903,7 +903,7 @@ private fun RoutingCatalogRow(
         }
         Text(
             text = if (added) "已加入" else "加入",
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = if (added) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
         )
     }

@@ -89,7 +89,7 @@ internal fun DiagnoseSection(
 
     DeepCard(modifier = modifier) {
         DeepCardTitle("自检（为什么连不上）")
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         DeepCardBody(
             "跑一次端到端检查：监听地址、渠道注册、可用账号、模型路由、虚拟组、网络环境、会话状态。" +
                 "结果是这一刻的快照，不会持续宣称「系统正常」。",
@@ -118,12 +118,12 @@ internal fun DiagnoseSection(
                 Spacer(Modifier.height(12.dp))
                 Text(
                     text = diagnoseSummaryLine(current.report),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 if (current.report.summary.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     DeepCardBody(current.report.summary)
                 }
                 diagnoseDisplayOrder(current.report).forEach { item ->
@@ -155,15 +155,15 @@ private fun DiagnoseItemRow(item: DiagnoseItem) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Text(
             text = "[${diagnoseLevelLabel(item.level)}]",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
             color = color,
         )
         Spacer(Modifier.width(8.dp))
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
                 text = item.title,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             if (item.detail.isNotBlank()) {

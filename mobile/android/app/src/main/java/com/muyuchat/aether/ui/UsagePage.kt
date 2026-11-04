@@ -38,11 +38,10 @@ import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
 import java.util.Locale
 
-// 间距节奏与概览页同一套：区块之间 24 / 卡片内与行之间 12 / 紧邻元素 8。
-private val BlockGap = 24.dp
+// 间距节奏（UI_REFRESH_SPEC §1.2）：卡片水平 16 / 垂直 20，卡片之间 16，行间 6，段间 12。
 private val CardPadding = 16.dp
 private val RowGap = 12.dp
-private val TightGap = 8.dp
+private val TightGap = 6.dp
 
 /**
  * 用量页：总量 → 按模型 → 近期趋势 → 细分（热力图 / 订阅 / 配额历史 / 价格表）。
@@ -65,7 +64,7 @@ internal fun UsagePage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(BlockGap),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(RowGap)) {
@@ -149,7 +148,7 @@ private fun UsageTitle(state: UsageUiState, onRefresh: () -> Unit) {
         ) {
             Text(
                 text = "用量",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
@@ -200,7 +199,7 @@ private fun UsageCard(content: @Composable () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(CardPadding),
+                .padding(horizontal = CardPadding, vertical = DeepCardVerticalPadding),
             verticalArrangement = Arrangement.spacedBy(RowGap),
         ) {
             content()
@@ -269,7 +268,7 @@ private fun UsageStatCell(label: String, value: String, note: String, modifier: 
             }
             Text(
                 text = parts.number,
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
@@ -312,11 +311,11 @@ private fun UsageModelsCard(models: List<UsageModelRow>) {
             ) {
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
                         text = model.name,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -333,7 +332,7 @@ private fun UsageModelsCard(models: List<UsageModelRow>) {
                 Text(
                     text = formatUsageCost(model.cost),
                     modifier = Modifier.weight(UsageRightColumnWeight),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.End,
                     maxLines = 1,
@@ -411,7 +410,7 @@ private fun UsageStateCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(CardPadding),
+                .padding(horizontal = CardPadding, vertical = DeepCardVerticalPadding),
             verticalArrangement = Arrangement.spacedBy(RowGap),
         ) {
             Text(
@@ -442,7 +441,7 @@ private fun UsageLoadingCard(text: String) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(CardPadding),
+                .padding(horizontal = CardPadding, vertical = DeepCardVerticalPadding),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(RowGap),
         ) {
@@ -466,7 +465,7 @@ private fun UsageErrorCard(code: String, message: String, onRetry: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(CardPadding),
+                .padding(horizontal = CardPadding, vertical = DeepCardVerticalPadding),
             verticalArrangement = Arrangement.spacedBy(RowGap),
         ) {
             Text(

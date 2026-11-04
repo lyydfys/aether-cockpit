@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -27,7 +29,7 @@ import com.muyuchat.core.designsystem.McaShape
 
 // 与概览页/用量页同一套节奏：卡内 16dp、行间 8~12dp，不再出现 2/6/14dp 这类随手值。
 private val CardPadding = 16.dp
-private val TightGap = 8.dp
+private val TightGap = 6.dp
 private val CellPadding = 4.dp
 
 /**
@@ -44,7 +46,7 @@ internal fun UsageHeatmapSection(days: List<StripDay>, error: String?) {
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        Column(Modifier.fillMaxWidth().padding(CardPadding)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = CardPadding, vertical = DeepCardVerticalPadding)) {
             Text(
                 text = "近 ${days.size} 天用量",
                 style = MaterialTheme.typography.titleMedium,
@@ -69,7 +71,8 @@ internal fun UsageHeatmapSection(days: List<StripDay>, error: String?) {
                 return@Column
             }
             val peak = days.maxOf { it.calls }
-            days.chunked(10).forEach { row ->
+            // 7 格一行：360dp 屏、1.3× 字号下也放得下（10 格会横向溢出），30 天正好 5 行。
+            days.chunked(7).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
                     row.forEach { day ->
                         HeatmapCell(day = day, peak = peak)
@@ -94,9 +97,13 @@ private fun HeatmapCell(day: StripDay, peak: Int) {
         else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f + 0.55f * intensity)
     }
     Surface(
-        modifier = Modifier.width(28.dp).height(34.dp).clip(McaShape.Badge),
+        // 格子在卡片里：只靠底色深浅区分，不再描边（卡片已有一条外框，避免双边框）。
+        // 宽高用 min 而不是定值：1.3× 字号下数字变大也不截断、不竖排。
+        modifier = Modifier
+            .widthIn(min = 28.dp)
+            .heightIn(min = 34.dp)
+            .clip(McaShape.Badge),
         color = background,
-        border = McaHairline.stroke(),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = CellPadding),
@@ -112,7 +119,7 @@ private fun HeatmapCell(day: StripDay, peak: Int) {
                 Text(
                     text = day.calls.toString(),
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
             }
@@ -129,7 +136,7 @@ internal fun UsagePricingSection(pricing: PricingCatalog, error: String?) {
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        Column(Modifier.fillMaxWidth().padding(CardPadding)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = CardPadding, vertical = DeepCardVerticalPadding)) {
             Text(
                 text = "价格表（只读）",
                 style = MaterialTheme.typography.titleMedium,

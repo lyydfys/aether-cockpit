@@ -66,7 +66,7 @@ internal fun BackupPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
         item {
@@ -83,13 +83,13 @@ internal fun BackupPage(
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = "备份导出",
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
                         text = "口令密封 · 只在手机端生成",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -108,7 +108,7 @@ internal fun BackupPage(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         text = "导出内容：运行时设置、虚拟组、渠道配置、账号标签、资源库与图标。" +
                             "不含账号凭证与代理密码——那些是本机绑定加密的，离开设备本来也解不开。" +
@@ -125,7 +125,7 @@ internal fun BackupPage(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Surface(
                 shape = McaShape.CardAction,
                 color = MaterialTheme.colorScheme.surface,
@@ -138,7 +138,7 @@ internal fun BackupPage(
                         validation = null
                     },
                     singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    textStyle = MaterialTheme.typography.bodySmall.copy(
                         color = MaterialTheme.colorScheme.onSurface,
                     ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -152,10 +152,10 @@ internal fun BackupPage(
                 )
             }
             validation?.let {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 McaButton(
                     onClick = {
@@ -190,7 +190,7 @@ internal fun BackupPage(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(6.dp))
                         Text(
                             text = "${current.bytes} 字节，已加密。下一步请选择保存位置（例如「文件」应用）。" +
                                 "手机端不提供导入：恢复请用桌面端导入这个文件。",
@@ -217,7 +217,7 @@ internal fun BackupPage(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.error,
                         )
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(6.dp))
                         Text(
                             text = failure.detail,
                             style = MaterialTheme.typography.bodySmall,

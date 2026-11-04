@@ -44,6 +44,15 @@ sealed interface WorkspaceAction {
     /** 打开客户端页（真实页面，只读：客户端清单与检测状态）。 */
     data object Clients : WorkspaceAction
 
+    /**
+     * 打开 Agent 接入页（真实页面，只读：本机 agent 的模型清单与 CLI 巡检）。
+     *
+     * 与 [Clients] 是两件事：桌面端「Agent 接入」（`misc.js:10`）看的是各 agent 的
+     * **模型**，「客户端接入片段」（`gateway.js:113`）看的是注入状态。手机端曾经把
+     * 「Agent」错指到客户端页，这个成员就是为修掉那次错接而加的（DESKTOP_PARITY_GAPS §2-12）。
+     */
+    data object Agents : WorkspaceAction
+
     /** 打开会话页（真实页面，只读；手机端通常为空，见页面说明）。 */
     data object Sessions : WorkspaceAction
 
@@ -101,7 +110,7 @@ fun workspaceEntries(): List<WorkspaceEntry> = listOf(
     WorkspaceEntry("网关探针", "健康、版本与指标", WorkspaceAction.Probe),
     WorkspaceEntry("2FA", "TOTP 验证码", WorkspaceAction.Totp),
     WorkspaceEntry("设置", "常规、网络、隐私与备份", WorkspaceAction.Settings),
-    WorkspaceEntry("Agent", "客户端接入片段（只读）", WorkspaceAction.Clients),
+    WorkspaceEntry("Agent 接入", "本机 agent 的模型与 CLI 巡检（只读）", WorkspaceAction.Agents),
     WorkspaceEntry("路由", "模型映射与回退", WorkspaceAction.Routing),
     WorkspaceEntry("脱敏", "隐私与请求改写", WorkspaceAction.Settings),
     WorkspaceEntry("插件", "请求改写规则与内置插件（只读）", WorkspaceAction.Plugins),

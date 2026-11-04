@@ -128,13 +128,13 @@ internal fun PluginsPage(
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = "插件",
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
                         text = "请求改写规则 · 只读",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -251,14 +251,14 @@ private fun PluginRuleCard(rule: PluginRule) {
                 )
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             text = pluginRuleSummary(rule),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (rule.note.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = rule.note,
                 style = MaterialTheme.typography.labelSmall,
@@ -274,7 +274,7 @@ private fun BuiltinPluginCard(builtin: BuiltinPlugin) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = builtin.name,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
@@ -289,7 +289,7 @@ private fun BuiltinPluginCard(builtin: BuiltinPlugin) {
             )
         }
         if (builtin.desc.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = builtin.desc,
                 style = MaterialTheme.typography.labelSmall,

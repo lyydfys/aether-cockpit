@@ -73,7 +73,7 @@ internal fun LibraryCreateDialog(
         text = {
             Column(
                 Modifier.heightIn(max = DialogContentMaxHeight).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
                     text = "只会保存到本机资源库，不会自动下发到桌面 Agent。",
@@ -154,7 +154,7 @@ private fun LibraryField(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Surface(
             shape = McaShape.CardAction,
             color = MaterialTheme.colorScheme.surface,
@@ -163,7 +163,7 @@ private fun LibraryField(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                textStyle = MaterialTheme.typography.bodySmall.copy(
                     color = MaterialTheme.colorScheme.onSurface,
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),

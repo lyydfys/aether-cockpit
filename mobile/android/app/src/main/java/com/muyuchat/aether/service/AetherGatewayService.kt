@@ -56,6 +56,7 @@ class AetherGatewayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                GatewayOverlayController.hide()
                 if (!foreground) {
                     stopSelf()
                     return START_NOT_STICKY
@@ -70,17 +71,59 @@ class AetherGatewayService : Service() {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
+                return START_NOT_STICKY
+            }
+            ACTION_SHOW_OVERLAY -> {
+                if (!GatewayServiceController.status.value.running) {
+                    GatewayOverlayController.hide()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (!foreground) {
+                    if (!tryStartAsForeground(GatewayServiceController.status.value)) {
+                        stopSelf()
+                        return START_NOT_STICKY
+                    }
+                }
+                val colors = OverlayColors.from(intent)
+                val shown = colors != null && GatewayOverlayController.show(this, colors)
+                notifications.notify(
+                    NOTIFICATION_ID,
+                    if (shown) {
+                        buildNotification(GatewayServiceController.status.value)
+                    } else {
+                        buildNotification(
+                            GatewayServiceController.status.value,
+                            overlayNote = "系统悬浮窗未显示：请检查「显示在其他应用上层」权限",
+                        )
+                    },
+                )
+                return START_STICKY
+            }
+            ACTION_HIDE_OVERLAY -> {
+                GatewayOverlayController.hide()
+                if (foreground) {
+                    notifications.notify(
+                        NOTIFICATION_ID,
+                        buildNotification(GatewayServiceController.status.value),
+                    )
+                }
+                return START_STICKY
             }
             else -> {
-                startAsForeground(
-                    GatewayServiceController.status.value.copy(
-                        state = if (GatewayServiceController.status.value.running) {
-                            GatewayState.RUNNING
-                        } else {
-                            GatewayState.STARTING
-                        },
-                    ),
-                )
+                if (!tryStartAsForeground(
+                        GatewayServiceController.status.value.copy(
+                            state = if (GatewayServiceController.status.value.running) {
+                                GatewayState.RUNNING
+                            } else {
+                                GatewayState.STARTING
+                            },
+                        ),
+                    )
+                ) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 scope.launch {
                     val result = GatewayServiceController.start(applicationContext)
                     if (result.state == GatewayState.FAILED) {
@@ -91,7 +134,8 @@ class AetherGatewayService : Service() {
                 }
             }
         }
-        return START_NOT_STICKY
+        // 网关服务是用户主动开启的前台服务：被系统回收后尽力恢复；不承诺不会被杀。
+        return START_STICKY
     }
 
     private fun startAsForeground(status: GatewayStatus) {
@@ -104,7 +148,14 @@ class AetherGatewayService : Service() {
         foreground = true
     }
 
-    private fun buildNotification(status: GatewayStatus): Notification {
+    /**
+     * 被系统以 START_STICKY 拉起时，Android 12+ 可能拒绝后台启动 FGS。
+     * 失败就停服务，不让异常穿透 onStartCommand 造成崩溃；如实放弃而不是假装常驻。
+     */
+    private fun tryStartAsForeground(status: GatewayStatus): Boolean =
+        runCatching { startAsForeground(status) }.isSuccess
+
+    private fun buildNotification(status: GatewayStatus, overlayNote: String? = null): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -120,7 +171,7 @@ class AetherGatewayService : Service() {
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_aether)
             .setContentTitle("Aether 网关")
-            .setContentText(notificationText(status))
+            .setContentText(overlayNote ?: notificationText(status))
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -139,6 +190,7 @@ class AetherGatewayService : Service() {
     }
 
     override fun onDestroy() {
+        GatewayOverlayController.hide()
         scope.cancel()
         // Best effort only: the process may die before this finishes, and the UI
         // reports stopped after a restart because the Go runtime died with it.
@@ -157,6 +209,10 @@ class AetherGatewayService : Service() {
     companion object {
         const val ACTION_START = "com.muyuchat.aether.action.START_GATEWAY"
         const val ACTION_STOP = "com.muyuchat.aether.action.STOP_GATEWAY"
+
+        /** 显示/关闭系统级悬浮窗（不是应用内浮球；需要 SYSTEM_ALERT_WINDOW）。 */
+        const val ACTION_SHOW_OVERLAY = "com.muyuchat.aether.action.SHOW_OVERLAY"
+        const val ACTION_HIDE_OVERLAY = "com.muyuchat.aether.action.HIDE_OVERLAY"
         const val CHANNEL_ID = "aether_gateway"
         const val NOTIFICATION_ID = 1001
     }

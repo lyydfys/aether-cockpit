@@ -42,7 +42,7 @@ import kotlinx.coroutines.withContext
 
 private val CardPadding = 16.dp
 private val RowGap = 12.dp
-private val TightGap = 8.dp
+private val TightGap = 6.dp
 
 sealed interface ModelRedirectUiState {
     data object Idle : ModelRedirectUiState
@@ -104,7 +104,7 @@ internal fun ModelRedirectSection(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(CardPadding),
+                .padding(horizontal = CardPadding, vertical = DeepCardVerticalPadding),
             verticalArrangement = Arrangement.spacedBy(RowGap),
         ) {
             Text(
@@ -154,7 +154,7 @@ internal fun ModelRedirectSection(
                 is ModelRedirectUiState.Ready -> {
                     Text(
                         text = modelRedirectSummary(current.redirects),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -168,7 +168,7 @@ internal fun ModelRedirectSection(
                         current.redirects.forEach { redirect ->
                             Text(
                                 text = modelRedirectLine(redirect),
-                                style = MaterialTheme.typography.labelMedium,
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                         }

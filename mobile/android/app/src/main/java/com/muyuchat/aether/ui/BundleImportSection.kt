@@ -140,7 +140,7 @@ private fun WorkingBody() {
         Spacer(Modifier.width(8.dp))
         Text(
             text = "正在本地解密账号包…",
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -161,7 +161,7 @@ private fun ReadyBody(
     )
     val exportedAt = formatExportedAt(preview.exportedAtSec)
     if (exportedAt.isNotEmpty()) {
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             text = "导出时间 $exportedAt",
             style = MaterialTheme.typography.bodySmall,
@@ -169,14 +169,14 @@ private fun ReadyBody(
         )
     }
     if (preview.accounts.isEmpty()) {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
             text = bundlePreviewEmptyDetail(),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     } else {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         preview.accounts.take(8).forEach { account -> AccountPreviewRow(account) }
         if (preview.accounts.size > 8) {
             Text(
@@ -213,7 +213,7 @@ private fun ReadyBody(
             Spacer(Modifier.width(8.dp))
             Text(
                 text = "正在写入本机账号池…",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -224,8 +224,7 @@ private fun ReadyBody(
                 } else {
                     "已导入 ${importState.result.imported.size} 个账号"
                 },
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.bodySmall,
                 color = if (importState.result.imported.isEmpty()) {
                     MaterialTheme.colorScheme.error
                 } else {
@@ -233,7 +232,7 @@ private fun ReadyBody(
                 },
             )
             if (importState.result.skipped > 0) {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(
                     text = "跳过 ${importState.result.skipped} 个重复账号",
                     style = MaterialTheme.typography.bodySmall,
@@ -242,7 +241,7 @@ private fun ReadyBody(
             }
             val firstFailure = importState.result.failed.firstOrNull()
             if (firstFailure != null) {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 // 只给状态词「失败 N 个」染 error；错误原文保持正文色。
                 Text(
                     text = "失败 ${importState.result.failed.size} 个",
@@ -261,7 +260,7 @@ private fun ReadyBody(
                 importState.result.skipped == 0 &&
                 importState.result.failed.isEmpty()
             ) {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(
                     text = "这次没有写入任何账号：账号包可能为空，或内容都被跳过了。" +
                         "关闭预览后重新选择包含账号的包。",
@@ -277,11 +276,10 @@ private fun ReadyBody(
         is BundleImportUiState.Failed -> {
             Text(
                 text = "导入失败",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = importState.message,
                 style = MaterialTheme.typography.bodySmall,
@@ -313,13 +311,13 @@ private fun FailedBody(code: String, message: String, onPick: () -> Unit, onDism
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.error,
     )
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(6.dp))
     Text(
         text = message,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface,
     )
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(6.dp))
     Text(
         text = "错误码：$code",
         style = MaterialTheme.typography.labelSmall,
@@ -365,7 +363,7 @@ private fun AccountPreviewRow(account: BundleAccountPreview) {
         Column(Modifier.weight(1f)) {
             Text(
                 text = account.label.ifBlank { "未命名账号" },
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -458,7 +456,7 @@ private fun PassphraseField(value: String, onValueChange: (String) -> Unit) {
                 .padding(horizontal = 12.dp)
                 .semantics { contentDescription = "账号包口令" },
             singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(
+            textStyle = MaterialTheme.typography.bodySmall.copy(
                 color = MaterialTheme.colorScheme.onSurface,
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -472,7 +470,7 @@ private fun PassphraseField(value: String, onValueChange: (String) -> Unit) {
                     if (value.isEmpty()) {
                         Text(
                             text = "口令",
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

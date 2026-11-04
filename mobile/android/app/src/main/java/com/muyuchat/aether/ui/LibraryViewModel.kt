@@ -4,11 +4,13 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
+import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.LibraryApiClient
 import com.muyuchat.aether.runtime.LibraryDraft
 import com.muyuchat.aether.runtime.LibraryDraftProblems
 import com.muyuchat.aether.runtime.LibraryEntry
 import com.muyuchat.aether.runtime.LibraryKind
+import com.muyuchat.aether.runtime.LibraryMcpAuthApiClient
 import com.muyuchat.aether.runtime.LibrarySnapshot
 import com.muyuchat.aether.runtime.LibraryWriteApiClient
 import com.muyuchat.aether.runtime.ManagementApiException
@@ -16,6 +18,7 @@ import com.muyuchat.aether.runtime.validateLibraryDraft
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -184,4 +187,151 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
+
+    // ——— MCP 登录 / 登出（桌面 library.js:795 `drawer('登录 ' + it.name)`） ———
+
+    /**
+     * 服务端在网关进程里起 `127.0.0.1:<port>/callback` 的回调监听（`mcp_signin.go:336-351`），
+     * 而网关就跑在手机本机上，所以系统浏览器授权完回跳回环地址即可命中——这条在手机上真能走通。
+     */
+    private val mcpAuthClient = LibraryMcpAuthApiClient()
+    private val _mcpAuth = MutableStateFlow<McpAuthUiState>(McpAuthUiState.Idle)
+    val mcpAuth: StateFlow<McpAuthUiState> = _mcpAuth.asStateFlow()
+    private var mcpPollJob: Job? = null
+
+    fun startMcpSignin(name: String) {
+        if (name.isBlank() || _mcpAuth.value is McpAuthUiState.Starting) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _mcpAuth.value = McpAuthUiState.Failed(name, "gateway_not_running", "网关未启动")
+            return
+        }
+        mcpPollJob?.cancel()
+        _mcpAuth.value = McpAuthUiState.Starting(name)
+        viewModelScope.launch {
+            try {
+                val start = withContext(Dispatchers.IO) { mcpAuthClient.start(status, name) }
+                if (start.alreadySignedIn) {
+                    _mcpAuth.value = McpAuthUiState.Done(name, alreadySignedIn = true)
+                    return@launch
+                }
+                if (start.id.isBlank() || start.url.isBlank()) {
+                    _mcpAuth.value = McpAuthUiState.Failed(name, "invalid_response", "服务端没有给出授权地址")
+                    return@launch
+                }
+                _mcpAuth.value = McpAuthUiState.Waiting(name, start.id, start.url)
+                pollMcpSignin(status, start.id, name)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _mcpAuth.value = McpAuthUiState.Failed(name, e.code, e.message)
+            } catch (_: Exception) {
+                _mcpAuth.value = McpAuthUiState.Failed(name, "unknown", "发起 MCP 登录失败，请重试")
+            }
+        }
+    }
+
+    /** 轮询到 `done` / `failed` / `canceled` 为止；最多等 10 分钟（与服务端 flow 超时一致）。 */
+    private suspend fun pollMcpSignin(status: GatewayStatus, id: String, name: String) {
+        mcpPollJob?.cancel()
+        mcpPollJob = viewModelScope.launch {
+            val deadline = System.currentTimeMillis() + 10 * 60 * 1000L
+            while (System.currentTimeMillis() < deadline) {
+                delay(2_000)
+                val poll = try {
+                    withContext(Dispatchers.IO) { mcpAuthClient.poll(status, id) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ManagementApiException) {
+                    _mcpAuth.value = McpAuthUiState.Failed(name, e.code, e.message)
+                    return@launch
+                } catch (_: Exception) {
+                    _mcpAuth.value = McpAuthUiState.Failed(name, "unknown", "查询 MCP 登录状态失败")
+                    return@launch
+                }
+                when (poll.state) {
+                    "done" -> {
+                        _mcpAuth.value = McpAuthUiState.Done(name, alreadySignedIn = false)
+                        refresh()
+                        return@launch
+                    }
+                    "failed" -> {
+                        _mcpAuth.value = McpAuthUiState.Failed(
+                            name,
+                            "signin_failed",
+                            poll.error.ifBlank { "登录失败" },
+                        )
+                        return@launch
+                    }
+                    "canceled" -> {
+                        _mcpAuth.value = McpAuthUiState.Idle
+                        return@launch
+                    }
+                    else -> Unit
+                }
+            }
+            _mcpAuth.value = McpAuthUiState.Failed(name, "timeout", "登录超时（10 分钟），请重试")
+        }
+    }
+
+    fun cancelMcpSignin() {
+        val current = _mcpAuth.value
+        mcpPollJob?.cancel()
+        if (current !is McpAuthUiState.Waiting) {
+            _mcpAuth.value = McpAuthUiState.Idle
+            return
+        }
+        val status = repository.status.value
+        _mcpAuth.value = McpAuthUiState.Idle
+        if (!status.running) {
+            return
+        }
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { mcpAuthClient.cancel(status, current.id) } }
+            _notice.value = "已取消「${current.name}」的登录"
+        }
+    }
+
+    fun signOutMcp(name: String) {
+        val status = repository.status.value
+        if (!status.running || name.isBlank()) {
+            _actionError.value = "网关未启动"
+            return
+        }
+        _actionError.value = null
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { mcpAuthClient.signOut(status, name) }
+                _notice.value = "已登出「$name」：本机 MCP 令牌已删除"
+                _mcpAuth.value = McpAuthUiState.Idle
+                refresh()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _actionError.value = e.message
+            } catch (_: Exception) {
+                _actionError.value = "登出失败，请重试"
+            }
+        }
+    }
+
+    fun dismissMcpAuth() {
+        mcpPollJob?.cancel()
+        _mcpAuth.value = McpAuthUiState.Idle
+    }
+}
+
+/**
+ * MCP 登录流程的瞬态（桌面 `library.js:790` `mcpLogin(it)`）。
+ *
+ * `state` 取值与 `mcp_signin.go` 的 flow 一致：waiting / done / failed / canceled。
+ */
+sealed interface McpAuthUiState {
+    data object Idle : McpAuthUiState
+    data class Starting(val name: String) : McpAuthUiState
+    data class Waiting(val name: String, val id: String, val url: String) : McpAuthUiState
+    data class Done(val name: String, val alreadySignedIn: Boolean) : McpAuthUiState
+    data class Failed(val name: String, val code: String, val message: String) : McpAuthUiState
 }

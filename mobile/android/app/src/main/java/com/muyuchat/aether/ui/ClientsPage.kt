@@ -126,7 +126,7 @@ internal fun ClientsPage(
         item {
             DeepCard {
                 DeepCardTitle("手机端只读")
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 DeepCardBody(
                     "「把网关配置写进客户端」要改桌面上的配置文件（Claude Code、Codex 等的 home 目录），" +
                         "手机上既没有那些路径也不该远程改。这里只显示客户端清单与检测状态；" +
@@ -146,7 +146,7 @@ internal fun ClientsPage(
                         Spacer(Modifier.width(12.dp))
                         Text(
                             text = "正在读取客户端清单…",
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -192,7 +192,7 @@ internal fun ClientsPage(
                                 trailing = "检测到 $detected / ${snapshot.clients.size}",
                             )
                             Spacer(Modifier.height(TitleToRows))
-                            DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+                            DeepCard(contentPadding = DeepListCardPadding) {
                                 snapshot.clients.forEach { entry -> ClientRow(entry) }
                             }
                         }
@@ -245,13 +245,13 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
         Column(Modifier.weight(1f)) {
             Text(
                 text = "客户端",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
                 text = "接入片段 · 只读",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -309,7 +309,7 @@ private fun ClientRow(entry: ClientEntry) {
         Spacer(Modifier.width(8.dp))
         Text(
             text = clientDetectedLabel(entry.detected),
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = if (entry.detected) {
                 MaterialTheme.colorScheme.primary
             } else {

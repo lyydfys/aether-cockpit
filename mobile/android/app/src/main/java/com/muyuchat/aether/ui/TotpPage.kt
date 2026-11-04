@@ -100,7 +100,7 @@ internal fun TotpPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
         item {
@@ -117,13 +117,13 @@ internal fun TotpPage(
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = "2FA",
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
                         text = "TOTP 验证码 · 本机计算",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -256,7 +256,7 @@ internal fun TotpPage(
                 Text(
                     text = "将删除「${entry.issuer.ifBlank { "未命名" }}」这条。删除后验证码不再可用，" +
                         "如果还需要请重新添加密钥。",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                 )
             },
             confirmButton = {
@@ -313,7 +313,7 @@ private fun TotpEntryCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             if (code == null) {
                 Text(
                     text = "等待验证码…",
@@ -330,7 +330,7 @@ private fun TotpEntryCard(
             } else {
                 Text(
                     text = formatTotpCode(code.code),
-                    style = MaterialTheme.typography.headlineMedium.copy(letterSpacing = 4.sp),
+                    style = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 4.sp),
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -339,7 +339,7 @@ private fun TotpEntryCard(
                     progress = { totpRemainingFraction(code.remaining, entry.period) },
                     modifier = Modifier.fillMaxWidth().height(4.dp),
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(
                     text = "${code.remaining} 秒后刷新",
                     style = MaterialTheme.typography.labelSmall,
@@ -354,7 +354,7 @@ private fun TotpEntryCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                 McaButton(
                     onClick = onDelete,
@@ -387,7 +387,7 @@ private fun TotpAddDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
                 TotpField("服务商（如 GitHub）", issuer) { issuer = it }
                 TotpField("账号（可选）", account) { account = it }
                 TotpField("备注（可选）", note) { note = it }
@@ -427,7 +427,7 @@ private fun TotpField(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Surface(
             shape = McaShape.CardAction,
             color = MaterialTheme.colorScheme.surface,
@@ -437,7 +437,7 @@ private fun TotpField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                textStyle = MaterialTheme.typography.bodySmall.copy(
                     color = MaterialTheme.colorScheme.onSurface,
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -477,7 +477,7 @@ private fun InfoCard(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = detail,
                 style = MaterialTheme.typography.bodySmall,

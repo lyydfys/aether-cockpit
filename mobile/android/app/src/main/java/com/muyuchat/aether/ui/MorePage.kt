@@ -71,16 +71,16 @@ internal fun MorePage(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
                 MobileHeader(status)
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
                         text = "更多",
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
                         text = "全部工作区与设置入口",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -109,7 +109,7 @@ internal fun MorePage(
                             trailing = "${workspaces.size + settings.size} 项",
                         )
                         Spacer(Modifier.height(TitleToRows))
-                        DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+                        DeepCard(contentPadding = DeepListCardPadding) {
                             // 命中时两类行混排：行的左右内边距与外缘都由这一张卡统一给。
                             if (settings.isNotEmpty()) {
                                 SettingsRows(settings, onSettings)
@@ -127,7 +127,7 @@ internal fun MorePage(
                         trailing = "${settingsGroups().size} 组",
                     )
                     Spacer(Modifier.height(TitleToRows))
-                    DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+                    DeepCard(contentPadding = DeepListCardPadding) {
                         SettingsRows(settingsGroups(), onSettings)
                     }
                 }
@@ -139,7 +139,7 @@ internal fun MorePage(
                         trailing = "${workspaceEntries().size} 个",
                     )
                     Spacer(Modifier.height(TitleToRows))
-                    DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+                    DeepCard(contentPadding = DeepListCardPadding) {
                         WorkspaceRows(workspaceEntries(), onWorkspace)
                     }
                 }
@@ -177,7 +177,8 @@ internal fun workspaceRowTrailing(entry: WorkspaceEntry): String {
         WorkspaceAction.DesktopOnly -> "仅 Windows"
         is WorkspaceAction.Pending -> action.stage
         WorkspaceAction.Settings, WorkspaceAction.Routing, WorkspaceAction.Probe,
-        WorkspaceAction.Totp, WorkspaceAction.Clients, WorkspaceAction.Sessions,
+        WorkspaceAction.Totp, WorkspaceAction.Clients, WorkspaceAction.Agents,
+        WorkspaceAction.Sessions,
         WorkspaceAction.Wake, WorkspaceAction.Library, WorkspaceAction.Plugins,
         -> "已接入"
     }
@@ -193,7 +194,7 @@ private fun SettingsRows(groups: List<SettingsGroup>, onSettings: (SettingsGroup
             badge = {
                 Text(
                     text = group.index,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

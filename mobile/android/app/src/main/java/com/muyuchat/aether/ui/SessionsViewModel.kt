@@ -7,9 +7,12 @@ import com.muyuchat.aether.runtime.AgentOption
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.SessionContentSearch
+import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.SessionSearchApiClient
 import com.muyuchat.aether.runtime.SessionStats
 import com.muyuchat.aether.runtime.SessionStatsApiClient
+import com.muyuchat.aether.runtime.SessionUsage
+import com.muyuchat.aether.runtime.SessionUsageApiClient
 import com.muyuchat.aether.runtime.SessionList
 import com.muyuchat.aether.runtime.SessionRow
 import com.muyuchat.aether.runtime.SessionsApiClient
@@ -31,10 +34,28 @@ sealed interface SessionsUiState {
         val sessions: List<SessionRow>,
         val agents: List<AgentOption>,
         val sampledAtMs: Long,
+        /** 会话用量（今日/近 7 天/近 30 天各一份，页面切周期不再请求）。 */
+        val usage: SessionUsageUiState = SessionUsageUiState.Idle,
     ) : SessionsUiState
 
     data class Failed(val code: String, val message: String) : SessionsUiState
 }
+
+/**
+ * 会话用量（桌面 `sessions.js:210` `renderUsage` 的数据）。
+ *
+ * 服务端一次只回一个时间窗（`sessions_usage_summary.go:82-91`），所以这里把
+ * 今日/近 7 天/近 30 天各取一份一起带下去，页面切周期是纯本地切换。
+ */
+sealed interface SessionUsageUiState {
+    data object Idle : SessionUsageUiState
+    data object Loading : SessionUsageUiState
+    data class Ready(val byDays: Map<Int, SessionUsage>) : SessionUsageUiState
+    data class Failed(val code: String, val message: String) : SessionUsageUiState
+}
+
+/** 桌面的时间范围控件就是这三档（`sessions.js:263`）。 */
+internal val SESSION_USAGE_PERIODS: List<Int> = listOf(1, 7, 30)
 
 /**
  * 会话页状态。**只读**：不改 Agent 的记录，也不做任何"同步"。
@@ -84,7 +105,8 @@ class SessionsViewModel(application: Application) : AndroidViewModel(application
             return
         }
         _query.value = query
-        refresh()
+        // 搜索只影响列表：不要把三个时间窗的用量重扫一遍。
+        load(includeUsage = false)
     }
 
     // ——— 会话内容检索：只回答"哪些会话提到过"，**不展示正文片段** ———
@@ -152,6 +174,38 @@ class SessionsViewModel(application: Application) : AndroidViewModel(application
         }
     }
     fun refresh() {
+        load(includeUsage = true)
+    }
+
+    /**
+     * 会话用量客户端：一次取三个时间窗（见 [SESSION_USAGE_PERIODS]）。
+     *
+     * 只读端点 `GET /api/sessions/usage`；三个窗口全失败才算失败，部分成功就如实显示已有的。
+     */
+    private val usageClient = SessionUsageApiClient()
+
+    private suspend fun loadUsageSnapshot(status: GatewayStatus, agent: String): SessionUsageUiState {
+        val byDays = LinkedHashMap<Int, SessionUsage>()
+        var lastError: ManagementApiException? = null
+        for (days in SESSION_USAGE_PERIODS) {
+            try {
+                byDays[days] = withContext(Dispatchers.IO) { usageClient.fetchUsage(status, days, agent) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                lastError = e
+            } catch (_: Exception) {
+                lastError = ManagementApiException("unknown", "读取会话用量失败，请重试")
+            }
+        }
+        return when {
+            byDays.isNotEmpty() -> SessionUsageUiState.Ready(byDays)
+            lastError != null -> SessionUsageUiState.Failed(lastError!!.code, lastError!!.message)
+            else -> SessionUsageUiState.Idle
+        }
+    }
+
+    private fun load(includeUsage: Boolean) {
         val status = repository.status.value
         if (!status.running) {
             loadJob?.cancel()
@@ -169,7 +223,12 @@ class SessionsViewModel(application: Application) : AndroidViewModel(application
                 val list: SessionList = withContext(Dispatchers.IO) {
                     client.fetchSessions(status, agent = agent, query = query)
                 }
-                SessionsUiState.Ready(list.sessions, list.agents, System.currentTimeMillis())
+                val usage = if (includeUsage) {
+                    loadUsageSnapshot(status, agent)
+                } else {
+                    (_state.value as? SessionsUiState.Ready)?.usage ?: SessionUsageUiState.Idle
+                }
+                SessionsUiState.Ready(list.sessions, list.agents, System.currentTimeMillis(), usage)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {

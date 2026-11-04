@@ -102,7 +102,7 @@ internal fun BackupImportSection(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = "导入会覆盖本机设置（脱敏规则、价格表、虚拟组、CORS、IP 白名单、配置档等）；" +
                     "资源库按 ID 合并；账号池不会被清空。凭据不随备份回来，导入后要按提示重填。",
@@ -110,7 +110,7 @@ internal fun BackupImportSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             importExportGatewayHint(status.running, "导入备份")?.let { hint ->
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(
                     text = hint,
                     style = MaterialTheme.typography.bodySmall,
@@ -137,7 +137,7 @@ internal fun BackupImportSection(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     if (current.rollbackFileName == null) {
                         Text(
                             text = "未能自动留底",
@@ -163,11 +163,10 @@ internal fun BackupImportSection(
                     // 只给状态词染 error；错误原文保持正文色。
                     Text(
                         text = failure.status,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         text = failure.detail,
                         style = MaterialTheme.typography.bodySmall,
@@ -202,7 +201,7 @@ internal fun BackupImportSection(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(12.dp))
                     Surface(
                         shape = McaShape.CardAction,
                         color = MaterialTheme.colorScheme.surface,
@@ -215,7 +214,7 @@ internal fun BackupImportSection(
                                 validation = null
                             },
                             singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            textStyle = MaterialTheme.typography.bodySmall.copy(
                                 color = MaterialTheme.colorScheme.onSurface,
                             ),
                             visualTransformation = PasswordVisualTransformation(),
@@ -229,7 +228,7 @@ internal fun BackupImportSection(
                         )
                     }
                     validation?.let {
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(6.dp))
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                 }

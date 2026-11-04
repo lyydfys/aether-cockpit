@@ -64,7 +64,7 @@ private val StatusDotSize = 8.dp
  *
  * 排版规则（与用量页同一套）：每张卡自带一个 `titleMedium+Bold` 标题，卡与卡之间 24dp，
  * 卡内 16dp 内边距、行间 12dp；关键数字 `headlineSmall+Bold`，单位与注解降级。
- * 字段全部来自 [OverviewStats] / [GatewayStatus]，没有后端出处的数字一律不画。
+ * 字段全部来自 [OverviewStats] / [GatewayStatus] / [OverviewLinksState]，没有后端出处的数字一律不画。
  */
 @Composable
 internal fun OverviewPage(

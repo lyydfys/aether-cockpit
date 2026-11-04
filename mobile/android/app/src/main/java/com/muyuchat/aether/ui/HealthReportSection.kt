@@ -134,7 +134,7 @@ internal fun HealthReportSection(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = "把本机状态整理成一段纯文本，方便自查或贴给别人排障。" +
                     "只含计数与开关状态，不含密钥、令牌、账号标识或文件路径。",
@@ -154,11 +154,10 @@ internal fun HealthReportSection(
                     // 只给状态词染 error；错误原文保持正文色。
                     Text(
                         text = failure.status,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         text = failure.detail,
                         style = MaterialTheme.typography.bodySmall,

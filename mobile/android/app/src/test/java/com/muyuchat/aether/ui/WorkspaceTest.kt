@@ -43,6 +43,8 @@ class WorkspaceTest {
         assertEquals(WorkspaceAction.Wake, byTitle.getValue("任务").action)
         // Stage 6 第四片：资源库（查看/删除；发现与下发仅桌面端）。
         assertEquals(WorkspaceAction.Library, byTitle.getValue("资源库").action)
+        // 「Agent」曾经错指到客户端页（WorkspaceAction.Clients）；现在指向真正的 Agent 接入页。
+        assertEquals(WorkspaceAction.Agents, byTitle.getValue("Agent 接入").action)
     }
 
     @Test
@@ -54,7 +56,8 @@ class WorkspaceTest {
                 is WorkspaceAction.Tab -> assertTrue(action.tab != MobileTab.MORE)
                 WorkspaceAction.Routing, WorkspaceAction.Settings, WorkspaceAction.Probe,
                 WorkspaceAction.Totp, WorkspaceAction.Sessions, WorkspaceAction.Wake,
-                WorkspaceAction.Library, WorkspaceAction.Plugins, WorkspaceAction.Clients -> Unit
+                WorkspaceAction.Library, WorkspaceAction.Plugins, WorkspaceAction.Clients,
+                WorkspaceAction.Agents -> Unit
                 is WorkspaceAction.Pending -> assertTrue(
                     "${entry.title} 的占位阶段不能为空",
                     action.stage.isNotBlank(),

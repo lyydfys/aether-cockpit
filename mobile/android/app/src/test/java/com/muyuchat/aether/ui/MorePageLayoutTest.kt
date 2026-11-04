@@ -33,6 +33,7 @@ class MorePageLayoutTest {
             WorkspaceAction.Settings,
             WorkspaceAction.Totp,
             WorkspaceAction.Clients,
+            WorkspaceAction.Agents,
             WorkspaceAction.Sessions,
             WorkspaceAction.Wake,
             WorkspaceAction.Library,

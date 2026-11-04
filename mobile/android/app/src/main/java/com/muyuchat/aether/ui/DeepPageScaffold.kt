@@ -34,17 +34,26 @@ import com.muyuchat.core.designsystem.McaTonal
  *
  * 改签名时要一次改完所有调用点；**不要**在页面里就地复制一份。
  *
- * 规格（UI_REFRESH_SPEC §1）：卡片内 16 / 卡片间 12 / 区块间 24；
- * 区块标题 titleMedium + Bold；列表行垂直 16dp；卡片一层 Sheet + McaHairline。
+ * 规格（UI_REFRESH_SPEC §1.2，第二轮密度收敛）：卡片水平内边距 16、垂直 20（上下各 +4，内容不贴边）；
+ * 卡片之间 16；区块之间 24（标题上内距 = 24 - 16 = 8）；
+ * 区块标题 titleMedium + Bold（**Bold 只允许出现在标题上**，正文级文字不加 Bold）；
+ * 列表行垂直 16dp（触控下限）；一个卡片内最多一条分隔线。
  * ========================================================================== */
 
-/** 卡片内边距：统一 16dp。 */
+/** 卡片水平内边距：统一 16dp。 */
 internal val DeepCardPadding: Dp = 16.dp
 
-/** 卡片之间的间距：统一 12dp。 */
-internal val DeepCardGap: Dp = 12.dp
+/** 卡片垂直内边距：16 + 上下各 4，内容不贴边。 */
+internal val DeepCardVerticalPadding: Dp = 20.dp
 
-/** 区块之间的间距：统一 24dp（由「列表 12dp + 标题上内距 12dp」组成）。 */
+/** 列表卡片内边距：水平 16，垂直只留 4（行自己带 16 的垂直内边距，外缘合计 20）。 */
+internal val DeepListCardPadding: PaddingValues =
+    PaddingValues(horizontal = DeepCardPadding, vertical = 4.dp)
+
+/** 卡片之间的间距：统一 16dp。 */
+internal val DeepCardGap: Dp = 16.dp
+
+/** 区块之间的间距：统一 24dp（由「列表 16dp + 标题上内距 8dp」组成）。 */
 internal val DeepBlockGap: Dp = 24.dp
 
 /** 列表行的垂直内边距：统一 16dp（行高约 52dp，顺带满足 48dp 触控下限）。 */
@@ -56,7 +65,7 @@ internal enum class DeepTone { Neutral, Info, Danger }
 /**
  * 区块标题：`titleMedium + Bold`，右侧可选计数或动作。
  *
- * 上内距 = 24 - 12，配合 LazyColumn 的 12dp 列表间距凑出「区块间 24dp」；
+ * 上内距 = 24 - 16，配合 LazyColumn 的 16dp 列表间距凑出「区块间 24dp」；
  * 因此页面不要自己再给标题加 Spacer。
  */
 @Composable
@@ -94,16 +103,19 @@ internal fun DeepSectionTitle(
 }
 
 /**
- * 一层卡片：`McaShape.Sheet` + `McaHairline` + 指定内边距。不嵌套第二层卡片。
+ * 一层卡片：`McaShape.Sheet` + `McaHairline` + 水平 16 / 垂直 20 内边距。不嵌套第二层卡片。
  *
- * 列表卡片传 `contentPadding = PaddingValues(horizontal = DeepCardPadding)`，
- * 由行自己提供 16dp 垂直内边距，这样首行/末行的外缘也正好是 16dp。
+ * 列表卡片传 `contentPadding = DeepListCardPadding`（水平 16 + 垂直 4），
+ * 由行自己提供 16dp 垂直内边距，这样首行/末行的外缘也正好是 20dp。
  */
 @Composable
 internal fun DeepCard(
     modifier: Modifier = Modifier,
     tone: DeepTone = DeepTone.Neutral,
-    contentPadding: PaddingValues = PaddingValues(DeepCardPadding),
+    contentPadding: PaddingValues = PaddingValues(
+        horizontal = DeepCardPadding,
+        vertical = DeepCardVerticalPadding,
+    ),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
@@ -164,7 +176,7 @@ internal fun DeepStateCard(
 ) {
     DeepCard(tone = tone) {
         DeepCardTitle(title, tone)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         DeepCardBody(detail, tone)
         if (actionLabel != null && onAction != null) {
             Spacer(Modifier.height(12.dp))
@@ -186,7 +198,7 @@ internal fun DeepNotice(text: String, isError: Boolean = false, onDismiss: () ->
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("知道了") }
     }
 }

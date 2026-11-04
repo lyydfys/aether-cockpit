@@ -70,7 +70,7 @@ internal fun AccountExportSection(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = "把本机账号封成 .aether-accounts 交给桌面端导入。文件包含真实凭证：" +
                     "口令丢了就打不开、泄露了就等于泄露账号——请只导到你自己的设备上。",
@@ -78,7 +78,7 @@ internal fun AccountExportSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             importExportGatewayHint(status.running, "导出账号包")?.let { hint ->
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(
                     text = hint,
                     style = MaterialTheme.typography.bodySmall,
@@ -103,18 +103,18 @@ internal fun AccountExportSection(
                     Spacer(Modifier.height(12.dp))
                     Text(
                         text = "已生成：${current.fileName}",
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         text = "含 ${current.accounts} 个账号，${current.bytes} 字节（已加密）。" +
                             "下一步请选择保存位置，然后在桌面端用「导入账号包」恢复。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         McaButton(
                             onClick = {
@@ -133,17 +133,16 @@ internal fun AccountExportSection(
                     // 只给状态词染 error；错误原文保持正文色。
                     Text(
                         text = failure.status,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         text = failure.detail,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(12.dp))
                     McaButton(onClick = viewModel::reset, style = McaButtonStyle.Outlined) { Text("知道了") }
                 }
             }
@@ -171,7 +170,7 @@ internal fun AccountExportSection(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(12.dp))
                     AccountExportField("口令（至少 8 位）", passphrase) {
                         passphrase = it
                         validation = null
@@ -237,7 +236,7 @@ private fun AccountExportField(label: String, value: String, onValueChange: (Str
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Surface(
             shape = McaShape.CardAction,
             color = MaterialTheme.colorScheme.surface,
@@ -247,7 +246,7 @@ private fun AccountExportField(label: String, value: String, onValueChange: (Str
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                textStyle = MaterialTheme.typography.bodySmall.copy(
                     color = MaterialTheme.colorScheme.onSurface,
                 ),
                 visualTransformation = PasswordVisualTransformation(),

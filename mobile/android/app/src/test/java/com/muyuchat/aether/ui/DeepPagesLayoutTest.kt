@@ -11,7 +11,8 @@ import org.junit.Test
  * 深层页面统一的排版与文案合同。
  *
  * 覆盖三件事：
- *  1. 间距节奏只有 4/8/12/16/24（UI_REFRESH_SPEC §1），随手值不许回来；
+ *  1. 间距节奏按 UI_REFRESH_SPEC §1.2（第二轮密度收敛）：卡片水平 16 / 垂直 20、
+ *     卡片之间 16、区块之间 24、行垂直 16（触控下限）；
  *  2. 计数文案统一，0 条不写「共 0 条」；
  *  3. 空态/级别文案必须说清"是哪一种空"，且缺失字段有明确兜底。
  */
@@ -19,11 +20,18 @@ class DeepPagesLayoutTest {
     @Test
     fun spacingRhythmIsOnTheFourPointScale() {
         assertEquals(16f, DeepCardPadding.value)
-        assertEquals(12f, DeepCardGap.value)
+        assertEquals(16f, DeepCardGap.value)
         assertEquals(24f, DeepBlockGap.value)
         assertEquals(16f, DeepRowVertical.value)
+        // 卡片垂直内边距 = 水平 16 + 上下各 4，内容不贴边。
+        assertEquals(20f, DeepCardVerticalPadding.value)
+        assertEquals(DeepCardPadding.value + 4f, DeepCardVerticalPadding.value)
         // 区块间 = 卡片间 + 标题上内距，两个常数不能各写各的。
         assertEquals(DeepBlockGap, DeepCardGap + (DeepBlockGap - DeepCardGap))
+        // 列表卡片：水平 16 + 行自带 16 → 首末行外缘合计 20。
+        assertEquals(16f, DeepListCardPadding.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr).value)
+        assertEquals(4f, DeepListCardPadding.calculateTopPadding().value)
+        assertEquals(DeepCardVerticalPadding, DeepRowVertical + DeepListCardPadding.calculateTopPadding())
     }
 
     @Test

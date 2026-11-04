@@ -107,18 +107,18 @@ internal fun QoderLoginSection(
                     Spacer(Modifier.width(10.dp))
                     Text(
                         text = "正在创建登录会话…",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 is QoderLoginUiState.Waiting -> {
                     Text(
                         text = "等待浏览器授权",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         text = "打开登录页并在 qoder.com 完成登录，完成后账号会自动写入本机。",
                         style = MaterialTheme.typography.bodySmall,
@@ -133,7 +133,7 @@ internal fun QoderLoginSection(
                         )
                     }
                     if (openFailed) {
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(6.dp))
                         Text(
                             text = "无法打开浏览器，请检查系统浏览器后重试。",
                             style = MaterialTheme.typography.bodySmall,
@@ -156,11 +156,11 @@ internal fun QoderLoginSection(
                 is QoderLoginUiState.Done -> {
                     Text(
                         text = "登录成功",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.primary,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         text = "账号已写入本机账号池。",
                         style = MaterialTheme.typography.bodySmall,
@@ -174,8 +174,8 @@ internal fun QoderLoginSection(
                 is QoderLoginUiState.Failed -> {
                     Text(
                         text = "登录未完成",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.error,
                     )
                     Spacer(Modifier.height(2.dp))

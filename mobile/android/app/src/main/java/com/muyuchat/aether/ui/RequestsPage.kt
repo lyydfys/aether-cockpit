@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -82,13 +83,13 @@ internal fun RequestsPage(
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = "请求",
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
                         text = "今日请求账本 · 只读",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -146,7 +147,7 @@ internal fun RequestsPage(
                             actionLabel = "分享 / 保存",
                             onAction = onShareCsv,
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(12.dp))
                         McaButton(onClick = onDismissExport, style = McaButtonStyle.Outlined) { Text("关闭") }
                     }
                     is RequestsExportUiState.Failed -> Column {
@@ -161,7 +162,7 @@ internal fun RequestsPage(
                             actionLabel = "重试",
                             onAction = onExportCsv,
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(12.dp))
                         McaButton(onClick = onDismissExport, style = McaButtonStyle.Outlined) { Text("关闭") }
                     }
                     RequestsExportUiState.Idle -> Unit
@@ -279,24 +280,24 @@ private fun RequestDetailDialog(row: RequestRow, onDismiss: () -> Unit) {
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 requestDetailFields(row).forEach { field ->
                     Row(Modifier.fillMaxWidth()) {
                         Text(
                             text = field.label,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.width(56.dp),
+                            modifier = Modifier.widthIn(min = 56.dp),
                         )
                         Text(
                             text = field.value,
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.weight(1f),
                         )
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
                 Text(
                     text = "只读：不包含请求正文、会话 ID 或 caller key。",
                     style = MaterialTheme.typography.bodySmall,
@@ -334,7 +335,7 @@ private fun RequestsSummaryLine(page: RequestsData) {
 
 @Composable
 private fun RequestsList(page: RequestsData, onSelect: (RequestRow) -> Unit) {
-    DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+    DeepCard(contentPadding = DeepListCardPadding) {
         page.rows.forEach { row ->
             RequestRowView(row, onClick = { onSelect(row) })
         }
@@ -354,14 +355,15 @@ private fun RequestRowView(row: RequestRow, onClick: () -> Unit) {
             text = formatClock(row.timeMs),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(44.dp),
+            // 最小宽度而不是定宽：1.3× 字号下「12:34」变宽也不会被截。
+            modifier = Modifier.widthIn(min = 44.dp),
         )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             // 长模型名放两行再省略，避免一行里被挤成「claude-sub/cla…」。
             Text(
                 text = row.model,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
@@ -379,8 +381,8 @@ private fun RequestRowView(row: RequestRow, onClick: () -> Unit) {
         Column(horizontalAlignment = Alignment.End) {
             Text(
                 text = requestStatusText(row),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
                 // 只有状态词染色；其余一律中性。
                 color = when {
                     row.status == 0 -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -437,7 +439,7 @@ private fun RequestsLoadingCard() {
             Spacer(Modifier.width(12.dp))
             Text(
                 text = "正在读取请求账本…",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

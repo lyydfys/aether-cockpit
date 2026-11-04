@@ -46,7 +46,7 @@ import kotlinx.coroutines.withContext
 
 private val CardPadding = 16.dp
 private val RowGap = 12.dp
-private val TightGap = 8.dp
+private val TightGap = 6.dp
 
 sealed interface RecentFailuresUiState {
     data object Idle : RecentFailuresUiState
@@ -113,7 +113,7 @@ internal fun RecentFailuresSection(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(CardPadding),
+                .padding(horizontal = CardPadding, vertical = DeepCardVerticalPadding),
             verticalArrangement = Arrangement.spacedBy(RowGap),
         ) {
             Text(
@@ -163,7 +163,7 @@ internal fun RecentFailuresSection(
                 is RecentFailuresUiState.Ready -> {
                     Text(
                         text = historySummaryLine(current.snapshot),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -192,7 +192,7 @@ internal fun RecentFailuresSection(
 private fun FailureRow(failure: TraceFailure, nowMs: Long) {
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

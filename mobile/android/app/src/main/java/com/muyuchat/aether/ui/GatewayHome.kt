@@ -42,14 +42,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -57,6 +56,9 @@ import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayState
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.stateLabel
+import com.muyuchat.aether.service.AetherGatewayService
+import com.muyuchat.aether.service.GatewayOverlayController
+import com.muyuchat.aether.service.OverlayColors
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
@@ -103,10 +105,20 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     var showLibrary by remember { mutableStateOf(false) }
     var showPlugins by remember { mutableStateOf(false) }
     var showClients by remember { mutableStateOf(false) }
+    var showAgents by remember { mutableStateOf(false) }
     var showDesktopOnly by remember { mutableStateOf(false) }
     var showBackup by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var copied by remember { mutableStateOf(false) }
+    val overlayVisible by GatewayOverlayController.visible.collectAsStateWithLifecycle()
+
+    // 系统外显的 ComposeView 在 Service 里，不能用 McaTheme（会写 Activity window）；
+    // 颜色在这里从当前 MaterialTheme 取好后随 Intent 传给 overlay，仍是同一套 token。
+    val overlayColors = OverlayColors(
+        primary = MaterialTheme.colorScheme.primary.toArgb(),
+        surface = MaterialTheme.colorScheme.surface.toArgb(),
+        outline = MaterialTheme.colorScheme.outlineVariant.toArgb(),
+    )
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -132,6 +144,27 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         }
     }
 
+    fun toggleOverlay() {
+        if (!state.status.running) {
+            return
+        }
+        val action = if (overlayVisible) {
+            AetherGatewayService.ACTION_HIDE_OVERLAY
+        } else {
+            AetherGatewayService.ACTION_SHOW_OVERLAY
+        }
+        val intent = Intent(context, AetherGatewayService::class.java).apply {
+            this.action = action
+            if (action == AetherGatewayService.ACTION_SHOW_OVERLAY) {
+                putExtra(OverlayColors.EXTRA_PRIMARY, overlayColors.primary)
+                putExtra(OverlayColors.EXTRA_SURFACE, overlayColors.surface)
+                putExtra(OverlayColors.EXTRA_OUTLINE, overlayColors.outline)
+            }
+        }
+        // 服务已在运行；失败时 overlayVisible 不会变 true，不伪造成功。
+        runCatching { context.startService(intent) }
+    }
+
     val url = if (state.status.running && state.status.addr.isNotBlank()) {
         "http://${state.status.addr}/v1"
     } else {
@@ -145,7 +178,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         }
     }
 
-    BackHandler(enabled = notReady != null || showRouting || showSettings || showProbe || showTotp || showSessions || showWake || showLibrary || showBackup || selectedTab != MobileTab.OVERVIEW) {
+    BackHandler(enabled = notReady != null || showRouting || showSettings || showProbe || showTotp || showSessions || showWake || showLibrary || showBackup || showAgents || selectedTab != MobileTab.OVERVIEW) {
         if (notReady != null) {
             notReady = null
         } else if (showRouting) {
@@ -164,6 +197,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
             showLibrary = false
         } else if (showBackup) {
             showBackup = false
+        } else if (showAgents) {
+            showAgents = false
         } else {
             selectedTab = MobileTab.OVERVIEW
         }
@@ -186,7 +221,23 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     showWake = false
                     showLibrary = false
                     showBackup = false
+                    showAgents = false
                 },
+            )
+        },
+        floatingActionButton = {
+            GatewayBubble(
+                status = state.status,
+                overlayVisible = overlayVisible,
+                copied = copied,
+                onPrimaryAction = { requestPrimaryAction() },
+                onCopy = {
+                    if (url.isNotEmpty()) {
+                        clipboard.setText(AnnotatedString(url))
+                        copied = true
+                    }
+                },
+                onToggleOverlay = { toggleOverlay() },
             )
         },
     ) { innerPadding ->
@@ -234,6 +285,16 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onBack = { showClients = false },
                     onOpenOverview = {
                         showClients = false
+                        selectedTab = MobileTab.OVERVIEW
+                    },
+                    modifier = modifier,
+                )
+            }            showAgents -> {
+                AgentsPage(
+                    status = state.status,
+                    onBack = { showAgents = false },
+                    onOpenOverview = {
+                        showAgents = false
                         selectedTab = MobileTab.OVERVIEW
                     },
                     modifier = modifier,
@@ -706,6 +767,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                         WorkspaceAction.Library -> showLibrary = true
                         WorkspaceAction.Plugins -> showPlugins = true
                         WorkspaceAction.Clients -> showClients = true
+                        WorkspaceAction.Agents -> showAgents = true
                         WorkspaceAction.DesktopOnly -> showDesktopOnly = true
                         is WorkspaceAction.Pending -> notReady = notReadyNoticeForWorkspace(
                             title = entry.title,
@@ -756,11 +818,13 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
 
 @Composable
 internal fun MobileHeader(status: GatewayStatus, onSearch: (() -> Unit)? = null) {
-    BrandHeader(status = status, onSearch = onSearch)
+    // status 仍保留在签名里（十几个页面共用），但顶部不再画运行栏；
+    // 网关状态由右下角的悬浮球表达。
+    BrandHeader(onSearch = onSearch)
 }
 
 @Composable
-private fun BrandHeader(status: GatewayStatus, onSearch: (() -> Unit)?) {
+private fun BrandHeader(onSearch: (() -> Unit)?) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -787,17 +851,6 @@ private fun BrandHeader(status: GatewayStatus, onSearch: (() -> Unit)?) {
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(active = status.running)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = if (status.running) "本机网关运行中 · 通知常驻" else "本机网关未启动",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
         if (onSearch != null) {
             McaIconButton(contentDescription = "搜索全部功能", onClick = onSearch) {
@@ -812,22 +865,6 @@ private fun BrandHeader(status: GatewayStatus, onSearch: (() -> Unit)?) {
             Spacer(Modifier.size(48.dp))
         }
     }
-}
-
-@Composable
-private fun StatusDot(active: Boolean) {
-    Box(
-        Modifier
-            .size(7.dp)
-            .clip(CircleShape)
-            .background(
-                if (active) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                },
-            ),
-    )
 }
 
 @Composable

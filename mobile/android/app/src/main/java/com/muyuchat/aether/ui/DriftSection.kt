@@ -86,7 +86,7 @@ internal fun DriftSection(
 
     DeepCard(modifier = modifier) {
         DeepCardTitle("配置漂移")
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         DeepCardBody(
             "对比桌面客户端配置文件与网关期望值：地址被改回官方、文件被删、模型被改都算漂移。" +
                 "手机端只看「哪个客户端、哪一类」；逐行差异与修复都在桌面端。",
@@ -115,19 +115,19 @@ internal fun DriftSection(
                 Spacer(Modifier.height(12.dp))
                 Text(
                     text = driftSummaryLine(current.report),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 current.report.entries.forEach { entry ->
                     Spacer(Modifier.height(12.dp))
-                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         // 漂移条目本身就是"需要处理"的信号，所以客户端名保留 error 色；
                         // 类别是中性描述，不上色。
                         Text(
                             text = entry.agentId,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.error,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

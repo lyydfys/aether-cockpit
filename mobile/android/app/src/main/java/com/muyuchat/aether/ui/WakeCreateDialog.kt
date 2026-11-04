@@ -81,7 +81,7 @@ internal fun WakeCreateDialog(
         text = {
             Column(
                 Modifier.heightIn(max = DialogContentMaxHeight).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
                     text = "同一账号再次保存是更新已有任务，不会重复建。手机端执行是尽力而为，系统省电策略可能停掉网关。",
@@ -179,7 +179,7 @@ private fun WakeField(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Surface(
             shape = McaShape.CardAction,
             color = MaterialTheme.colorScheme.surface,
@@ -190,7 +190,7 @@ private fun WakeField(
                 onValueChange = onValueChange,
                 singleLine = true,
 
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                textStyle = MaterialTheme.typography.bodySmall.copy(
                     color = MaterialTheme.colorScheme.onSurface,
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),

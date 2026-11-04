@@ -186,13 +186,13 @@ private fun ProbeHeadline(onBack: () -> Unit, onRefresh: () -> Unit, enabled: Bo
         Column(Modifier.weight(1f)) {
             Text(
                 text = "探针",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
                 text = "网关探针工作区 · 只读",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -227,7 +227,7 @@ private fun ProbeSectionCard(title: String, note: String, rows: List<ProbeRow>) 
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         DeepCardBody(note)
         Spacer(Modifier.height(DeepRowVertical))
         rows.forEachIndexed { index, row ->
@@ -415,8 +415,8 @@ private fun ProbeRowBlock(row: ProbeRow) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "GET ${row.path}",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -472,7 +472,7 @@ private fun ProbeFieldRow(field: ProbeField) {
         Spacer(Modifier.width(8.dp))
         Text(
             text = field.value,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = if (field.emphasis) {
                 MaterialTheme.colorScheme.error
             } else {
@@ -504,7 +504,7 @@ private fun ProbeLoadingCard() {
             Spacer(Modifier.width(12.dp))
             Text(
                 text = "正在探测本机网关…",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

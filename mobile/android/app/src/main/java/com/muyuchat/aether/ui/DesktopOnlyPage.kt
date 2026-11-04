@@ -67,7 +67,7 @@ internal fun DesktopOnlyPage(
         item {
             DeepCard {
                 DeepCardTitle("为什么会有这一页")
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 DeepCardBody(desktopOnlyIntroLine(desktopOnly.size))
             }
         }
@@ -75,7 +75,7 @@ internal fun DesktopOnlyPage(
             Column {
                 DeepSectionTitle(desktopOnlySectionTitle(desktopOnly.size))
                 Spacer(Modifier.height(TitleToRows))
-                DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+                DeepCard(contentPadding = DeepListCardPadding) {
                     desktopOnly.forEach { item -> CapabilityRow(item) }
                 }
             }
@@ -84,7 +84,7 @@ internal fun DesktopOnlyPage(
             Column {
                 DeepSectionTitle(byDesignSectionTitle(byDesignCount(byDesign)))
                 Spacer(Modifier.height(TitleToRows))
-                DeepCard(contentPadding = PaddingValues(horizontal = DeepCardPadding)) {
+                DeepCard(contentPadding = DeepListCardPadding) {
                     CapabilityRow(byDesign)
                 }
             }
@@ -107,13 +107,13 @@ private fun PageHeadline(onBack: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 text = "仅 Windows",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
                 text = "手机端做不到的能力与原因",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -164,7 +164,7 @@ private fun CapabilityRow(item: UnsupportedCapability) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             text = item.reason,
             style = MaterialTheme.typography.bodySmall,

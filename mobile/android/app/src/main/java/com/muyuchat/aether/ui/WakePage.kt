@@ -109,13 +109,13 @@ internal fun WakePage(
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = "唤醒队列",
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
                         text = "查看 / 新建 / 删除 · 手动触发",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -291,7 +291,7 @@ private fun SchedulerSection(
                 if (scheduler.state.enabled) {
                     // 只列渠道与今日进度，不展示 cron/凭证之类的内部信息。
                     scheduler.state.jobs.take(6).forEach { job ->
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(6.dp))
                         Text(
                             text = "· ${job.title}：今日 ${job.todayDone}/${job.todayTotal}" +
                                 if (job.pending > 0) "（队列 ${job.pending}）" else "",
@@ -319,16 +319,16 @@ private fun SchedulerSection(
             McaButton(onClick = onRefresh, style = McaButtonStyle.Outlined) { Text("刷新状态") }
         }
         checkinNote?.let { note ->
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = note,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             McaButton(onClick = onDismissCheckinNote, style = McaButtonStyle.Outlined) { Text("知道了") }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
             text = "签到任务已入队后按渠道串行执行，不会立即完成；手机端调度是尽力而为，" +
                 "系统省电策略可能停掉网关进程，需要准点执行请用桌面端。",
@@ -337,10 +337,10 @@ private fun SchedulerSection(
         )
         // 汇总是"本次一键签到"的口径（since 到今天 0 点），不是"总计"。
         checkinSummary?.let { summary ->
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = "本次签到结果",
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
@@ -403,13 +403,13 @@ private fun WakeTaskCard(
                 },
             )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
             text = wakeTaskMetaLine(task, now),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             text = wakeLastRunLabel(task.lastRun, task.lastOk, task.lastResult),
             style = MaterialTheme.typography.labelSmall,
