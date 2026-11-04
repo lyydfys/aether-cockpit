@@ -298,7 +298,53 @@ Android API 26+ 是首发支持基线。用户显式启动网关时，`AetherGat
 > | Go runtime 循环启动停止 3 次 + 端口每次释放 | 独立 C 探针（`cmd/mobilebridge/probe`，stop 后真的重新 `bind()` 同端口） | 已覆盖（设备/模拟器上跑） |
 > | **Android emulator/device load native library** | `check-mobile-stage0.sh --device <serial>` 装 APK 并跑 `NativeBridgeInstrumentedTest`（走 `System.loadLibrary` → JNI → `dlopen`） | **托管 CI 不覆盖**：`stage0` job 只跑 `--ci`。真机覆盖靠手动触发的 `device` job（需 `vars.AETHER_ARM64_DEVICE=true` + 自托管 arm64 runner）或本地执行 |
 >
+> **整类仪器测试 gate（2026-11-03 增补）**：上表最后一行只覆盖 `NativeBridgeInstrumentedTest` 的一个方法，且裸 `am instrument` 的 `OK (1 test)` 不产生 Gradle 报告。现在 `device` job 在 Stage 0 之后追加 `bash scripts/check-mobile-instrumented.sh --device <serial>`：用 `./gradlew :app:connectedDebugAndroidTest` 跑全部 `androidTest` 类，再直接判 Gradle 生成的 JUnit XML——`tests > 0`、`failures/errors/skipped` 均为 0、且三个测试类都必须出现 `<testcase>`。空报告或某个类静默不跑都判失败；确需跳过的类必须写进脚本的显式 skip 清单并打印原因。该 gate 已于 2026-11-04 在 arm64 真机（`98a37aa7`）实跑通过一次：`tests=3 failures=0 errors=0 skipped=0`，三个类的 `<testcase>` 都在同一份 `TEST-…-_app-.xml` 里（`NativeBridgeInstrumentedTest#startsServesBothCredentialScopesAndStops`、`GatewayServiceInstrumentedTest#serviceShowsNotificationServesBothScopesAndStops`、`RequestLedgerInstrumentedTest#fakeAccountRejectionAppearsInUsageAndRequestLedger`）。注意 AGP 在 `connectedDebugAndroidTest` 结束后会**卸载**两个 APK，因此跑完设备上不留包——这是正常行为，不是失败信号。
+>
 > **已知阻塞**：x86_64 模拟器路线当前不可用——Go runtime 在 `untrusted_app` 域触发 `SYS_LSTAT=6`，被 Android seccomp 杀死；arm64 无该 syscall 故不受影响。证据与可选解法见 `docs/internal/STAGE0_X86_64_BLOCKER.md`。在 Go 侧解决前，**不要**把 `--ci-emulator` 接进 CI。
+
+#### 当前覆盖度（2026-11-04 实测；17/17 条工作区已接到真实页面）
+
+`Workspace.kt` 锁定的 17 条工作区入口**全部有真实落地**，没有"点了什么都不发生"的第四种状态。逐条如下（"边界"列写的是**手机上确实做不到**的部分，不是待办）：
+
+| # | 工作区 | 落地页面 | 边界 |
+|---|---|---|---|
+| 1 | 概览 | `OverviewPage`（状态/URL/今日统计卡） | 统计来自 `/api/usage` 与 `/api/providers`，两侧独立失败 |
+| 2 | 渠道接入 | `ChannelsPage`（Qoder 登录、账号包导入/导出、逐渠道探测） | PC 端扫描/文件导入仅 Windows |
+| 3 | 账号额度 | `ChannelsPage` 行内额度 | 余额令牌本机绑定，需在手机重新录入 |
+| 4 | 用量 | `UsagePage`（总览/热力图/配额历史/价格表） | 价格表只读；编辑在桌面端 |
+| 5 | 成本 | `UsagePage` 同一数据源 | 同上 |
+| 6 | 请求 | `RequestsPage` + CSV 导出（FileProvider 分享） | 正文查看不做：`/api/usage/requests/content` 是恒返回 `{found:false}` 的桩 |
+| 7 | 任务 | `WakePage`（唤醒队列 新建/删除/手动触发 + 签到调度与汇总） | 准点执行仅桌面端；手机端尽力而为 |
+| 8 | 会话 | `SessionsPage`（只读） | 会话删除/终端仅 Windows |
+| 9 | 资源库 | `LibraryPage`（查看/新增/删除） | MCP config 编辑仅桌面端（掩码回写会写坏真实值）；条目"编辑"无按 id 更新端点 |
+| 10 | 网关探针 | `GatewayProbePage`（`/healthz`、`/version`、`/metrics`、`/api/runtime`） | 无 |
+| 11 | 2FA | `TotpPage`（Keystore 信封保存 seed） | 无 |
+| 12 | 设置 | `SettingsPage`（首选端口/脱敏/调用方密钥/备份导入导出/局域网只读） | 局域网开关仅桌面端生效（运行时只绑 127.0.0.1） |
+| 13 | Agent | `ClientsPage`（客户端清单与检测状态） | 注入/还原要写桌面配置文件，仅 Windows |
+| 14 | 路由 | `RoutingPage`（组/成员/改名/保存） | 决策器与权重可视化未做 |
+| 15 | 脱敏 | `SettingsPage` 脱敏小节 | 规则编辑在桌面端 |
+| 16 | 插件 | `PluginsPage`（改写规则与内置插件，只读） | 规则增删改仅桌面端；图标无列表接口 |
+| 17 | 额度快捷查看 | `ChannelsPage` | 同上（余额令牌需重录） |
+| — | 应用（第 18 项以外） | `WorkspaceAction.DesktopOnly`，UI 标注「仅 Windows」 | 启动 PC 客户端，仅 Windows |
+
+**全量门禁实测（2026-11-04，本机 arm64 真机 `f9d98aa3`）**
+
+| 门禁 | 命令 | 实测结果 |
+|---|---|---|
+| Kotlin 单测 | `./gradlew :app:testDebugUnitTest` | **51 suites / 259 tests / 0 failure** |
+| Debug 构建 | `./gradlew :app:assembleDebug` | BUILD SUCCESSFUL |
+| 设计系统契约 | `scripts/check-mobile-theme-contract.sh` | `theme-contract=pass`（lock 4 个 sha256；无自建主题/硬编码色值字号） |
+| API 契约 | `scripts/check-mobile-api-contract.sh` | `api-contract=pass`（移动端 37 条 `/api` 字面量全部能在服务端路由里找到） |
+| 发布门禁（源码） | `scripts/check-mobile-release.sh --ci` | `release-gate(source)=pass`（version.properties 单一来源；minSdk=26 targetSdk=36） |
+| 产物内容 | `scripts/check-mobile-apk-contents.sh --no-build` | `apk-contents=pass`（36,722,638 B；单一 ABI arm64-v8a；桥接库齐全；无调试符号） |
+| 仪器测试 | `scripts/check-mobile-instrumented.sh --device <serial>` | 2026-11-04 真机实跑 `tests=3 failures=0 errors=0 skipped=0`（见上文） |
+
+**明确不做（⛔ 仅 Windows / 物理不可能，继续保持「仅 Windows」标注）**：WSL 管理、PC 进程控制与启动器、桌面窗口操作、会话删除与终端、桌面 Agent 目录扫描（`/api/library/found`、market）、`WindowsAutoImport`、`reveal`（打开文件所在位置）、准点后台调度、写桌面客户端配置文件、供应商自定义图标的写入。
+
+**按设计不做（改手机页面也解决不了，别当待办）**：请求正文查看——`ledgerRecord`（`internal/core/gateway/ledger.go`）**没有任何正文字段**，请求正文从不落盘；`/api/usage/requests/content` 因此只能返回 `{found:false}`。要"查看正文"必须先改隐私模型把正文存下来，那是产品决策。
+
+其余对标缺口分两类，也都不是手机端单侧能补的：**需要 Go 侧补语义**（MCP config 的"保持不变"哨兵、资源库按 id 更新端点）；**属桌面壳能力**（自动更新下载、DAV 外部同步目标、MCP OAuth 浏览器回调）。
+
 
 ### Stage 1：Go 可移动编译与纯服务生命周期
 
