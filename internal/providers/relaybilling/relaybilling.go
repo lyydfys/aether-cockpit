@@ -76,7 +76,20 @@ func Query(ctx context.Context, env *provider.AccountEnv, baseURL string) (*prov
 				Message:     source,
 			}, nil
 		}
-		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "该渠道没有账单接口："+lastErr).WithProvider(env.ProviderID)
+		// 最后一层：面板自身接口（relay-panel 系 /api/user/self）。
+		// 放在 billing 之后，因为它通常要用户级 access token 而不是模型 Key；
+		// 有就读，没有就让上游把结论带回来。
+		if q, cerr := panelQuota(ctx, env, client, roots, key); cerr == nil {
+			return q, nil
+		} else if strings.Contains(cerr.Error(), "鉴权被拒") {
+			// 面板接口明确拒绝：这个站是面板类中转，但 Key 不是用户级令牌。
+			// 这种情况要给可执行的提示，而不是一句 404。
+			return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed,
+				"该站是面板类中转，但 /api/user/self 需要账号 access token（不是模型 Key）；"+
+					"可在账号里填 access_token 与用户 id，或改用自定义余额接口").WithProvider(env.ProviderID)
+		}
+		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed,
+			"该渠道没有账单接口（也没有可读的面板额度接口）："+lastErr).WithProvider(env.ProviderID)
 	}
 
 	now := time.Now()
@@ -152,6 +165,40 @@ func fallbackBalance(ctx context.Context, client *http.Client, roots []string, k
 			bal = 0
 		}
 		return bal, "剩余 $" + formatUSD(bal) + "（Key 额度）", true
+	}
+	// relay-panel 一类的中转站把 /api/usage/token/ 作为唯一的 sk- 可读额度接口。
+	//
+	// 注意结尾的斜杠：relay-panel 的路由是 `/api/usage/token/`，少了斜杠会 301/404，
+	// 这是我们过去"读不到额度"的一个真实原因，两种写法都试。
+	tokenPaths := []string{"/api/usage/token/", "/api/usage/token"}
+	for _, p := range tokenPaths {
+		for _, root := range roots {
+			var tok struct {
+				TotalAvailable float64 `json:"total_available"`
+				TotalUsed      float64 `json:"total_used"`
+				Unlimited      bool    `json:"unlimited_quota"`
+				// relay-panel 在 allow_user_quota_query 开启时顺带返回账号级余额。
+				UserQuota *float64 `json:"user_quota"`
+			}
+			if err := getJSON(ctx, client, root+p, key, &tok); err != nil {
+				continue
+			}
+			if tok.Unlimited {
+				return 0, "该 Key 无额度上限（站内标注不限量）", true
+			}
+			if tok.UserQuota != nil && *tok.UserQuota > 0 {
+				bal := *tok.UserQuota / defaultQuotaPerUnit
+				return bal, "剩余 $" + formatUSD(bal) + "（账号级额度）", true
+			}
+			if tok.TotalAvailable == 0 && tok.TotalUsed == 0 {
+				continue
+			}
+			bal := tok.TotalAvailable / defaultQuotaPerUnit
+			if bal < 0 {
+				bal = 0
+			}
+			return bal, "剩余 $" + formatUSD(bal) + "（Key 额度）", true
+		}
 	}
 	// relay-panel 一类的面板在 /v1/usage 直接给 remaining（美元）。
 	var usage struct {

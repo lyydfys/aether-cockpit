@@ -31,11 +31,38 @@ var usageWindowNames = []struct {
 	{"seven_day", "Weekly"},
 	{"seven_day_opus", "Weekly · Opus"},
 	{"seven_day_sonnet", "Weekly · Sonnet"},
+	// 新版还有 fable 档；不认识的窗口一律忽略，不影响其余窗口展示。
+	{"seven_day_fable", "Weekly · Fable"},
 }
 
 type usageWindowJSON struct {
 	Utilization *float64 `json:"utilization"`
 	ResetsAt    any      `json:"resets_at"`
+}
+
+// limitsJSON 是新版响应里的模型专属限额（Pro/Max 的"某个模型单独算周额度"）。
+//
+// 它与顶层 seven_day_* 是**两套口径**：顶层是账号总周额度，limits 里
+// weekly_scoped 是按模型分开的。两套都展示，用户才不会误以为某个模型
+// 还能用（实际它自己的周额度已经见底）。
+type limitsJSON struct {
+	Kind     string   `json:"kind"`  // session / weekly / weekly_scoped
+	Group    string   `json:"group"` // weekly
+	Percent  *float64 `json:"percent"`
+	ResetsAt any      `json:"resets_at"`
+	Scope    struct {
+		Model struct {
+			DisplayName string `json:"display_name"`
+			ID          string `json:"id"`
+		} `json:"model"`
+	} `json:"scope"`
+}
+
+// extraUsageJSON 是"超出套餐后用余额继续"的计量，老响应里没有。
+type extraUsageJSON struct {
+	MonthlyLimit *float64 `json:"monthly_limit"`
+	UsedCredits  *float64 `json:"used_credits"`
+	Currency     string   `json:"currency"`
 }
 
 // QueryQuota 读取 Claude 订阅的 5 小时 / 每周窗口。
@@ -73,14 +100,39 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 			"Claude 用量接口返回 "+resp.Status).WithProvider(channelID)
 	}
 
-	var payload map[string]usageWindowJSON
-	if err := json.Unmarshal(body, &payload); err != nil {
+	var payload struct {
+		Windows map[string]usageWindowJSON `json:"-"`
+		Limits  []limitsJSON               `json:"limits"`
+		Extra   *extraUsageJSON            `json:"extra_usage"`
+	}
+	// 顶层是动态 key（five_hour / seven_day / …），所以两遍解析：
+	// 先按 map 取窗口，再按固定结构取 limits 与 extra_usage。
+	var flat map[string]json.RawMessage
+	if err := json.Unmarshal(body, &flat); err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "Claude 用量响应解析失败").WithCause(err)
+	}
+	payload.Windows = make(map[string]usageWindowJSON, len(flat))
+	for _, w := range usageWindowNames {
+		if raw, ok := flat[w.key]; ok {
+			var one usageWindowJSON
+			if err := json.Unmarshal(raw, &one); err == nil {
+				payload.Windows[w.key] = one
+			}
+		}
+	}
+	if raw, ok := flat["limits"]; ok {
+		_ = json.Unmarshal(raw, &payload.Limits)
+	}
+	if raw, ok := flat["extra_usage"]; ok {
+		var extra extraUsageJSON
+		if err := json.Unmarshal(raw, &extra); err == nil {
+			payload.Extra = &extra
+		}
 	}
 
 	q := &provider.QuotaStatus{ReadAt: time.Now().Unix()}
 	for _, w := range usageWindowNames {
-		win, ok := payload[w.key]
+		win, ok := payload.Windows[w.key]
 		if !ok || win.Utilization == nil {
 			continue
 		}
@@ -94,13 +146,71 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 		q.Windows = append(q.Windows, provider.QuotaWindow{
 			Name:     w.name,
 			Used:     used,
-			ResetsAt: parseUsageReset(win.ResetsAt),
+			ResetsAt: usageReset(used, win.ResetsAt),
+		})
+	}
+	// 模型专属周额度：只展示 weekly_scoped，且必须带模型名（否则会和
+	// 顶层周额度重复成两条同名窗口）。
+	for _, lim := range payload.Limits {
+		if lim.Kind != "weekly_scoped" || lim.Percent == nil {
+			continue
+		}
+		name := strings.TrimSpace(lim.Scope.Model.DisplayName)
+		if name == "" {
+			name = strings.TrimSpace(lim.Scope.Model.ID)
+		}
+		if name == "" {
+			continue
+		}
+		used := *lim.Percent
+		if used < 0 {
+			used = 0
+		}
+		if used > 100 {
+			used = 100
+		}
+		q.Windows = append(q.Windows, provider.QuotaWindow{
+			Name:     "Weekly · " + name,
+			Used:     used,
+			ResetsAt: usageReset(used, lim.ResetsAt),
+		})
+	}
+	if payload.Extra != nil && payload.Extra.MonthlyLimit != nil && *payload.Extra.MonthlyLimit > 0 {
+		used := 0.0
+		if payload.Extra.UsedCredits != nil {
+			used = *payload.Extra.UsedCredits
+		}
+		pct := used / *payload.Extra.MonthlyLimit * 100
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 100 {
+			pct = 100
+		}
+		currency := strings.ToUpper(strings.TrimSpace(payload.Extra.Currency))
+		if currency == "" {
+			currency = "USD"
+		}
+		q.Windows = append(q.Windows, provider.QuotaWindow{
+			Name: "套餐外用量（" + currency + "）",
+			Used: pct,
 		})
 	}
 	if len(q.Windows) == 0 {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "Claude 用量响应里没有窗口数据").WithProvider(channelID)
 	}
 	return q, nil
+}
+
+// usageReset 只在"确实用了额度"时才认 resets_at。
+//
+// 上游在用量为 0 时也会给一个占位时间（有时是过去的时间戳），直接展示
+// 会出现"0% 却显示 2 小时后重置"这种自相矛盾的信息。
+func usageReset(used float64, raw any) int64 {
+	if used <= 0 {
+		return 0
+	}
+	return parseUsageReset(raw)
 }
 
 // parseUsageReset 接受上游两种写法：RFC3339 字符串与 Unix 秒。
