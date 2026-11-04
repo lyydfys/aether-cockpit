@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import com.muyuchat.aether.runtime.ACCOUNT_BUNDLE_MAX_BYTES
 import com.muyuchat.aether.runtime.AccountBundleException
 import com.muyuchat.aether.runtime.AccountBundlePreview
+import com.muyuchat.aether.runtime.AccountQuotaApiClient
+import com.muyuchat.aether.runtime.AccountQuotaRow
 import com.muyuchat.aether.runtime.BundleImportResult
 import com.muyuchat.aether.runtime.ChannelProbe
 import com.muyuchat.aether.runtime.ChannelToggleApiClient
@@ -41,12 +43,40 @@ import java.io.IOException
 sealed interface ChannelsUiState {
     data object Idle : ChannelsUiState
     data object Loading : ChannelsUiState
-    data class Ready(val providers: List<ProviderSummary>) : ChannelsUiState
+
+    /**
+     * 页面的两份数据一起发：渠道（提供模型/启停/探测）+ 账号（额度卡片主体）。
+     * 渠道启停、账号启停、签到成功后都用**服务端确认过的**结果就地更新，
+     * 不回到 [Loading]——否则整页重建会把用户刚点的那张卡甩出屏幕。
+     */
+    data class Ready(
+        val providers: List<ProviderSummary>,
+        val accounts: List<AccountQuotaRow> = emptyList(),
+        val accountAction: AccountActionUiState = AccountActionUiState.Idle,
+    ) : ChannelsUiState
+
     data class Failed(val code: String, val message: String) : ChannelsUiState
+}
+
+/** 账号级动作（停用·启用、立即签到）的进行/失败态，只影响对应的那张卡。 */
+sealed interface AccountActionUiState {
+    data object Idle : AccountActionUiState
+    data class Busy(val accountId: String, val kind: AccountActionKind) : AccountActionUiState
+    data class Failed(val accountId: String, val code: String, val message: String) : AccountActionUiState
+}
+
+enum class AccountActionKind {
+    TOGGLE,
+    CHECKIN,
 }
 
 sealed interface ChannelsAction {
     data object Refresh : ChannelsAction
+
+    /** [disabled] 是**目标状态**（true = 停用），直接来自开关的 checked 取反。 */
+    data class SetAccountDisabled(val accountId: String, val disabled: Boolean) : ChannelsAction
+
+    data class CheckinAccount(val accountId: String) : ChannelsAction
 }
 
 /** Local-only bundle preview; nothing is written to the account pool. */
@@ -96,30 +126,50 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
      */
     private val providerOverride = MutableStateFlow<List<ProviderSummary>?>(null)
 
+    /** 账号与额度：`GET /api/accounts`，与渠道列表同一次刷新里取。 */
+    private val accountsClient = AccountQuotaApiClient()
+    private val accountsOverride = MutableStateFlow<List<AccountQuotaRow>?>(null)
+    private val accountAction = MutableStateFlow<AccountActionUiState>(AccountActionUiState.Idle)
+
+    private data class ChannelsInput(
+        val status: GatewayStatus,
+        val providers: List<ProviderSummary>?,
+        val accounts: List<AccountQuotaRow>?,
+        val action: AccountActionUiState,
+    )
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val state: StateFlow<ChannelsUiState> =
-        combine(repository.status, refresh, providerOverride) { status, _, override -> status to override }
-            .flatMapLatest { (status, override) ->
+        combine(repository.status, refresh, providerOverride, accountsOverride, accountAction) { status, _, providers, accounts, action ->
+            ChannelsInput(status, providers, accounts, action)
+        }
+            .flatMapLatest { input ->
             flow {
-                if (!status.running) {
+                if (!input.status.running) {
                     emit(ChannelsUiState.Idle)
                     return@flow
                 }
-                // 有就地结果就直接发 Ready：不发 Loading，列表不被重建，滚动位置得以保留。
-                if (override != null) {
-                    emit(ChannelsUiState.Ready(override))
+                // 两份数据都在手上就直接发 Ready：不发 Loading，列表不被重建，滚动位置得以保留。
+                val cachedProviders = input.providers
+                val cachedAccounts = input.accounts
+                if (cachedProviders != null && cachedAccounts != null) {
+                    emit(ChannelsUiState.Ready(cachedProviders, cachedAccounts, input.action))
                     return@flow
                 }
                 emit(ChannelsUiState.Loading)
                 try {
-                    val providers = withContext(Dispatchers.IO) { client.fetchProviders(status) }
-                    emit(ChannelsUiState.Ready(providers))
+                    val (providers, accounts) = withContext(Dispatchers.IO) {
+                        val p = cachedProviders ?: client.fetchProviders(input.status)
+                        val a = cachedAccounts ?: accountsClient.fetchAccounts(input.status)
+                        p to a
+                    }
+                    emit(ChannelsUiState.Ready(providers, accounts, input.action))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: ManagementApiException) {
                     emit(ChannelsUiState.Failed(e.code, e.message))
                 } catch (_: Exception) {
-                    emit(ChannelsUiState.Failed("unknown", "无法读取本机渠道，请重试"))
+                    emit(ChannelsUiState.Failed("unknown", "无法读取本机渠道与账号，请重试"))
                 }
             }
         }
@@ -228,6 +278,8 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 // 拿不到（解析失败）才回退到整页刷新。
                 val providers = result.providers
                 if (providers != null) {
+                    // 先把账号那半也锁进 override，否则 Ready 会因缺一半而退回 Loading 重建整页。
+                    lockCurrentRows()
                     providerOverride.value = providers
                 } else {
                     onAction(ChannelsAction.Refresh)
@@ -281,11 +333,124 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     }
     fun onAction(action: ChannelsAction) {
         when (action) {
-            ChannelsAction.Refresh -> {
-                providerOverride.value = null
-                refresh.value++
+            ChannelsAction.Refresh -> invalidate()
+            is ChannelsAction.SetAccountDisabled -> setAccountDisabled(action.accountId, action.disabled)
+            is ChannelsAction.CheckinAccount -> checkinAccount(action.accountId)
+        }
+    }
+
+    /** 丢掉所有就地缓存，下次真实拉取（导入账号/登录成功后必须走这条，否则新账号不出现）。 */
+    private fun invalidate() {
+        providerOverride.value = null
+        accountsOverride.value = null
+        refresh.value++
+    }
+
+    // ——— 账号卡片上的两个写操作：账号启停、立即签到 ———
+
+    /**
+     * 账号级停用/启用。
+     *
+     * 只有一个真端点：`POST /api/accounts/{id}/settings` `{"disabled":bool}`
+     * （`accounts_api.go:71-133`，回 `{"account":<snapshot>}`）。服务端确认后就地替换那一行，
+     * 不做乐观更新——失败时开关必须停在原位并把服务端原文显示出来。
+     */
+    fun setAccountDisabled(accountId: String, disabled: Boolean) {
+        if (accountId.isBlank() || accountAction.value is AccountActionUiState.Busy) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            accountAction.value = AccountActionUiState.Failed(accountId, "gateway_not_running", "网关未启动")
+            return
+        }
+        accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.TOGGLE)
+        viewModelScope.launch {
+            try {
+                val updated = withContext(Dispatchers.IO) { accountsClient.setDisabled(status, accountId, disabled) }
+                mergeAccountRow(updated)
+                accountAction.value = AccountActionUiState.Idle
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message)
+            } catch (_: Exception) {
+                accountAction.value = AccountActionUiState.Failed(accountId, "unknown", "切换账号状态失败，请重试")
             }
         }
+    }
+
+    /**
+     * 立即签到：`POST /api/accounts/{id}/checkin`（`admin.go:543-612`）。
+     * 服务端回今日签到卡；回包没带状态时退回一次账号重拉，不猜结果。
+     */
+    fun checkinAccount(accountId: String) {
+        if (accountId.isBlank() || accountAction.value is AccountActionUiState.Busy) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            accountAction.value = AccountActionUiState.Failed(accountId, "gateway_not_running", "网关未启动")
+            return
+        }
+        accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.CHECKIN)
+        viewModelScope.launch {
+            try {
+                val ack = withContext(Dispatchers.IO) { accountsClient.checkin(status, accountId) }
+                val current = currentAccountRows().firstOrNull { it.accountId == accountId }
+                if (ack != null && current != null) {
+                    mergeAccountRow(current.copy(checkin = ack))
+                } else if (current == null) {
+                    // 没有缓存行可改：只让账号列表重拉（渠道列表仍在 override 里，不会整页重建）。
+                    refetchAccounts()
+                }
+                accountAction.value = AccountActionUiState.Idle
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message)
+            } catch (_: Exception) {
+                accountAction.value = AccountActionUiState.Failed(accountId, "unknown", "签到失败，请重试")
+            }
+        }
+    }
+
+    /** 当前已渲染的账号行（override 优先，其次最近一次 Ready 的快照）。 */
+    private fun currentAccountRows(): List<AccountQuotaRow> =
+        accountsOverride.value ?: (state.value as? ChannelsUiState.Ready)?.accounts.orEmpty()
+
+    /**
+     * 就地更新前，先把当前已渲染的渠道/账号锁进 override。
+     *
+     * 只锁一份会让 [ChannelsUiState.Ready] 的两半不同步，从而退回 Loading 把整页重建。
+     */
+    private fun lockCurrentRows() {
+        val ready = state.value as? ChannelsUiState.Ready ?: return
+        if (providerOverride.value == null) {
+            providerOverride.value = ready.providers
+        }
+        if (accountsOverride.value == null) {
+            accountsOverride.value = ready.accounts
+        }
+    }
+
+    private fun mergeAccountRow(updated: AccountQuotaRow) {
+        lockCurrentRows()
+        val rows = accountsOverride.value.orEmpty()
+        if (rows.isEmpty()) {
+            // 手上没有可比对的行：让它去重拉，而不是把列表替换成一条。
+            refetchAccounts()
+            return
+        }
+        accountsOverride.value = rows.map { row ->
+            if (row.accountId == updated.accountId) updated else row
+        }
+    }
+
+    /** 丢弃账号缓存并重拉；渠道缓存保留，因此不会整页回到 Loading。 */
+    private fun refetchAccounts() {
+        accountsOverride.value = null
+        refresh.value++
     }
 
     fun previewAccountBundle(uri: Uri, passphrase: String) {
@@ -350,7 +515,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                     sealedBytes?.fill(0)
                     sealedBytes = null
                     _bundleImport.value = BundleImportUiState.Done(result)
-                    refresh.value++
+                    invalidate()
                 },
                 onFailure = { error ->
                     if (error is CancellationException) {
@@ -457,7 +622,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 "pending" -> Unit
                 "done" -> {
                     _qoderLogin.value = QoderLoginUiState.Done(poll.account)
-                    refresh.value++
+                    invalidate()
                     return
                 }
                 "failed", "expired" -> {
