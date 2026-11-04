@@ -3,6 +3,7 @@
 package transport
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -131,16 +132,67 @@ func parseWinProxyServer(raw string) *url.URL {
 //
 // 顺序：注册表优先。理由：用户勾了"系统代理"通常就是要它生效；环境变量
 // 多见于脚本/容器，两者同时存在时以用户可见的那个为准。
+//
+// 关键保险：注册表里 ProxyEnable=1 但代理软件已经退出时（Clash 关掉后常留下
+// 这个状态），照注册表走会让**所有请求**都撞在连接拒绝上——比直连更糟。
+// 所以这里先探一下代理端口，探不通就当没配，退回环境变量/直连。
 func sysProxyFunc() func(*http.Request) (*url.URL, error) {
 	return func(req *http.Request) (*url.URL, error) {
 		if proxy, bypass := windowsSystemProxy(); proxy != nil {
-			if !shouldBypass(req.URL.Hostname(), bypass) {
+			if shouldBypass(req.URL.Hostname(), bypass) {
+				return nil, nil
+			}
+			if proxyAlive(proxy) {
 				return proxy, nil
 			}
+			// 代理端口不通：按"系统代理已失效"处理，直连。
 			return nil, nil
 		}
 		return http.ProxyFromEnvironment(req)
 	}
+}
+
+// proxyAliveCache 缓存代理端口的存活探测结果。
+//
+// 每个账号铸造 Transport 都会问一次，而探测要建 TCP；TTL 取 30 秒——
+// 用户关掉代理软件后最多半分钟就恢复直连，改回来也最多半分钟生效。
+type proxyAliveCache struct {
+	mu   sync.Mutex
+	at   time.Time
+	addr string
+	ok   bool
+}
+
+var proxyAliveState proxyAliveCache
+
+// proxyAlive 判断代理端口是否可连（结果缓存 30 秒）。
+func proxyAlive(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	addr := u.Host
+	if !strings.Contains(addr, ":") {
+		// 没写端口时按协议补默认端口。
+		if strings.EqualFold(u.Scheme, "https") {
+			addr += ":443"
+		} else {
+			addr += ":80"
+		}
+	}
+	proxyAliveState.mu.Lock()
+	defer proxyAliveState.mu.Unlock()
+	if proxyAliveState.addr == addr && time.Since(proxyAliveState.at) < 30*time.Second {
+		return proxyAliveState.ok
+	}
+	conn, err := net.DialTimeout("tcp", addr, 400*time.Millisecond)
+	ok := err == nil
+	if ok {
+		_ = conn.Close()
+	}
+	proxyAliveState.addr = addr
+	proxyAliveState.at = time.Now()
+	proxyAliveState.ok = ok
+	return ok
 }
 
 // shouldBypass 判断主机是否命中 ProxyOverride（如 "localhost;127.*;<local>"）。
