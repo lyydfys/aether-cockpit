@@ -1,5 +1,6 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.animation.core.TweenSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -88,5 +89,36 @@ class PredictiveBackMathTest {
         assertEquals(33, PredictiveBackSupportedSdk)
         assertFalse(BackOverlayRestScale >= 1f)
         assertTrue(BackOverlayScrimAlpha in 0f..1f)
+    }
+
+    /* ---------------- 键盘优先（对齐 MCA `enabled = visible && !imeVisible`） ---------------- */
+
+    @Test
+    fun imeVisibleYieldsBackToTheSystem() {
+        // 键盘弹着：不接管返回，让系统先收键盘（否则用户想收键盘，页面却先滑走了）。
+        assertFalse(predictiveBackEnabled(enabled = true, imeVisible = true, imeBlocksBack = true))
+        // 键盘收起：正常接管。
+        assertTrue(predictiveBackEnabled(enabled = true, imeVisible = false, imeBlocksBack = true))
+        // 页面本来就不该接管时，键盘状态无关紧要——两个输入都得是"允许"才允许。
+        assertFalse(predictiveBackEnabled(enabled = false, imeVisible = false, imeBlocksBack = true))
+        assertFalse(predictiveBackEnabled(enabled = false, imeVisible = true, imeBlocksBack = false))
+        // 关掉 IME 保护（imeBlocksBack = false）时键盘不再影响判断。
+        assertTrue(predictiveBackEnabled(enabled = true, imeVisible = true, imeBlocksBack = false))
+        // 默认参数就是"开"：调用点不写这个参数也受保护。
+        assertFalse(predictiveBackEnabled(enabled = true, imeVisible = true))
+    }
+
+    /* ---------------- 确认返回后的 180ms 滑出（对齐 MCA `closeAnimated()`） ---------------- */
+
+    @Test
+    fun settleOutIsA180msTween() {
+        // 与 MCA `offsetX.animateTo(width, tween(180))` 同值：退场必须可预期，不能用 spring。
+        assertEquals(180, BackSettleOutMs)
+        val spec = backSettleOutSpec()
+        assertTrue("滑出动画应该是 TweenSpec（定长），实际是 ${spec::class.simpleName}", spec is TweenSpec<*>)
+        assertEquals(BackSettleOutMs, (spec as TweenSpec<*>).durationMillis)
+        // 无延迟、无反复：确认返回就是一次性滑到底。
+        assertEquals(0, spec.delay)
+        assertTrue(spec.durationMillis in 100..400)
     }
 }
