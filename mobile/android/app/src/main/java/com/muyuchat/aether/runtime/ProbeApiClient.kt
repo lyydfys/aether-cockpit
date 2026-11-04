@@ -101,6 +101,8 @@ internal fun probeNeedsSession(path: String): Boolean = when (path) {
     "/readyz", "/version", "/metrics", "/api/runtime" -> true
     // 额度提醒（`GET /api/alerts`，`gateway.go:874`）落在 `/api/` 管理面：必须带会话凭据。
     "/api/alerts" -> true
+    // Codex 身份对照（`GET /api/providers/codex/identity`，`gateway.go:1150`）同样在 `/api/` 面。
+    "/api/providers/codex/identity" -> true
     // /healthz 与 /api/health：移动运行时里显式匿名。
     else -> false
 }
@@ -172,6 +174,18 @@ class ProbeApiClient(
             throw ManagementApiException("gateway_not_running", "网关未启动")
         }
         return parseQuotaAlerts(probe(status, "/api/alerts").body)
+    }
+
+    /**
+     * Codex 请求身份对照：`GET /api/providers/codex/identity?limit=5`
+     * （`gateway.go:1150` → `identity_api.go:107-127`；桌面卡片 `gateway.js:141-175`）。
+     */
+    fun fetchCodexIdentity(status: GatewayStatus, limit: Int = 5): CodexIdentityReport {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val safe = limit.coerceIn(1, 20)
+        return parseCodexIdentity(probe(status, "/api/providers/codex/identity?limit=$safe").body)
     }
 
     /** 凭据只由 [probeAuthorization] 决定，调用点不可能"顺手"把 Bearer 带到匿名端点。 */
@@ -411,6 +425,117 @@ internal fun quotaAlertLine(alert: QuotaAlert): String = buildString {
         append(alert.message)
     }
 }
+
+/**
+ * 一条 Codex 请求身份样本（`identity_api.go:4-14` 的 `codexIdentity`）。
+ *
+ * 只观测下游请求头，不改写客户端身份（服务端 note 原话）。
+ */
+data class CodexIdentity(
+    val time: Long,
+    val userAgent: String,
+    val originator: String,
+    val sessionId: String,
+    val chatgptAccountId: String,
+    val openaiBeta: String,
+    val stream: Boolean,
+    /** 是否与官方 CLI 形状一致。 */
+    val officialLike: Boolean,
+    val mismatches: List<String>,
+)
+
+/** `GET /api/providers/codex/identity` 整包（`identity_api.go:107-127`）。 */
+data class CodexIdentityReport(
+    /** 服务端给出的期望形状：user_agent / originator / session_id。 */
+    val expected: Map<String, String>,
+    val items: List<CodexIdentity>,
+    val note: String,
+)
+
+/** Codex 身份对照（桌面 `gateway.js:141-175`，只读观测，不写任何客户端配置）。 */
+internal fun parseCodexIdentity(body: String): CodexIdentityReport {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "Codex 身份对照返回的数据格式不正确")
+    }
+    val expected = LinkedHashMap<String, String>()
+    root.optJSONObject("expected")?.let { obj ->
+        for (key in obj.keys()) {
+            val value = obj.optString(key).trim()
+            if (value.isNotEmpty()) {
+                expected[key] = value
+            }
+        }
+    }
+    val items = root.optJSONArray("items")?.let { array ->
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            CodexIdentity(
+                time = item.optLong("time", 0L).coerceAtLeast(0L),
+                userAgent = item.optString("user_agent").trim(),
+                originator = item.optString("originator").trim(),
+                sessionId = item.optString("session_id").trim(),
+                chatgptAccountId = item.optString("chatgpt_account_id").trim(),
+                openaiBeta = item.optString("openai_beta").trim(),
+                stream = item.optBoolean("stream", false),
+                officialLike = item.optBoolean("official_like", false),
+                mismatches = item.optJSONArray("mismatches")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i ->
+                        arr.optString(i).trim().takeIf { it.isNotEmpty() }
+                    }
+                }.orEmpty(),
+            )
+        }
+    }.orEmpty()
+    return CodexIdentityReport(
+        expected = expected,
+        items = items,
+        note = root.optString("note").trim(),
+    )
+}
+
+/**
+ * 桌面 `gateway.js:154` 的「期望：…」一行：把服务端 `expected` 拼成人话。
+ *
+ * 服务端字段名是 `user_agent` / `originator` / `session_id`；缺哪个就不写哪个。
+ */
+internal fun codexIdentityExpectedLine(report: CodexIdentityReport): String {
+    if (report.expected.isEmpty()) {
+        return ""
+    }
+    val parts = mutableListOf<String>()
+    report.expected["user_agent"]?.let { parts += "User-Agent $it" }
+    report.expected["originator"]?.let { parts += "originator $it" }
+    report.expected["session_id"]?.let { parts += "session_id" }
+    return if (parts.isEmpty()) "" else "期望：" + parts.joinToString(" · ")
+}
+
+/**
+ * 桌面 `gateway.js:156-161`：`UA … · originator … · session <前 8 位>`，全空时「（无身份头）」。
+ *
+ * **截断只针对 session**（`gateway.js:159`：`String(it.session_id).slice(0, 8)`）；
+ * UA（`:157`）与 originator（`:158`）在桌面都是原样拼进去的，不截断。
+ */
+internal fun codexIdentityBits(item: CodexIdentity): String {
+    val bits = mutableListOf<String>()
+    if (item.userAgent.isNotBlank()) bits += "UA ${item.userAgent}"
+    if (item.originator.isNotBlank()) bits += "originator ${item.originator}"
+    if (item.sessionId.isNotBlank()) bits += "session ${item.sessionId.take(8)}"
+    return if (bits.isEmpty()) "（无身份头）" else bits.joinToString(" · ")
+}
+
+/** 桌面 `gateway.js:162`：`official_like` → 「官方形状」(green)，否则「有差异」(red)。 */
+internal fun codexIdentityStatusLabel(item: CodexIdentity): String =
+    if (item.officialLike) "官方形状" else "有差异"
+
+/** 桌面 `gateway.js:163`：差异列表用「；」连接。 */
+internal fun codexIdentityMismatchLine(item: CodexIdentity): String =
+    item.mismatches.joinToString("；")
+
+/** 桌面 `gateway.js:151` 的空态原话。 */
+internal const val CODEX_IDENTITY_EMPTY_COPY: String =
+    "还没有收到 Responses 请求；客户端发起一次对话后这里会出现身份对照。"
 
 /**
  * /healthz 正文恒为 ok，但有两种真实形状：

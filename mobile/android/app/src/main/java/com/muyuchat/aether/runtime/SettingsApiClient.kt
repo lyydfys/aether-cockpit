@@ -176,6 +176,17 @@ class SettingsApiClient(
         }
     }
 
+    /**
+     * 多实例档案（`GET /api/profiles`，`gateway.go:923` → `profiles_api.go:39`）。
+     *
+     * **只读**：`Profile{id,name,clients:[{client_id,model,origin}],updated_at}` 是网关
+     * settings 里的数据，手机上读得到；但 `POST /api/profiles/{id}/activate`
+     * （`profiles_api.go:14`：「激活时把其中每个客户端一次性写盘」）写的是**桌面客户端的
+     * 配置文件**，Android 上没有那些目录——所以手机端不做激活/新建/删除。
+     */
+    fun fetchProfiles(status: GatewayStatus): List<ProfileRow> =
+        parseProfiles(requestJson(status, "/api/profiles", "GET", null))
+
     fun fetchRedactDetail(status: GatewayStatus): RedactDetail {
         val body = requestJson(status, "/api/settings/redact-actions", "GET", null)
         return parseRedactDetail(body)
@@ -1201,4 +1212,77 @@ private fun parseCustomRules(root: JSONObject): List<RedactCustomRule> {
         if (kind.isBlank() || (prefix.isBlank() && regex.isBlank())) null
         else RedactCustomRule(kind, prefix = prefix, regex = regex)
     }
+}
+
+/* ============================================================================
+ * 多实例档案（profiles）——只读
+ *
+ * 端点：`GET /api/profiles`（`gateway.go:923` → `profiles_api.go:39`）
+ * 回包：`[{id,name,clients:[{client_id,model,origin}],updated_at}]`（`profiles_api.go:18-30`）
+ *
+ * 为什么手机端只读：`POST /api/profiles/{id}/activate` 的语义是「把其中每个客户端一次性写盘」
+ * （`profiles_api.go:14`），写的是桌面客户端的配置文件；Android 上不存在那些目录，
+ * 所以激活/新建/删除都不做，只把"有哪些档案、各自挂哪些客户端"如实列出来。
+ * ========================================================================== */
+
+/** 档案里的一个客户端（`ProfileClient`，`profiles_api.go:26-30`）。 */
+data class ProfileClientRow(
+    val clientId: String,
+    val model: String,
+    val origin: String,
+)
+
+/** 一套命名好的客户端配置组合。 */
+data class ProfileRow(
+    val id: String,
+    val name: String,
+    val clients: List<ProfileClientRow>,
+    val updatedAt: Long,
+)
+
+internal fun parseProfiles(body: String): List<ProfileRow> {
+    val array = try {
+        JSONArray(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的档案格式不正确")
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id").trim()
+        val name = item.optString("name").trim()
+        if (id.isEmpty() && name.isEmpty()) {
+            return@mapNotNull null
+        }
+        val clients = ArrayList<ProfileClientRow>()
+        val clientArray = item.optJSONArray("clients")
+        if (clientArray != null) {
+            for (i in 0 until clientArray.length()) {
+                val client = clientArray.optJSONObject(i) ?: continue
+                val clientId = client.optString("client_id").trim()
+                if (clientId.isEmpty()) {
+                    continue
+                }
+                clients.add(
+                    ProfileClientRow(
+                        clientId = clientId,
+                        model = client.optString("model").trim(),
+                        origin = client.optString("origin").trim(),
+                    ),
+                )
+            }
+        }
+        ProfileRow(
+            id = id.ifBlank { name },
+            name = name.ifBlank { id },
+            clients = clients,
+            updatedAt = item.optLong("updated_at", 0L).coerceAtLeast(0L),
+        )
+    }
+}
+
+/** 档案里一个客户端的一行说明：`claude_code · qoder-cn/auto`（缺项就省，不留空 `·`）。 */
+internal fun profileClientLabel(client: ProfileClientRow): String {
+    val parts = listOf(client.clientId.trim(), client.model.trim(), client.origin.trim())
+        .filter { it.isNotEmpty() }
+    return parts.joinToString(" · ")
 }

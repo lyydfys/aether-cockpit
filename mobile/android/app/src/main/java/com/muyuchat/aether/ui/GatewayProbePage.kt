@@ -44,6 +44,11 @@ import com.muyuchat.aether.runtime.ChannelProbeReport
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.HealthzProbe
 import com.muyuchat.aether.runtime.MetricsDigest
+import com.muyuchat.aether.runtime.CODEX_IDENTITY_EMPTY_COPY
+import com.muyuchat.aether.runtime.codexIdentityBits
+import com.muyuchat.aether.runtime.codexIdentityExpectedLine
+import com.muyuchat.aether.runtime.codexIdentityMismatchLine
+import com.muyuchat.aether.runtime.codexIdentityStatusLabel
 import com.muyuchat.aether.runtime.ProbeOutcome
 import com.muyuchat.aether.runtime.QuotaAlertsReport
 import com.muyuchat.aether.runtime.quotaAlertCountLabel
@@ -100,6 +105,10 @@ internal fun GatewayProbePage(
     alerts: QuotaAlertsUiState = QuotaAlertsUiState.Idle,
     /** 「去用量页」；为 null 时不渲染该按钮（避免死按钮）。 */
     onOpenUsage: (() -> Unit)? = null,
+    /** Codex 请求身份对照（桌面 `gateway.js:141-175`）；只读观测。 */
+    identity: CodexIdentityUiState = CodexIdentityUiState.Idle,
+    /** 「刷新」身份对照；为 null 时不渲染按钮。 */
+    onRefreshIdentity: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var protocol by remember { mutableStateOf("openai") }
@@ -143,6 +152,15 @@ internal fun GatewayProbePage(
                         )
                     }
                 }
+            }
+        }
+        // ② Codex 请求身份对照（桌面 gateway.js:141-175，只读观测）
+        if (identity !is CodexIdentityUiState.Idle) {
+            item {
+                CodexIdentityCard(
+                    state = identity,
+                    onRefresh = onRefreshIdentity,
+                )
             }
         }
         when (state) {
@@ -291,10 +309,99 @@ private fun QuotaAlertsCard(report: QuotaAlertsReport, onOpenUsage: (() -> Unit)
     }
 }
 
+/* ---------------- Codex 请求身份对照（桌面 gateway.js:141-175） ---------------- */
+
+/**
+ * 「Codex 请求身份对照」卡：标题 +「官方 CLI 形状」标签 + 刷新按钮；正文依次是
+ * 期望形状一行、逐条样本（UA / originator / session 前 8 位 + 官方形状/有差异 + 差异清单）。
+ *
+ * 空态用桌面原话（`gateway.js:151`）：「还没有收到 Responses 请求；…」。
+ * 只观测、不改写——服务端 note 原样展示。
+ */
+@Composable
+private fun CodexIdentityCard(state: CodexIdentityUiState, onRefresh: (() -> Unit)?) {
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("Codex 请求身份对照")
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "官方 CLI 形状",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.weight(1f))
+            if (onRefresh != null) {
+                McaButton(onClick = onRefresh, style = McaButtonStyle.Text) { Text("刷新") }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        when (state) {
+            CodexIdentityUiState.Idle -> Unit
+            CodexIdentityUiState.Loading -> DeepCardBody("正在读取下游请求头…")
+            is CodexIdentityUiState.Failed -> DeepCardBody(
+                if (state.code == "gateway_not_running") {
+                    "网关未启动；启动后这里会显示下游请求里真实的身份头。"
+                } else {
+                    "读取失败：${state.message}（错误码：${state.code}）"
+                },
+                tone = if (state.code == "gateway_not_running") DeepTone.Info else DeepTone.Danger,
+            )
+            is CodexIdentityUiState.Ready -> {
+                val report = state.report
+                if (report.items.isEmpty()) {
+                    DeepCardBody(CODEX_IDENTITY_EMPTY_COPY)
+                } else {
+                    val expected = codexIdentityExpectedLine(report)
+                    if (expected.isNotEmpty()) {
+                        DeepCardBody(expected)
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    for (item in report.items) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = codexIdentityBits(item),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                val mismatch = codexIdentityMismatchLine(item)
+                                if (mismatch.isNotEmpty()) {
+                                    Text(
+                                        text = mismatch,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Text(
+                                text = codexIdentityStatusLabel(item),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (item.officialLike) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    if (report.note.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        DeepCardBody(report.note)
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** 读失败：贴服务端原文，不装作"没有提醒"。 */
 @Composable
-private fun QuotaAlertsFailedCard(state: QuotaAlertsUiState.Failed) {
-    DeepCard {
+private fun QuotaAlertsFailedCard(state: QuotaAlertsUiState.Failed) {    DeepCard {
         DeepCardTitle("额度提醒读取失败")
         Spacer(Modifier.height(4.dp))
         DeepCardBody(

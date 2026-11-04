@@ -43,6 +43,8 @@ class ChannelsMoreMenuTest {
                 AccountMoreAction.Details,
                 AccountMoreAction.Settings,
                 AccountMoreAction.Models,
+                // 账号级模型映射（POST /api/provider/accountmapping，整表替换）
+                AccountMoreAction.ModelMapping,
                 AccountMoreAction.Presets,
                 AccountMoreAction.Tags,
                 AccountMoreAction.Note,
@@ -68,6 +70,7 @@ class ChannelsMoreMenuTest {
                 AccountMoreAction.Details,
                 AccountMoreAction.Settings,
                 AccountMoreAction.Models,
+                AccountMoreAction.ModelMapping,
                 AccountMoreAction.Presets,
                 AccountMoreAction.Tags,
                 AccountMoreAction.Note,

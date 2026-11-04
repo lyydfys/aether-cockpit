@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +38,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -49,6 +52,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -61,8 +66,16 @@ import com.muyuchat.aether.runtime.AccountSettingsPatch
 import com.muyuchat.aether.runtime.MAX_ACCOUNT_TAGS
 import com.muyuchat.aether.runtime.RequestPreset
 import com.muyuchat.aether.runtime.parseTagInput
+import com.muyuchat.aether.runtime.formatAccountMappingLines
+import com.muyuchat.aether.runtime.parseAccountMappingLines
 import com.muyuchat.aether.runtime.AccountQuotaWindow
 import com.muyuchat.aether.runtime.ChannelProbe
+import com.muyuchat.aether.runtime.CUSTOM_CHANNEL_PROTOCOLS
+import com.muyuchat.aether.runtime.CustomChannel
+import com.muyuchat.aether.runtime.CustomChannelDraft
+import com.muyuchat.aether.runtime.customChannelHeadersToText
+import com.muyuchat.aether.runtime.customChannelProtocolLabel
+import com.muyuchat.aether.runtime.slugifyCustomChannelId
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.QUOTA_UNSUPPORTED_COPY
 import com.muyuchat.aether.runtime.relativeTimeLabel
@@ -138,6 +151,20 @@ internal fun ChannelsPage(
     var selecting by rememberSaveable { mutableStateOf(false) }
     // 选中项存成 List（Bundle 可保存）；N 很小，查表用 contains 足够。
     var selectedIds by rememberSaveable { mutableStateOf(listOf<String>()) }
+    // 自定义渠道（custom-channels）：独立 ViewModel，避免改 GatewayHome 的参数面。
+    val customVm: CustomChannelsViewModel = viewModel()
+    val customState by customVm.state.collectAsStateWithLifecycle()
+    val customSaving by customVm.saving.collectAsStateWithLifecycle()
+    val customDeleting by customVm.deleting.collectAsStateWithLifecycle()
+    val customProbe by customVm.probe.collectAsStateWithLifecycle()
+    val customError by customVm.error.collectAsStateWithLifecycle()
+    var showCustomChannels by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(showCustomChannels) {
+        if (showCustomChannels) {
+            customVm.clearError()
+            customVm.load(status)
+        }
+    }
     val ready = state as? ChannelsUiState.Ready
     val batchState = ready?.batch ?: BatchUiState.Idle
     val batchRunning = batchState is BatchUiState.Running
@@ -206,6 +233,27 @@ internal fun ChannelsPage(
             }
         }
 
+        // ——— 主入口：接入渠道 / 自定义渠道（桌面 channels.js:177 的两个按钮） ———
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onOpenOnboard != null) {
+                    McaButton(onClick = onOpenOnboard, style = McaButtonStyle.Outlined) {
+                        Text("接入渠道", maxLines = 1)
+                    }
+                }
+                McaButton(
+                    onClick = { showCustomChannels = true },
+                    style = McaButtonStyle.Outlined,
+                ) { Text("自定义渠道", maxLines = 1) }
+            }
+        }
+
         // ——— 主体：账号卡片优先 ———
         when (state) {
             ChannelsUiState.Idle -> item {
@@ -228,7 +276,8 @@ internal fun ChannelsPage(
                     item {
                         StateCard(
                             title = "还没有账号",
-                            detail = "点「接入渠道」选择接入方式：Qoder 设备码登录，或导入加密账号包。",
+                            detail = "点上方「接入渠道」选择接入方式：Qoder 设备码登录，或导入加密账号包。" +
+                                "想注册一个新渠道行，用「自定义渠道」。",
                             actionLabel = if (onOpenOnboard != null) "接入渠道" else null,
                             onAction = onOpenOnboard,
                         )
@@ -244,7 +293,7 @@ internal fun ChannelsPage(
                     item {
                         SearchField(query = query, onQueryChange = { query = it }, placeholder = "搜索账号或渠道")
                     }
-                    // 工具条：视图切换（桌面 channels.js:183 的 list/grid）+ 接入渠道入口
+                    // 工具条：视图切换（桌面 channels.js:183 的 list/grid）；接入/自定义入口在上方。
                     item {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -257,13 +306,6 @@ internal fun ChannelsPage(
                                     onClick = { layout = mode },
                                     label = { Text(accountLayoutLabel(mode)) },
                                 )
-                            }
-                            Spacer(Modifier.weight(1f))
-                            if (onOpenOnboard != null) {
-                                McaButton(
-                                    onClick = onOpenOnboard,
-                                    style = McaButtonStyle.Outlined,
-                                ) { Text("接入渠道") }
                             }
                         }
                     }
@@ -377,6 +419,25 @@ internal fun ChannelsPage(
                 )
             }
         }
+    }
+    // 自定义渠道弹窗（桌面 channels.js:177 的「自定义渠道」抽屉）。
+    if (showCustomChannels) {
+        CustomChannelsDialog(
+            status = status,
+            state = customState,
+            saving = customSaving,
+            deletingId = customDeleting,
+            probe = customProbe,
+            error = customError,
+            canAttach = onOpenOnboard != null,
+            onSave = { draft, done -> customVm.save(status, draft, done) },
+            onDelete = { id, done -> customVm.delete(status, id, done) },
+            onProbe = { base, key -> customVm.probe(status, base, key) },
+            onDismissProbe = { customVm.dismissProbe() },
+            onClearError = { customVm.clearError() },
+            onOpenOnboard = { onOpenOnboard?.invoke() },
+            onDismiss = { showCustomChannels = false },
+        )
     }
 }
 
@@ -1807,6 +1868,7 @@ internal enum class CardSheet {
     DETAILS,
     TAGS,
     NOTE,
+    MAPPING,
     PRESETS,
     COPY,
 }
@@ -1823,6 +1885,7 @@ internal enum class AccountMoreAction {
     Details,
     Settings,
     Models,
+    ModelMapping,
     Presets,
     Tags,
     Note,
@@ -1913,6 +1976,8 @@ internal fun accountMoreMenuItems(
     hasNote: Boolean,
     tagCount: Int,
     presetCount: Int,
+    /** 该账号已配置的模型映射条数（`AccountSnapshot.model_mapping`）。 */
+    mappingCount: Int = 0,
     disabled: Boolean = false,
     canDelete: Boolean = true,
     channelOff: Boolean = false,
@@ -1934,6 +1999,11 @@ internal fun accountMoreMenuItems(
             action = AccountMoreAction.Models,
             label = "查看模型",
             detail = "这个渠道声明了哪些模型、是否已启用",
+        ),
+        AccountMoreItem(
+            action = AccountMoreAction.ModelMapping,
+            label = if (mappingCount > 0) "模型映射（$mappingCount 条）" else "模型映射",
+            detail = "把客户端模型名改成该账号真正请求的上游模型名",
         ),
         AccountMoreItem(
             action = AccountMoreAction.Presets,
@@ -2162,6 +2232,7 @@ private fun ChannelTextField(
     placeholder: String = "",
     singleLine: Boolean = true,
     minHeight: Int = 48,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     Surface(
         shape = McaShape.CardAction,
@@ -2173,6 +2244,7 @@ private fun ChannelTextField(
             onValueChange = onValueChange,
             singleLine = singleLine,
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+            visualTransformation = visualTransformation,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = minHeight.dp)
@@ -2249,6 +2321,7 @@ private fun AccountSheets(
                     CardSheet.DETAILS -> "账号详情 · ${row.label}"
                     CardSheet.TAGS -> "标签 · ${row.label}"
                     CardSheet.NOTE -> "备注 · ${row.label}"
+                    CardSheet.MAPPING -> "模型映射 · ${row.label}"
                     CardSheet.PRESETS -> "渠道预设 · ${provider?.name ?: row.providerId}"
                     CardSheet.COPY -> "复制配置 · ${row.label}"
                     else -> "更多 · ${row.label}"
@@ -2269,6 +2342,7 @@ private fun AccountSheets(
                         hasNote = row.note.isNotBlank(),
                         tagCount = row.tags.size,
                         presetCount = presetCount,
+                        mappingCount = row.modelMapping.size,
                         disabled = row.disabled,
                         channelOff = provider?.off == true,
                         refreshMode = provider?.let { accountRefreshMode(it.capabilities) },
@@ -2296,6 +2370,7 @@ private fun AccountSheets(
                                         }
                                         AccountMoreAction.Tags -> onOpen(CardSheet.TAGS)
                                         AccountMoreAction.Note -> onOpen(CardSheet.NOTE)
+                                        AccountMoreAction.ModelMapping -> onOpen(CardSheet.MAPPING)
                                         AccountMoreAction.CopyConfig -> onOpen(CardSheet.COPY)
                                         AccountMoreAction.Test -> {
                                             onClose()
@@ -2349,6 +2424,13 @@ private fun AccountSheets(
                     row = row,
                     edit = edit,
                     saving = savingKind == AccountEditKind.NOTE,
+                    onAction = onAction,
+                    onSaved = onClose,
+                )
+                CardSheet.MAPPING -> AccountMappingBody(
+                    row = row,
+                    edit = edit,
+                    saving = savingKind == AccountEditKind.MAPPING,
                     onAction = onAction,
                     onSaved = onClose,
                 )
@@ -2638,9 +2720,60 @@ private fun AccountNoteBody(
     }
 }
 
+/**
+ * 模型映射编辑器：一行 `模型=上游模型`，**整表提交**。
+ *
+ * 服务端是整表替换（`SetModelMapping`，`provider/internal/provider/env.go:585-602`），
+ * 所以这里把当前值全量预填、提交全量；"留空 = 清除映射"也要说清楚，否则用户会以为清空没生效。
+ */
 @Composable
-private fun AccountPresetsBody(
+private fun AccountMappingBody(
     row: AccountQuotaRow,
+    edit: AccountEditUiState,
+    saving: Boolean,
+    onAction: (ChannelsAction) -> Unit,
+    onSaved: () -> Unit,
+) {
+    CloseOnSaved(edit, onSaved)
+    var text by remember(row.accountId) {
+        mutableStateOf(formatAccountMappingLines(row.modelMapping))
+    }
+    val parsed = parseAccountMappingLines(text)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ChannelTextField(
+            value = text,
+            onValueChange = { text = it },
+            label = "映射（一行一条）",
+            placeholder = "gpt-4o=gpt-4o-2024-11-20\nclaude-3-5=claude-sonnet-4",
+            singleLine = false,
+            minHeight = 120,
+        )
+        Text(
+            text = "格式：`客户端模型名=该账号真实上游模型名`，一行一条；`#` 开头是注释。" +
+                "共 ${parsed.size} 条生效。" +
+                "留空提交 = 清除全部映射（服务端整表替换，不是增量）。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        EditFailureLine(edit, row.accountId, AccountEditKind.MAPPING)
+        McaButton(
+            onClick = {
+                onAction(
+                    ChannelsAction.SetAccountMapping(
+                        providerId = row.providerId,
+                        accountId = row.accountId,
+                        mapping = parsed,
+                    ),
+                )
+            },
+            style = McaButtonStyle.Primary,
+            enabled = !saving && parsed != row.modelMapping,
+        ) { Text(if (saving) "保存中…" else "保存映射") }
+    }
+}
+
+@Composable
+private fun AccountPresetsBody(    row: AccountQuotaRow,
     presetsState: PresetsUiState,
     saving: Boolean,
     onAction: (ChannelsAction) -> Unit,
@@ -2776,4 +2909,435 @@ internal fun accountConfigJson(baseUrl: String, providerId: String, accountLabel
     json.put("provider", providerId)
     json.put("account", accountLabel)
     return json.toString()
+}
+
+/* ========================================================================== */
+/* 自定义渠道（custom-channels）：注册一个新渠道行                              */
+/* ========================================================================== */
+
+/**
+ * 「自定义渠道」弹窗（桌面 `channels.js:177` → `customchannels.js:67` 抽屉）。
+ *
+ * 与「自定义供应商（走内置协议）」的区别写在顶部说明里：
+ * 这里保存的是**新渠道定义**（provider id = `custom-<slug>`），密钥仍在账号里；
+ * 探测用的 Key 只用于本次请求，不保存。
+ */
+@Composable
+private fun CustomChannelsDialog(
+    status: GatewayStatus,
+    state: CustomChannelsUiState,
+    saving: Boolean,
+    deletingId: String?,
+    probe: CustomChannelProbeUiState,
+    error: String?,
+    canAttach: Boolean,
+    onSave: (CustomChannelDraft, (CustomChannel) -> Unit) -> Unit,
+    onDelete: (String, () -> Unit) -> Unit,
+    onProbe: (String, String) -> Unit,
+    onDismissProbe: () -> Unit,
+    onClearError: () -> Unit,
+    onOpenOnboard: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var channelId by remember { mutableStateOf("") }
+    var baseUrl by remember { mutableStateOf("") }
+    var protocol by remember { mutableStateOf("openai") }
+    var modelsText by remember { mutableStateOf("") }
+    var headersText by remember { mutableStateOf("") }
+    var probeKey by remember { mutableStateOf("") }
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var pendingDelete by remember { mutableStateOf<CustomChannel?>(null) }
+
+    fun fill(channel: CustomChannel) {
+        editingId = channel.id
+        name = channel.name
+        channelId = channel.id
+        baseUrl = channel.baseUrl
+        protocol = channel.protocol
+        modelsText = channel.models.joinToString("\n")
+        headersText = customChannelHeadersToText(channel.headers)
+        onDismissProbe()
+        onClearError()
+    }
+
+    fun reset() {
+        editingId = null
+        name = ""
+        channelId = ""
+        baseUrl = ""
+        protocol = "openai"
+        modelsText = ""
+        headersText = ""
+        onDismissProbe()
+        onClearError()
+    }
+
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "自定义渠道（新渠道行）",
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = "把「地址 + 模型名」注册成一个新渠道（provider id = custom-<slug>），保存后会出现在渠道列表与接入流程里。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "密钥不在这里保存：它只放在账号里；下面的「探测 Key」只用于这一次请求。删除渠道只删定义、不删账号。" +
+                        "若你只是想给已有渠道加一个账号，请用「自定义供应商（走内置协议）」——那不会新增渠道行。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Text(
+                    text = "已保存的渠道",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                when (state) {
+                    CustomChannelsUiState.Idle, CustomChannelsUiState.Loading -> Text(
+                        text = "正在读取…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    is CustomChannelsUiState.Failed -> Text(
+                        text = "${state.message}（${state.code}）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    is CustomChannelsUiState.Ready -> {
+                        if (state.channels.isEmpty()) {
+                            Text(
+                                text = "还没有自定义渠道；填下面的表单保存一个。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            state.channels.forEach { channel ->
+                                CustomChannelRow(
+                                    channel = channel,
+                                    deleting = deletingId == channel.id,
+                                    canAttach = canAttach,
+                                    onEdit = { fill(channel) },
+                                    onDelete = { pendingDelete = channel },
+                                    onProbe = { onProbe(channel.baseUrl, probeKey) },
+                                    onAttach = {
+                                        onDismiss()
+                                        onOpenOnboard()
+                                    },
+                                )
+                                Spacer(Modifier.height(8.dp))
+                            }
+                        }
+                    }
+                }
+
+                pendingDelete?.let { channel ->
+                    CustomChannelDeleteConfirm(
+                        channel = channel,
+                        deleting = deletingId == channel.id,
+                        onConfirm = {
+                            onDelete(channel.id) { pendingDelete = null }
+                        },
+                        onCancel = { pendingDelete = null },
+                    )
+                }
+
+                Text(
+                    text = if (editingId == null) "新建渠道" else "编辑渠道：custom-$editingId",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                ChannelTextField(name, { name = it }, "渠道名称", "例如：公司中转")
+                ChannelTextField(
+                    channelId,
+                    { channelId = it },
+                    "渠道 ID（选填）",
+                    "留空按名称生成",
+                )
+                val finalSlug = slugifyCustomChannelId(if (channelId.isBlank()) name else channelId)
+                Text(
+                    text = if (finalSlug.isBlank()) {
+                        "最终 id 为 custom-<slug>：保存时按名称生成"
+                    } else {
+                        "最终 id：custom-$finalSlug"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ChannelTextField(baseUrl, { baseUrl = it }, "Base URL", "https://api.example.com/v1")
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CUSTOM_CHANNEL_PROTOCOLS.forEach { option ->
+                        McaChip(
+                            selected = protocol == option.value,
+                            onClick = { protocol = option.value },
+                            label = { Text(option.label, maxLines = 1) },
+                        )
+                    }
+                }
+                Text(
+                    text = "协议决定上游路径：openai → /chat/completions；anthropic → /messages；responses → /responses。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ChannelTextField(
+                    modelsText,
+                    { modelsText = it },
+                    "模型（逗号或换行）",
+                    "gpt-4o, claude-sonnet-4；留空表示任意模型透传",
+                    singleLine = false,
+                    minHeight = 72,
+                )
+                ChannelTextField(
+                    headersText,
+                    { headersText = it },
+                    "额外请求头（每行 Key: Value）",
+                    "X-Custom-Header: value\n值里可以含冒号；Authorization 等由网关管理",
+                    singleLine = false,
+                    minHeight = 72,
+                )
+                ChannelTextField(
+                    probeKey,
+                    { probeKey = it },
+                    "探测用 API Key（不保存）",
+                    "sk-…（只用于本次探测）",
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    McaButton(
+                        onClick = { onProbe(baseUrl, probeKey) },
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                        enabled = baseUrl.isNotBlank() && probe !is CustomChannelProbeUiState.Probing,
+                    ) { Text(if (probe is CustomChannelProbeUiState.Probing) "探测中…" else "探测模型") }
+                }
+                CustomChannelProbeResult(probe = probe, onDismiss = onDismissProbe)
+                error?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                McaButton(onClick = { reset() }, style = McaButtonStyle.Outlined) { Text("新建") }
+                McaButton(
+                    onClick = {
+                        if (status.running) {
+                            onSave(
+                                CustomChannelDraft(
+                                    name = name,
+                                    id = channelId,
+                                    baseUrl = baseUrl,
+                                    protocol = protocol,
+                                    modelsText = modelsText,
+                                    headersText = headersText,
+                                ),
+                            ) { saved ->
+                                editingId = saved.id
+                                channelId = saved.id
+                            }
+                        }
+                    },
+                    style = McaButtonStyle.Primary,
+                    enabled = !saving && status.running,
+                ) { Text(if (saving) "保存中…" else "保存") }
+            }
+        },
+        dismissButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
+        },
+    )
+}
+
+@Composable
+private fun CustomChannelRow(
+    channel: CustomChannel,
+    deleting: Boolean,
+    canAttach: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onProbe: () -> Unit,
+    onAttach: () -> Unit,
+) {
+    Surface(
+        shape = McaShape.CardAction,
+        color = MaterialTheme.colorScheme.surface,
+        border = McaHairline.stroke(),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = channel.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "custom-${channel.id} · ${customChannelProtocolLabel(channel.protocol)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = channel.baseUrl,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (channel.models.isNotEmpty()) {
+                Text(
+                    text = "模型：" + channel.models.joinToString("、"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                McaButton(
+                    onClick = onProbe,
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text("探测模型", maxLines = 1) }
+                McaButton(
+                    onClick = onEdit,
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text("编辑", maxLines = 1) }
+                McaButton(
+                    onClick = onDelete,
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                    enabled = !deleting,
+                ) { Text(if (deleting) "删除中…" else "删除", maxLines = 1) }
+                if (canAttach) {
+                    McaButton(
+                        onClick = onAttach,
+                        style = McaButtonStyle.Outlined,
+                        size = McaButtonSize.CardAction,
+                    ) { Text("接入账号", maxLines = 1) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CustomChannelDeleteConfirm(
+    channel: CustomChannel,
+    deleting: Boolean,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Surface(
+        shape = McaShape.CardAction,
+        color = McaTonal.fill(),
+        border = McaHairline.stroke(),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "删除「${channel.name}」？",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "只删除渠道定义，不删账号；已接入的账号会显示成「渠道不存在」。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                McaButton(
+                    onClick = onConfirm,
+                    style = McaButtonStyle.Primary,
+                    size = McaButtonSize.CardAction,
+                    enabled = !deleting,
+                ) { Text(if (deleting) "删除中…" else "确认删除", maxLines = 1) }
+                McaButton(
+                    onClick = onCancel,
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                    enabled = !deleting,
+                ) { Text("取消", maxLines = 1) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CustomChannelProbeResult(probe: CustomChannelProbeUiState, onDismiss: () -> Unit) {
+    when (probe) {
+        CustomChannelProbeUiState.Idle -> Unit
+        CustomChannelProbeUiState.Probing -> Text(
+            text = "正在探测上游 /models…",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        is CustomChannelProbeUiState.Failed -> Text(
+            text = probe.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        is CustomChannelProbeUiState.Ok -> {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = if (probe.models.isEmpty()) {
+                        "上游没有返回模型清单（可手动填写）"
+                    } else {
+                        "探测到 ${probe.models.size} 个模型"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (probe.models.isNotEmpty()) {
+                    Text(
+                        text = probe.models.joinToString("、"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                McaButton(
+                    onClick = onDismiss,
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text("清除探测结果", maxLines = 1) }
+            }
+        }
+    }
 }

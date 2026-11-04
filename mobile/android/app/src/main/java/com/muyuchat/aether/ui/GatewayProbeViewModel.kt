@@ -16,6 +16,7 @@ import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.ProbeApiClient
+import com.muyuchat.aether.runtime.CodexIdentityReport
 import com.muyuchat.aether.runtime.QuotaAlertsReport
 import com.muyuchat.aether.runtime.SessionProbeReport
 import com.muyuchat.aether.runtime.SettingsApiClient
@@ -72,6 +73,14 @@ sealed interface QuotaAlertsUiState {
     data class Failed(val code: String, val message: String) : QuotaAlertsUiState
 }
 
+/** Codex 请求身份对照（桌面 `gateway.js:141-175`，只读观测）。 */
+sealed interface CodexIdentityUiState {
+    data object Idle : CodexIdentityUiState
+    data object Loading : CodexIdentityUiState
+    data class Ready(val report: CodexIdentityReport) : CodexIdentityUiState
+    data class Failed(val code: String, val message: String) : CodexIdentityUiState
+}
+
 /**
  * 探针工作区的 ViewModel。
  *
@@ -93,6 +102,35 @@ class GatewayProbeViewModel(application: Application) : AndroidViewModel(applica
     // —— 额度提醒（桌面 gateway.js:86-100）：与整页探测分开取，失败不影响其它块 ——
     private val _alerts = MutableStateFlow<QuotaAlertsUiState>(QuotaAlertsUiState.Idle)
     val alerts: StateFlow<QuotaAlertsUiState> = _alerts.asStateFlow()
+
+    // —— Codex 请求身份对照（桌面 gateway.js:141-175）：同样独立取，只读观测 ——
+    private val _identity = MutableStateFlow<CodexIdentityUiState>(CodexIdentityUiState.Idle)
+    val identity: StateFlow<CodexIdentityUiState> = _identity.asStateFlow()
+
+    fun refreshIdentity() {
+        val status = repository.status.value
+        if (!status.running) {
+            _identity.value = CodexIdentityUiState.Failed("gateway_not_running", "网关未启动")
+            return
+        }
+        loadIdentity(status)
+    }
+
+    private fun loadIdentity(status: GatewayStatus) {
+        viewModelScope.launch {
+            _identity.value = CodexIdentityUiState.Loading
+            _identity.value = try {
+                val report = withContext(Dispatchers.IO) { probeClient.fetchCodexIdentity(status) }
+                CodexIdentityUiState.Ready(report)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                CodexIdentityUiState.Failed(e.code, e.message)
+            } catch (_: Exception) {
+                CodexIdentityUiState.Failed("unknown", "读取 Codex 身份对照失败，请重试")
+            }
+        }
+    }
 
     private fun loadQuotaAlerts(status: GatewayStatus) {
         viewModelScope.launch {
@@ -128,6 +166,7 @@ class GatewayProbeViewModel(application: Application) : AndroidViewModel(applica
             _state.value = ProbeUiState.Loading
         }
         loadQuotaAlerts(status)
+        loadIdentity(status)
         viewModelScope.launch {
             _state.value = withContext(Dispatchers.IO) { collect(status, current) }
         }

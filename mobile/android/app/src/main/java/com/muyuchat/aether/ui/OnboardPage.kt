@@ -636,7 +636,7 @@ private fun OnboardFilterPanel(
     )
 }
 
-/** 自定义渠道入口卡：桌面对应「手动凭据」，保存走 `POST /api/provider/save`。 */
+/** 自定义供应商入口卡：桌面对应「手动凭据」，保存走 `POST /api/provider/save`。 */
 @Composable
 private fun OnboardCustomProviderCard(
     notice: String?,
@@ -645,11 +645,12 @@ private fun OnboardCustomProviderCard(
     onDismissNotice: () -> Unit,
 ) {
     DeepCard {
-        DeepCardTitle("自定义渠道")
+        DeepCardTitle("自定义供应商（走内置协议）")
         Spacer(Modifier.height(4.dp))
         DeepCardBody(
-            "桌面对应渠道抽屉里的「手动凭据」。按渠道填写：名称 / 接口类型 / Base URL / Key / 模型（选填）；" +
-                "服务端没有 type 字段，接口类型会落到真实的 chat 或 anthropic 请求字段上。",
+            "桌面对应渠道抽屉里的「手动凭据」：按渠道填写 名称 / 接口类型 / Base URL / Key / 模型（选填）。" +
+                "账号会挂到内置协议渠道（openai-compat / claude-sub），不会新增渠道行。" +
+                "想注册一个新渠道行，请用「账号与额度」页的「自定义渠道」。",
         )
         if (notice != null) {
             Spacer(Modifier.height(8.dp))
@@ -668,12 +669,15 @@ private fun OnboardCustomProviderCard(
             onClick = onAdd,
             style = McaButtonStyle.Primary,
             enabled = canAdd,
-        ) { Text("手动凭据 · 添加渠道") }
+        ) { Text("手动凭据 · 添加账号") }
     }
 }
 
 /**
- * 自定义渠道表单：名称 → 接口类型 → Base URL → API Key → 模型 → 保存/取消。
+ * 自定义**供应商**表单：名称 → 接口类型 → Base URL → API Key → 模型 → 保存/取消。
+ *
+ * 与「自定义渠道（新渠道行）」的区别：这里保存后账号挂在内置 core provider 上，
+ * 不会新增渠道；要注册新渠道行请到「账号与额度」页。
  *
  * 字段以服务端为准（`providerDraft`，provider_api.go:23-92）：只有 `name` / `key` /
  * `chat` 或 `anthropic` / 可选 `models`；**没有** `type`、`apiKey`、`baseURL`、`note`。
@@ -696,10 +700,17 @@ private fun OnboardCustomProviderDialog(
     var showKey by remember { mutableStateOf(false) }
     McaDialog(
         onDismissRequest = onDismiss,
-        title = { Text("自定义渠道", fontWeight = FontWeight.Bold) },
+        title = { Text("自定义供应商（走内置协议）", fontWeight = FontWeight.Bold) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                OnboardField("名称（必填）", draft.name, "例如 自定义渠道") { onNameChange(it) }
+                Text(
+                    text = "这里是「自定义供应商」：保存后账号会挂到内置协议渠道（openai-compat / claude-sub），不会新增渠道行。" +
+                        "想注册一个新渠道行，请用「账号与额度」页的「自定义渠道」。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                OnboardField("名称（必填）", draft.name, "例如 我的中转") { onNameChange(it) }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = "接口类型",
@@ -1377,15 +1388,16 @@ private fun OnboardManualBody(
         }
     }
     Spacer(Modifier.height(8.dp))
-    // 「接入」在 footer；这里只留次要动作（自定义渠道）。
+    // 「接入」在 footer；这里只留次要动作（自定义供应商）。
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         McaButton(onClick = onOpenCustomForm, style = McaButtonStyle.Outlined, size = McaButtonSize.CardAction) {
-            Text("自定义渠道（Base URL）")
+            Text("自定义供应商（走内置协议）")
         }
     }
     Spacer(Modifier.height(6.dp))
     Text(
-        text = "Base URL 型网关用上面「自定义渠道」：那里按渠道填写名称 / 接口类型 / Base URL / Key。",
+        text = "Base URL 型网关用「自定义供应商」：账号挂到内置协议渠道，名称 / 接口类型 / Base URL / Key 都按渠道填写；" +
+            "想注册一个新渠道行，请用「账号与额度」页的「自定义渠道」。",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

@@ -73,6 +73,15 @@ data class AccountQuotaRow(
     /** null = 跟随全局（服务端 `concurrency` 是 `*int`，见 `env.go:815`）。 */
     val concurrency: Int? = null,
     val allowedModels: List<String> = emptyList(),
+    /**
+     * 账号级模型映射（`AccountSnapshot.model_mapping`，`internal/provider/env.go:813`）：
+     * 客户端/路由模型名 → 该账号真实的上游模型名。支持精确名与 `*` 通配。
+     *
+     * `GET /api/accounts` 会带这个字段（`admin.go:350` 把整个 `AccountSnapshot` 内联进回包），
+     * 所以手机端**读得到当前值**；写用 `POST /api/provider/accountmapping`，
+     * 服务端是**整表替换**（`SetModelMapping`，`env.go:585-602`），不是字段合并。
+     */
+    val modelMapping: Map<String, String> = emptyMap(),
     val tags: List<String> = emptyList(),
     val note: String = "",
 )
@@ -401,6 +410,44 @@ class AccountQuotaApiClient(
         return parseAccountSnapshot(response)
     }
 
+    /**
+     * 账号级模型映射：`POST /api/provider/accountmapping {id, account, mapping}`
+     * （`gateway.go:869` → `provider_api.go:698`）。
+     *
+     * **服务端是整表替换，不是字段更新**：`SetModelMapping(body.Mapping)`
+     * （`internal/provider/env.go:585-602`）先清洗再直接 `e.modelMapping = clean`，
+     * 传空对象就是清除。其余账号字段不动（`handleProviderAccountMapping` 只碰这一个 map，
+     * 然后 `saveAccountsNow()` 持久化整份账号文件）。
+     *
+     * 所以调用方必须提交**完整的目标映射**（先读 `row.modelMapping`、改完再整体发），
+     * 不能只发改动的那几条。
+     *
+     * 回包是 `respondProviders`（服务商 + 账号的整份视图），这里不解析：保存成功后
+     * 由 ViewModel 走一次 `refresh()` 拿最新状态，避免对那个形状做第二份假设。
+     */
+    fun saveAccountMapping(
+        status: GatewayStatus,
+        providerId: String,
+        accountId: String,
+        mapping: Map<String, String>,
+    ) {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateAccountId(accountId)?.let { code -> throw ManagementApiException(code, "账号 id 不合法") }
+        if (providerId.isBlank()) {
+            throw ManagementApiException("invalid_provider", "渠道 id 为空，无法提交模型映射")
+        }
+        request(
+            status = status,
+            method = "POST",
+            path = "/api/provider/accountmapping",
+            body = buildAccountMappingJson(providerId, accountId, mapping),
+            timeoutMs = readTimeoutMs,
+        )
+    }
+
     /** 标签：`POST /api/accounts/{id}/tags`（`accounts_api.go:19-44`）。**空列表 = 清空标签**。 */
     fun setAccountTags(status: GatewayStatus, accountId: String, tags: List<String>): List<String> {
         val guard = guardOf(status)
@@ -418,8 +465,7 @@ class AccountQuotaApiClient(
         return parseTagsAck(response)
     }
 
-    /** 备注：`POST /api/accounts/{id}/note`（`accounts_api.go:46-69`）。**空字符串 = 清空备注**。 */
-    fun setAccountNote(status: GatewayStatus, accountId: String, note: String): String {        val guard = guardOf(status)
+    /** 备注：`POST /api/accounts/{id}/note`（`accounts_api.go:46-69`）。**空字符串 = 清空备注**。 */    fun setAccountNote(status: GatewayStatus, accountId: String, note: String): String {        val guard = guardOf(status)
         if (guard != null) {
             throw guard
         }
@@ -842,6 +888,90 @@ internal fun buildAccountTagsJson(tags: List<String>): String =
 internal fun buildAccountNoteJson(note: String): String =
     JSONObject().put("note", note).toString()
 
+/**
+ * 模型映射请求体：`{"id":渠道, "account":账号, "mapping":{模型:上游模型}}`
+ * （`provider_api.go:699-703`）。
+ *
+ * **mapping 是整表替换**（`env.go:585-602`），所以这里不合并、不剔除"已存在"的键——
+ * 传什么就是最终状态；空 map 序列化成 `{}`，等于清除映射。
+ * 键值两端都 trim，空键/空值丢掉（服务端也会丢，这里先丢让 UI 的计数准确）。
+ */
+internal fun buildAccountMappingJson(
+    providerId: String,
+    accountId: String,
+    mapping: Map<String, String>,
+): String {
+    val clean = JSONObject()
+    mapping.entries
+        .map { it.key.trim() to it.value.trim() }
+        .filter { (k, v) -> k.isNotEmpty() && v.isNotEmpty() }
+        .sortedBy { (k, _) -> k }
+        .forEach { (k, v) -> clean.put(k, v) }
+    return JSONObject()
+        .put("id", providerId.trim())
+        .put("account", accountId.trim())
+        .put("mapping", clean)
+        .toString()
+}
+
+/**
+ * 把多行文本解析成映射：一行 `模型=上游模型`。
+ *
+ * 规则（与对话框里的提示一致）：`#` 开头算注释；空行跳过；只按**第一个** `=` 切
+ * （上游模型名里可能有 `=` 以外的符号，但不该有等号；真遇到了保留在值里更诚实）；
+ * 键或值为空的行丢掉；同键后者覆盖前者；`k == v` 也丢掉——服务端会把它当"没映射"
+ * （`env.go:590`），留着会让"已配置 N 条"与实际生效数不一致。
+ */
+internal fun parseAccountMappingLines(text: String): Map<String, String> {
+    val out = LinkedHashMap<String, String>()
+    text.lineSequence().forEach { raw ->
+        val line = raw.trim()
+        if (line.isEmpty() || line.startsWith("#")) {
+            return@forEach
+        }
+        val index = line.indexOf('=')
+        if (index <= 0) {
+            return@forEach
+        }
+        val key = line.substring(0, index).trim()
+        val value = line.substring(index + 1).trim()
+        if (key.isEmpty() || value.isEmpty() || key == value) {
+            return@forEach
+        }
+        out.remove(key)
+        out[key] = value
+    }
+    return out
+}
+
+/** 映射 → 多行文本（对话框打开时的初始值）；键排序保证每次打开顺序一致。 */
+internal fun formatAccountMappingLines(mapping: Map<String, String>): String =
+    mapping.entries
+        .filter { (k, v) -> k.isNotBlank() && v.isNotBlank() }
+        .sortedBy { (k, _) -> k }
+        .joinToString("\n") { (k, v) -> "$k=$v" }
+
+/**
+ * 解析账号回包里的 `model_mapping`。
+ *
+ * 服务端 `omitempty`：没有映射时字段整个不出现 → 空 map（不是 null，UI 不用分两种空）。
+ * 值不是字符串的键直接跳过（不猜它在说什么）。
+ */
+internal fun parseModelMapping(json: JSONObject?): Map<String, String> {
+    if (json == null) {
+        return emptyMap()
+    }
+    val out = LinkedHashMap<String, String>()
+    json.keys().forEach { key ->
+        val value = json.optString(key).trim()
+        val name = key.trim()
+        if (name.isNotEmpty() && value.isNotEmpty()) {
+            out[name] = value
+        }
+    }
+    return out
+}
+
 /** 预设挂载请求体：`{"scope":"provider","key":<pid>,"ids":[…]}`（`request_presets.go:575-579`）。 */
 internal fun buildPresetAttachJson(providerId: String, ids: List<String>): String {
     val json = JSONObject()
@@ -1141,6 +1271,7 @@ private fun parseAccountObject(item: JSONObject): AccountQuotaRow? {
         allowedModels = item.optJSONArray("allowed_models")?.let { array ->
             (0 until array.length()).mapNotNull { array.optString(it).trim().ifBlank { null } }
         }.orEmpty(),
+        modelMapping = parseModelMapping(item.optJSONObject("model_mapping")),
         tags = item.optJSONArray("tags")?.let { array ->
             (0 until array.length()).mapNotNull { array.optString(it).trim().ifBlank { null } }
         }.orEmpty(),

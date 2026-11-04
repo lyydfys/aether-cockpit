@@ -17,6 +17,11 @@ import com.muyuchat.aether.runtime.BundleImportResult
 import com.muyuchat.aether.runtime.ChannelProbe
 import com.muyuchat.aether.runtime.ChannelToggleApiClient
 import com.muyuchat.aether.runtime.ChannelProbeApiClient
+import com.muyuchat.aether.runtime.CustomChannel
+import com.muyuchat.aether.runtime.CustomChannelDraft
+import com.muyuchat.aether.runtime.CustomChannelsApiClient
+import com.muyuchat.aether.runtime.validateCustomChannelBaseUrl
+import com.muyuchat.aether.runtime.validateCustomChannelDraft
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ManagementApiClient
@@ -162,6 +167,7 @@ enum class AccountEditKind {
     DETAILS,
     TAGS,
     NOTE,
+    MAPPING,
     PRESETS,
 }
 
@@ -218,6 +224,17 @@ sealed interface ChannelsAction {
 
     /** 备注：空字符串 = 清空。 */
     data class SetAccountNote(val accountId: String, val note: String) : ChannelsAction
+
+    /**
+     * 账号级模型映射（`POST /api/provider/accountmapping`）。
+     *
+     * `mapping` 是**整表替换**的目标状态（不是增量），空 map = 清除映射。
+     */
+    data class SetAccountMapping(
+        val providerId: String,
+        val accountId: String,
+        val mapping: Map<String, String>,
+    ) : ChannelsAction
 
     /** 打开预设弹窗前拉一次 `GET /api/presets`。 */
     data object LoadPresets : ChannelsAction
@@ -588,6 +605,8 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             is ChannelsAction.UpdateAccountDetails -> updateAccountDetails(action.accountId, action.patch)
             is ChannelsAction.SetAccountTags -> setAccountTags(action.accountId, action.tags)
             is ChannelsAction.SetAccountNote -> setAccountNote(action.accountId, action.note)
+            is ChannelsAction.SetAccountMapping ->
+                setAccountMapping(action.providerId, action.accountId, action.mapping)
             ChannelsAction.LoadPresets -> loadPresets()
             is ChannelsAction.AttachPresets -> attachPresets(action.providerId, action.ids)
             is ChannelsAction.BatchRefresh -> runBatch(BatchKind.REFRESH, action.ids)
@@ -1065,9 +1084,28 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
-    /** 挂载预设到渠道；`ids` 为空数组时服务端会解绑该渠道的全部预设。 */
-    fun attachPresets(providerId: String, ids: List<String>) {
+    /**
+     * 账号级模型映射：**整表替换**（`POST /api/provider/accountmapping` → `SetModelMapping`，
+     * `provider_api.go:698-717` + `env.go:585-602`）。
+     *
+     * 提交的 `mapping` 就是用户编辑完的**完整最终状态**（空 map = 清除映射），不是增量；
+     * 保存成功后先本地回填这一行，再由 [runAccountEdit] 刷新服务端真值。
+     */
+    fun setAccountMapping(providerId: String, accountId: String, mapping: Map<String, String>) {
         runAccountEdit(
+            accountId = accountId,
+            kind = AccountEditKind.MAPPING,
+            block = { status -> accountsClient.saveAccountMapping(status, providerId, accountId, mapping) },
+            apply = {
+                currentAccountRows().firstOrNull { it.accountId == accountId }?.let { row ->
+                    mergeAccountRow(row.copy(modelMapping = mapping.filterValues { value -> value.isNotBlank() }))
+                }
+            },
+        )
+    }
+
+    /** 挂载预设到渠道；`ids` 为空数组时服务端会解绑该渠道的全部预设。 */
+    fun attachPresets(providerId: String, ids: List<String>) {        runAccountEdit(
             accountId = providerId,
             kind = AccountEditKind.PRESETS,
             block = { status -> accountsClient.attachProviderPresets(status, providerId, ids) },
@@ -1543,3 +1581,164 @@ internal fun quotaReadLogLine(log: QuotaReadLog): String {
         }
     }
 }
+
+/* ========================================================================== */
+/* 自定义渠道（custom-channels）：注册一个新渠道行（与「自定义供应商」不同）   */
+/* ========================================================================== */
+
+sealed interface CustomChannelsUiState {
+    data object Idle : CustomChannelsUiState
+
+    data object Loading : CustomChannelsUiState
+
+    data class Ready(val channels: List<CustomChannel>) : CustomChannelsUiState
+
+    data class Failed(val code: String, val message: String) : CustomChannelsUiState
+}
+
+sealed interface CustomChannelProbeUiState {
+    data object Idle : CustomChannelProbeUiState
+
+    data object Probing : CustomChannelProbeUiState
+
+    data class Ok(val models: List<String>) : CustomChannelProbeUiState
+
+    data class Failed(val message: String) : CustomChannelProbeUiState
+}
+
+/**
+ * 自定义渠道的页面状态：列表 / 保存 / 删除 / 探测模型。
+ *
+ * 独立 ViewModel 的原因：ChannelsPage 的 `state` 由 GatewayHome 注入（写集不允许改它），
+ * 这些只属于「自定义渠道」弹窗的临时状态塞不进 `ChannelsUiState`。
+ */
+internal class CustomChannelsViewModel(application: Application) : AndroidViewModel(application) {
+    private val client = CustomChannelsApiClient()
+
+    private val _state = MutableStateFlow<CustomChannelsUiState>(CustomChannelsUiState.Idle)
+    val state: StateFlow<CustomChannelsUiState> = _state.asStateFlow()
+
+    private val _saving = MutableStateFlow(false)
+    val saving: StateFlow<Boolean> = _saving.asStateFlow()
+
+    private val _deleting = MutableStateFlow<String?>(null)
+    val deleting: StateFlow<String?> = _deleting.asStateFlow()
+
+    private val _probe = MutableStateFlow<CustomChannelProbeUiState>(CustomChannelProbeUiState.Idle)
+    val probe: StateFlow<CustomChannelProbeUiState> = _probe.asStateFlow()
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    fun load(status: GatewayStatus) {
+        if (!status.running) {
+            _state.value = CustomChannelsUiState.Failed("gateway_not_running", "网关未启动")
+            return
+        }
+        _state.value = CustomChannelsUiState.Loading
+        viewModelScope.launch {
+            _state.value = try {
+                CustomChannelsUiState.Ready(
+                    withContext(Dispatchers.IO) { client.list(status) },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                CustomChannelsUiState.Failed(e.code, e.message)
+            } catch (_: Exception) {
+                CustomChannelsUiState.Failed("network_error", "读取自定义渠道失败，请重试")
+            }
+        }
+    }
+
+    /** 保存成功后重新拉列表；失败把服务端原文放进 [error]，表单保留输入。 */
+    fun save(status: GatewayStatus, draft: CustomChannelDraft, onSaved: (CustomChannel) -> Unit) {
+        if (_saving.value) {
+            return
+        }
+        validateCustomChannelDraft(draft)?.let {
+            _error.value = it
+            return
+        }
+        _error.value = null
+        _saving.value = true
+        viewModelScope.launch {
+            try {
+                val saved = withContext(Dispatchers.IO) { client.save(status, draft) }
+                _state.value = CustomChannelsUiState.Ready(
+                    withContext(Dispatchers.IO) { client.list(status) },
+                )
+                onSaved(saved)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _error.value = e.message
+            } catch (_: Exception) {
+                _error.value = "保存失败，请重试"
+            } finally {
+                _saving.value = false
+            }
+        }
+    }
+
+    fun delete(status: GatewayStatus, id: String, onDeleted: () -> Unit) {
+        if (_deleting.value != null) {
+            return
+        }
+        _error.value = null
+        _deleting.value = id
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { client.delete(status, id) }
+                _state.value = CustomChannelsUiState.Ready(
+                    withContext(Dispatchers.IO) { client.list(status) },
+                )
+                onDeleted()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _error.value = e.message
+            } catch (_: Exception) {
+                _error.value = "删除失败，请重试"
+            } finally {
+                _deleting.value = null
+            }
+        }
+    }
+
+    /** 显式探测：Key 只用于这一次请求，不保存。 */
+    fun probe(status: GatewayStatus, baseUrl: String, apiKey: String) {
+        validateCustomChannelBaseUrl(baseUrl)?.let {
+            _probe.value = CustomChannelProbeUiState.Failed(it)
+            return
+        }
+        _probe.value = CustomChannelProbeUiState.Probing
+        viewModelScope.launch {
+            _probe.value = try {
+                val result = withContext(Dispatchers.IO) { client.probe(status, baseUrl, apiKey) }
+                if (result.ok) {
+                    CustomChannelProbeUiState.Ok(result.models)
+                } else {
+                    CustomChannelProbeUiState.Failed(
+                        result.error.ifBlank { "探测失败：上游没有返回模型清单" },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                CustomChannelProbeUiState.Failed(e.message)
+            } catch (_: Exception) {
+                CustomChannelProbeUiState.Failed("探测失败，请重试")
+            }
+        }
+    }
+
+    fun dismissProbe() {
+        _probe.value = CustomChannelProbeUiState.Idle
+    }
+
+    fun clearError() {
+        _error.value = null
+    }
+}
+
