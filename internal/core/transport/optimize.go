@@ -154,6 +154,25 @@ func (o *Optimizer) lookupDoH(ctx context.Context, host string) ([]string, error
 	return ips, nil
 }
 
+// orderByFamily 把 IPv4 排到 IPv6 前面，同族内保持原顺序（稳定）。
+//
+// 为什么不是"只用 IPv4"：纯 IPv6 环境（部分教育网/云主机）没有 A 记录，
+// 全砍掉就连不上了。这里只是调整优先级，不是过滤。
+func orderByFamily(ips []string) []string {
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if v := net.ParseIP(ip); v != nil && v.To4() != nil {
+			out = append(out, ip)
+		}
+	}
+	for _, ip := range ips {
+		if v := net.ParseIP(ip); v == nil || v.To4() == nil {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
 // lookupPins 取出某域名被钉住的 IP。
 func (o *Optimizer) lookupPins(host string) []string {
 	if o == nil || o.LookupPins == nil {
@@ -216,13 +235,28 @@ func (o *Optimizer) DialContext(ctx context.Context, network, addr string) (net.
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("解析 %s 没有结果", host)
 	}
+	// IPv4 优先：国内不少网络的 IPv6 属于"半通"——能解析、TCP 连不上或
+	// 握手极慢。直接按 DNS 顺序拨号会有一半概率撞上这种地址。
+	ips = orderByFamily(ips)
 	if !o.Race || len(ips) == 1 {
-		ip := ips[0]
-		c, derr := o.dialWith(ctx, network, net.JoinHostPort(ip, port), 10*time.Second)
-		if derr == nil {
-			o.pin(host, ip)
+		// 不竞速时也要有协议族级回退：v6 失败就试 v4，而不是就此失败。
+		var lastErr error
+		max := o.MaxCandidates
+		if max <= 0 || max > len(ips) {
+			max = len(ips)
 		}
-		return c, derr
+		for _, ip := range ips[:max] {
+			c, derr := o.dialWith(ctx, network, net.JoinHostPort(ip, port), 10*time.Second)
+			if derr == nil {
+				o.pin(host, ip)
+				return c, nil
+			}
+			lastErr = derr
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("全部候选地址建连失败")
+		}
+		return nil, lastErr
 	}
 
 	max := o.MaxCandidates

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -48,8 +49,21 @@ func NewFactory(globalProxy string) *Factory {
 	return &Factory{
 		GlobalProxy: strings.TrimSpace(globalProxy),
 		DialTimeout: 15 * time.Second,
-		EnableHTTP2: true,
+		EnableHTTP2: http2Enabled(),
 	}
+}
+
+// http2Enabled 读 AETHER_HTTP2 开关（默认开）。
+//
+// 为什么留这个口子：少数中转对 HTTP/2 支持不完整，表现为"偶发卡住"。
+// 出问题时用户没法自己判断，只能等我们发版；给一个环境变量开关能在
+// 现场立刻排除 h2 这个变量（设为 0 即全量走 HTTP/1.1）。
+func http2Enabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AETHER_HTTP2"))) {
+	case "0", "false", "off", "no":
+		return false
+	}
+	return true
 }
 
 func (f *Factory) globalProxyURL() (*url.URL, error) {
@@ -140,6 +154,12 @@ func (f *Factory) NewClientOpts(policy provider.NetworkPolicy, proxyOverride, tl
 			MinVersion:         tls.VersionTLS12,
 		},
 		ForceAttemptHTTP2: f.EnableHTTP2,
+		// 卡住读的保护：连上了但上游迟迟不给响应头时，不能让请求无限挂着。
+		//
+		// 典型场景是中转对 HTTP/2 支持不完整（h2 连接建立成功、stream 却被
+		// 静默丢弃），表现为"偶发卡死"。有响应头超时后，请求会失败并进入
+		// 正常的重试/换号路径，而不是一直转圈。
+		ResponseHeaderTimeout: 60 * time.Second,
 		// 关键：direct_force 下显式置 nil，彻底断开与 HTTP_PROXY 环境变量的任何联系。
 		Proxy: nil,
 	}
@@ -163,10 +183,15 @@ func (f *Factory) NewClientOpts(policy provider.NetworkPolicy, proxyOverride, tl
 		}
 
 	case provider.NetPolicySystem:
-		tr.Proxy = http.ProxyFromEnvironment
+		// 先看 Windows「Internet 选项」里的系统代理，再退回环境变量。
+		//
+		// Go 的 ProxyFromEnvironment 只认 HTTP_PROXY/HTTPS_PROXY，而用户在
+		// Clash / 公司代理里勾的"系统代理"只写注册表 —— 只读环境变量会
+		// 表现为"浏览器能上网、网关直连超时"，这是最难被用户自查的问题。
+		tr.Proxy = sysProxyFunc()
 
 	default:
-		tr.Proxy = http.ProxyFromEnvironment
+		tr.Proxy = sysProxyFunc()
 	}
 
 	// 单账号显式代理覆盖一切策略；"direct" 强制直连。

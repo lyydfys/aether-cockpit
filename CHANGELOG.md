@@ -1,5 +1,21 @@
 # 更新日志
 
+## 0.1.20（2026-11-05）
+
+### 网络层补齐三个缺口
+
+- **系统代理（Windows）**：`NetPolicySystem` 现在先读「Internet 选项」里的手动代理（`HKCU\...\Internet Settings` 的 `ProxyEnable/ProxyServer/ProxyOverride`），读不到才退回 `HTTP_PROXY` 环境变量。以前只认环境变量，用户在 Clash / 公司代理里勾了「系统代理」时，注册表写好了但 Go 读不到 —— 表现就是「浏览器能上网、网关直连超时」。本机实测读到 `http://127.0.0.1:7892` 与 17 条绕过规则。
+- **IPv6 → IPv4 回退**：解析结果按「IPv4 优先」排序，并在不竞速的路径上逐个试候选（v6 失败会继续试 v4）。国内不少网络 IPv6 半通（能解析、连不上/握手极慢），按 DNS 原序拨号有一半概率撞上去。纯 IPv6 环境不受影响（只是排序，不过滤）。
+- **HTTP/2 与卡死保护**：新增 `ResponseHeaderTimeout`（60s）—— 连上了但上游迟迟不给响应头时不再无限挂起，而是失败并进入正常的重试/换号路径（h2 半支持的中转常见这种「偶发卡死」）。另加 `AETHER_HTTP2=0` 环境变量可全量关闭 HTTP/2，便于现场排障。
+
+### 说明：三项「代差」复核
+
+对照当前代码复核了上一轮提到的三处差距，结论是**其中两项已在仓库里**：
+
+- 多机同步：`sync_merge.go`（三路合并）+ `sync_conditional.go`（If-Match 条件写）+ `sync_state.go`（底稿/冲突留档）已接进 `pushBackupToTarget`：加锁 → 合并 → 条件写 → 失败重试一次 → 提交底稿，冲突写到 `data/sync/conflicts-*.json`。
+- CLI：`cmd/cockpit/cli.go` 已提供 `status / providers / usage / quota / alerts / sessions / backup export|import` 子命令（`aether-cockpit-cli status` 实测可用）。
+- 订阅桥（PTY 驱动本机 `claude`）确实仍是缺口，属于 2–3 周量级，未在本轮范围。
+
 ## 0.1.19（2026-11-04）
 
 ### 自定义渠道（Local Provider Switch 式）
