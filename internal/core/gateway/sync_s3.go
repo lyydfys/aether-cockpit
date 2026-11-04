@@ -192,6 +192,11 @@ func s3GetObject(cfg *SyncS3Config, key string) ([]byte, string, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		// 明确的"远端还没有这个对象"：与"读失败"必须区分，
+		// 否则一次超时就会被当成不存在，用本机整包覆盖另一台机器。
+		return nil, "", errSyncRemoteAbsent
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("S3 返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(body[:minInt(len(body), 300)])))
 	}

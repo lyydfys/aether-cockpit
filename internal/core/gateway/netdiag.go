@@ -49,9 +49,9 @@ var dohEndpoints = []struct {
 
 // netDiagIPResult 是单个 IP 的探测结果。
 type netDiagIPResult struct {
-	IP   string `json:"ip"`
-	OK   bool   `json:"ok"`
-	Colo string `json:"colo,omitempty"`
+	IP         string `json:"ip"`
+	OK         bool   `json:"ok"`
+	Colo       string `json:"colo,omitempty"`
 	TCPMS      int64  `json:"tcp_ms"`
 	TCPError   string `json:"tcp_error,omitempty"`
 	TLSMS      int64  `json:"tls_ms,omitempty"`

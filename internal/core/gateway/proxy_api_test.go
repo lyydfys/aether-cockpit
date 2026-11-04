@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"aether-cockpit/internal/core/transport"
 	"aether-cockpit/internal/provider"
 )
 
@@ -52,7 +53,10 @@ func TestProxyRuntimeSwitch(t *testing.T) {
 		t.Fatalf("settings.GlobalProxy = %q", saved)
 	}
 	// 账号客户端被热替换。
-	tr := env.Client().Transport.(*http.Transport)
+	tr := transport.UnwrapTransport(env.Client().Transport)
+	if tr == nil {
+		t.Fatalf("transport = %T", env.Client().Transport)
+	}
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
 	if u, _ := tr.Proxy(req); u == nil || u.Host != "127.0.0.1:1080" {
 		t.Fatalf("账号客户端未应用代理: %v", u)

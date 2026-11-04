@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"aether-cockpit/internal/core/transport"
 	"aether-cockpit/internal/provider"
 )
 
@@ -33,7 +34,10 @@ func TestProviderAndAccountProxyPrecedence(t *testing.T) {
 	if got := env.Proxy(); got != prov {
 		t.Fatalf("渠道代理 = %q", got)
 	}
-	tr := env.Client().Transport.(*http.Transport)
+	tr := transport.UnwrapTransport(env.Client().Transport)
+	if tr == nil {
+		t.Fatalf("transport = %T", env.Client().Transport)
+	}
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
 	if u, _ := tr.Proxy(req); u == nil || u.Host != "127.0.0.1:8080" {
 		t.Fatalf("渠道代理未生效: %v", u)
@@ -46,7 +50,7 @@ func TestProviderAndAccountProxyPrecedence(t *testing.T) {
 	if got := env.Proxy(); got != "direct" {
 		t.Fatalf("账号代理 = %q", got)
 	}
-	tr = env.Client().Transport.(*http.Transport)
+	tr = transport.UnwrapTransport(env.Client().Transport)
 	if tr.Proxy != nil {
 		t.Fatalf("direct 覆盖后不应有代理")
 	}
@@ -67,7 +71,7 @@ func TestProviderAndAccountProxyPrecedence(t *testing.T) {
 	if got := env.Proxy(); got != "" {
 		t.Fatalf("渠道清空后覆盖 = %q", got)
 	}
-	tr = env.Client().Transport.(*http.Transport)
+	tr = transport.UnwrapTransport(env.Client().Transport)
 	if u, _ := tr.Proxy(req); u == nil || u.Host != "127.0.0.1:1080" {
 		t.Fatalf("未回落到全局代理: %v", u)
 	}
@@ -82,7 +86,10 @@ func TestDirectForceWithExplicitProxy(t *testing.T) {
 	_, _ = proxyCall(t, g, `{"proxy":"socks5://127.0.0.1:1080"}`)
 
 	// direct_force 默认忽略全局代理。
-	tr := env.Client().Transport.(*http.Transport)
+	tr := transport.UnwrapTransport(env.Client().Transport)
+	if tr == nil {
+		t.Fatalf("transport = %T", env.Client().Transport)
+	}
 	if tr.Proxy != nil {
 		t.Fatal("direct_force 不应走全局代理")
 	}
@@ -91,7 +98,7 @@ func TestDirectForceWithExplicitProxy(t *testing.T) {
 	if err := g.setProviderProxy("workbuddy-cn", &prov, nil); err != nil {
 		t.Fatal(err)
 	}
-	tr = env.Client().Transport.(*http.Transport)
+	tr = transport.UnwrapTransport(env.Client().Transport)
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
 	if u, _ := tr.Proxy(req); u == nil || u.Host != "127.0.0.1:8081" {
 		t.Fatalf("显式代理未覆盖 direct_force: %v", u)

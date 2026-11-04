@@ -33,11 +33,17 @@ func TestRebuildClientsHotSwap(t *testing.T) {
 		t.Fatal("代理账号的客户端应被替换")
 	}
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	tr := proxied.Client().Transport.(*http.Transport)
+	tr := transport.UnwrapTransport(proxied.Client().Transport)
+	if tr == nil {
+		t.Fatalf("transport = %T", proxied.Client().Transport)
+	}
 	if u, _ := tr.Proxy(req); u == nil || u.Host != "127.0.0.1:1080" {
 		t.Fatalf("proxy-first 未应用新代理: %v", u)
 	}
-	tr2 := direct.Client().Transport.(*http.Transport)
+	tr2 := transport.UnwrapTransport(direct.Client().Transport)
+	if tr2 == nil {
+		t.Fatalf("transport = %T", direct.Client().Transport)
+	}
 	if tr2.Proxy != nil {
 		if u, _ := tr2.Proxy(req); u != nil {
 			t.Fatalf("direct_force 不应走代理: %v", u)

@@ -256,6 +256,15 @@ func (m *Manager) Select(providerID string, opts SelectOptions) (*provider.Accou
 			if env.AccountID != stickyAccount.accountID {
 				continue
 			}
+			// 粘性不能绕过"这个号刚被限流/已达窗口 cap"：
+			// 排序已经把这类账号挪到末尾，粘性如果直接返回，等于把
+			// "先别用它"的策略整条废掉（sticky 命中率越高越严重）。
+			if cooling, _ := env.ModelCoolingDown(opts.Model); cooling {
+				break
+			}
+			if held, _, _ := env.CapHeld(now); held {
+				break
+			}
 			if affinity == "session" {
 				m.mu.Lock()
 				if b, ok := m.sticky[opts.SessionKey]; ok {
@@ -269,7 +278,7 @@ func (m *Manager) Select(providerID string, opts SelectOptions) (*provider.Accou
 		}
 		if affinity == "strict" {
 			return nil, ir.NewAPIError(ir.ErrCodeNoAccount,
-				"Stays=Strict：会话绑定的账号当前不可用，按设置不切换到其他账号").WithProvider(providerID)
+				"Stays=Strict：会话绑定的账号当前不可用（限流/额度 cap），按设置不切换到其他账号").WithProvider(providerID)
 		}
 	}
 

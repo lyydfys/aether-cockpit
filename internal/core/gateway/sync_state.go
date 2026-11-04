@@ -163,3 +163,9 @@ func (g *Gateway) archiveSyncConflicts(list []mergeConflict) string {
 
 // errSyncConflict 表示条件写失败（远端在合并之后又被改过）。
 var errSyncConflict = errors.New("远端内容在合并后发生变化")
+
+// errSyncRemoteAbsent 表示远端**明确**没有备份文件（404 / 不存在）。
+//
+// 与"读失败"必须严格区分：把超时、5xx、口令解不开也当成"不存在"，
+// 就会用本机整包无条件覆盖另一台机器的全部配置——那正是三路合并要防的事。
+var errSyncRemoteAbsent = errors.New("远端还没有备份文件")

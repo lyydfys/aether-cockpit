@@ -13,8 +13,9 @@ func proxyOf(t *testing.T, f *Factory, policy provider.NetworkPolicy) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr, ok := c.Transport.(*http.Transport)
-	if !ok {
+	// h2 降级包了一层 RoundTripper，取代理配置时要先剥掉。
+	tr := unwrapTransport(c.Transport)
+	if tr == nil {
 		t.Fatalf("transport = %T", c.Transport)
 	}
 	if tr.Proxy == nil {
@@ -70,7 +71,10 @@ func TestDirectOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := c.Transport.(*http.Transport)
+	tr := unwrapTransport(c.Transport)
+	if tr == nil {
+		t.Fatalf("transport = %T", c.Transport)
+	}
 	if tr.Proxy != nil {
 		t.Fatal("direct 覆盖应强制直连")
 	}

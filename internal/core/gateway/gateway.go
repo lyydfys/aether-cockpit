@@ -1668,6 +1668,9 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 
 	exclude := make(map[string]bool, 4)
 	var lastErr *ir.APIError
+	// 被跳过的"非 Chat 渠道"（cursor/windsurf/zed 这类只有账号与额度的通道）。
+	// 只用于最终错误文案，不改变候选顺序与跳过逻辑。
+	var nonChatChannels []string
 	attempts := 0
 
 	// 轨迹的候选顺序：每个绑定渠道的可用账号先铺开。
@@ -1720,6 +1723,7 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			}
 			chat, ok := provider.AsChat(p)
 			if !ok {
+				nonChatChannels = append(nonChatChannels, b.ProviderID)
 				continue
 			}
 
@@ -1837,7 +1841,7 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 				release()
 				ae := ir.AsAPIError(err).WithProvider(b.ProviderID)
 				lastErr = ae
-				g.penalize(env, ae)
+				g.penalizeModel(env, ae, b.UpstreamModel)
 				if trace != nil {
 					status, fail := traceFailCode(ae)
 					trace.addTry(env, b.UpstreamModel, tryStart, status, fail, false)
@@ -1923,9 +1927,36 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 	}
 
 	if lastErr == nil {
-		lastErr = ir.NewAPIError(ir.ErrCodeNoProvider, "所有候选渠道均不可用")
+		if len(nonChatChannels) > 0 {
+			// 有候选渠道、但没有一个能对话：这是能力缺口，不是"没有渠道"。
+			// 用 400 capability_unsupported 说清楚是哪几个渠道，避免用户只看到
+			// "所有候选渠道均不可用" 去猜。
+			lastErr = ir.NewAPIError(ir.ErrCodeUnsupported, nonChatChannelsMessage(nonChatChannels))
+		} else {
+			lastErr = ir.NewAPIError(ir.ErrCodeNoProvider, "所有候选渠道均不可用")
+		}
 	}
 	return nil, g.attachResetHint(lastErr, bindings)
+}
+
+// nonChatChannelsMessage 生成"非 Chat 渠道"的错误文案：
+// 去重、保留出现顺序、最多列 3 个，其余用「等 N 个」收口。
+func nonChatChannelsMessage(ids []string) string {
+	seen := make(map[string]bool, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		unique = append(unique, id)
+	}
+	shown := unique
+	if len(unique) > 3 {
+		shown = unique[:3]
+		return "渠道 " + strings.Join(shown, "、") + fmt.Sprintf(" 等 %d 个不支持对话（仅账号/额度）", len(unique))
+	}
+	return "渠道 " + strings.Join(shown, "、") + " 不支持对话（仅账号/额度）"
 }
 
 // attachResetHint 在全池冷却/耗尽时，把最近一次恢复时间作为 Retry-After。
@@ -2319,7 +2350,16 @@ func prepend(ctx context.Context, first ir.UnifiedStreamEvent, rest <-chan ir.Un
 }
 
 // penalize 根据错误类型给账号打上相应的惩罚状态。
+//
+// model 是本次失败请求的上游模型名：限流绝大多数是**模型级**的（同一个号上
+// 别的模型还能用），把这些失败记成整个账号冷却会让一个模型 429 就把账号
+// 打成"0 可用"。拿到模型名时记模型级；拿不到（媒体端点等）才退回账号级。
 func (g *Gateway) penalize(env *provider.AccountEnv, err *ir.APIError) {
+	g.penalizeModel(env, err, "")
+}
+
+// penalizeModel 是 penalize 的带模型版。
+func (g *Gateway) penalizeModel(env *provider.AccountEnv, err *ir.APIError, model string) {
 	// 上游明确说"额度耗尽"（不是普通限流）：把账号放进耗尽态，
 	// 别每两分钟再撞一次。重置时间上游没给时保守给 1 小时，用户可 Try now。
 	if quotaExhaustedHint(err.Message) {
@@ -2349,7 +2389,16 @@ func (g *Gateway) penalize(env *provider.AccountEnv, err *ir.APIError) {
 		if d := resetHintDuration(err.Message); d > cool {
 			cool = d
 		}
+		// 限流同时记两笔：
+		//   - 账号级：绝大多数上游的 429 是账号/Key 维度的配额（RPM/TPM），
+		//     只记模型级会让同一个号继续被其他模型撞出 429；
+		//   - 模型级：留一份细粒度状态，供排序（orderByModelRest）与
+		//     "这个号只有某个模型被打满"的场景使用。
+		// 过去只有账号级，rest.go 写好了却没接线；现在两笔都记。
 		env.MarkCoolingDown(cool, err.Message)
+		if strings.TrimSpace(model) != "" {
+			env.MarkModelCoolingDown(model, cool, err.Message)
+		}
 		// Rate limited=Goes to the back：仍有额度的账号排到队尾，冷却结束后
 		// 先让别的账号接，负载自然轮转（aether 的 Sink）。
 		if g.providerRoute(env.ProviderID).Sink {

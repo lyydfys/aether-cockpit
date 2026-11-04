@@ -38,12 +38,11 @@ func TestNewClientOptsInsecure(t *testing.T) {
 }
 
 func clientInsecure(c *http.Client) bool {
-	rt := unwrapHeaders(c.Transport)
-	tr, ok := rt.(*http.Transport)
-	if !ok || tr.TLSClientConfig == nil {
+	rt := transport.UnwrapTransport(unwrapHeaders(c.Transport))
+	if rt == nil || rt.TLSClientConfig == nil {
 		return false
 	}
-	return tr.TLSClientConfig.InsecureSkipVerify
+	return rt.TLSClientConfig.InsecureSkipVerify
 }
 
 // 渠道级 insecureTLS：保存 / 回显，并立刻重建账号客户端。

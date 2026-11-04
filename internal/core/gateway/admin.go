@@ -274,7 +274,10 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 			"network_policy": v.NetworkPolicy, "supported_auths": v.SupportedAuths,
 			// 前端据此显示「写入本机 IDE」「官方授权绑定」等能力入口；
 			// 这里手工拼装响应，漏掉它会让能力按钮永远不出现。
+			// capabilities 是内核能力集合；chat 单独再给一个布尔，
+			// 前端（渠道卡/接入弹窗）不必解析 capabilities 就能判断能否反代。
 			"capabilities":     v.Capabilities,
+			"chat":             v.Capabilities.Chat,
 			"auth_form_schema": authSchema, "webview_login_url": webviewLogin, "oauth": hasOAuth,
 			"host": v.Host, "key": v.Key, "keyList": v.KeyList, "accountModels": v.AccountModels, "agents": v.Agents,
 			"icon":                providerIconName(g.providerIcon(v.ID), v.ID),

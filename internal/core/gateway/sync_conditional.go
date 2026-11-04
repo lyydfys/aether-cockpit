@@ -31,9 +31,17 @@ func (t *syncTarget) getWithETag() (data []byte, etag string, err error) {
 		data, etag, err = davGetWithETag(t.webdav, name)
 		return data, etag, err
 	case "github":
-		// GitHub 的 sha 由 PutObject 内部查询；这里只取内容。
-		data, _, gerr := githubGetObject(t.github, t.filename())
-		return data, "", gerr
+		// GitHub 的 sha 就是它的版本标识：读时把它当 etag 返回，写时按它做
+		// 条件写。若读之后别的机器又提交过，sha 已经变了，GitHub 会返回 409，
+		// 我们按冲突重读——不再"自己重读 sha 再覆盖"。
+		data, sha, gerr := githubGetObject(t.github, t.filename())
+		if gerr != nil {
+			if strings.Contains(gerr.Error(), "404") || strings.Contains(gerr.Error(), "不存在") {
+				return nil, "", errSyncRemoteAbsent
+			}
+			return nil, "", gerr
+		}
+		return data, "sha:" + sha, nil
 	default:
 		data, remote, gerr := t.Get()
 		return data, remote, gerr
@@ -51,9 +59,12 @@ func (t *syncTarget) putIfMatch(data []byte, ifMatch string) (remote string, eta
 		etag, err = davPutIfMatch(t.webdav, name, data, ifMatch)
 		return davRemoteURL(t.webdav, name), etag, err
 	case "github":
-		// GitHub 的 Put 内部先取 sha 再写：这本身就是条件写，
-		// 但窗口极小且 409 会被当成错误返回，这里沿用其语义。
-		remote, err := githubPutObject(t.github, t.filename(), data)
+		// 用读时拿到的 sha 做条件写：sha 不符时 GitHub 返回 409，转成冲突。
+		sha := strings.TrimPrefix(ifMatch, "sha:")
+		remote, err := githubPutObjectIfMatch(t.github, t.filename(), data, sha)
+		if errors.Is(err, errSyncConflict) {
+			return "", "", errSyncConflict
+		}
 		return remote, "", err
 	default:
 		// S3 等：没有条件 PUT。写完返回 errBlindWrite，由调用方标记 Blind。
@@ -84,7 +95,9 @@ func davGetWithETag(cfg *WebDAVConfig, name string) ([]byte, string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, "", fmt.Errorf("远端还没有备份文件（%s）", name)
+		// 明确的"远端还没有这个文件"。与"读失败"必须区分开：
+		// 前者可以安全地首次写入，后者一旦当成不存在就会覆盖另一台机器。
+		return nil, "", errSyncRemoteAbsent
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, "", fmt.Errorf("WebDAV 下载失败：远端返回 %s", resp.Status)
@@ -113,6 +126,11 @@ func davPutIfMatch(cfg *WebDAVConfig, name string, data []byte, ifMatch string) 
 	req.Header.Set("Content-Type", "application/json")
 	if ifMatch != "" {
 		req.Header.Set("If-Match", ifMatch)
+	} else {
+		// 没有已知版本时用 If-None-Match: * 表达"我认为远端不存在"：
+		// 若另一台机器刚创建了它，服务端返回 412，我们走冲突重读，
+		// 而不是无条件把它盖掉。
+		req.Header.Set("If-None-Match", "*")
 	}
 	resp, err := client.Do(req)
 	if err != nil {

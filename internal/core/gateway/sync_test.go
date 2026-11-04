@@ -136,15 +136,15 @@ func TestGitHubPutGetRoundTrip(t *testing.T) {
 		}
 		switch r.Method {
 		case http.MethodGet:
-			if r.Header.Get("Accept") == "application/vnd.github.raw" {
-				_, _ = w.Write(stored)
-				return
-			}
 			if stored == nil {
 				w.WriteHeader(404)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]string{"sha": sha})
+			// 生产代码取 JSON（要用 sha 做条件写），不再取 raw 内容。
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"sha":     sha,
+				"content": base64.StdEncoding.EncodeToString(stored),
+			})
 		case http.MethodPut:
 			var body struct {
 				Content string `json:"content"`
@@ -176,8 +176,9 @@ func TestGitHubPutGetRoundTrip(t *testing.T) {
 	if err != nil || string(got) != "v2" {
 		t.Fatalf("get = %q, %v", got, err)
 	}
-	if !strings.Contains(remote, "github://owner/repo/dir/backup.json") {
-		t.Errorf("remote = %q", remote)
+	// 第二个返回值现在是**版本标识（sha）**，不再是 URL：条件写要用它。
+	if remote == "" {
+		t.Error("应返回内容版本（sha）")
 	}
 }
 

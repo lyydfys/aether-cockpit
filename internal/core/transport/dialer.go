@@ -219,8 +219,16 @@ func (f *Factory) NewClientOpts(policy provider.NetworkPolicy, proxyOverride, tl
 		tr = newUTLSTransport(tr, tlsProfile, f.InsecureSkipVerify || insecure)
 	}
 
+	// HTTP/2 降级：个别中转对 h2 支持不完整（能建连、stream 被吞），
+	// 表现为"偶发卡住"。这里包一层：h2 专属错误自动用 h1 重试一次，
+	// 并记住该 host 十分钟内不再用 h2。用户不需要理解 ALPN。
+	var rt http.RoundTripper = tr
+	if tr.ForceAttemptHTTP2 {
+		rt = newH2Fallback(tr)
+	}
+
 	return &http.Client{
-		Transport: tr,
+		Transport: rt,
 		Jar:       jar,
 		// 不设全局 Timeout：流式对话可能需要长时间保持连接。
 		// 由 ctx 控制生命周期的做法更正确。

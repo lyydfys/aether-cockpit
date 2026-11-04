@@ -156,8 +156,17 @@ func (g *Gateway) pushBackupToTarget() (int, string, error) {
 	st := g.loadSyncState()
 
 	// 远端可能还不存在（首次同步）：那不是错误。
+	//
+	// 但"读不出来"（超时 / 5xx / 口令不符 / 返回乱码）**绝不能**当成"不存在"：
+	// 一旦按不存在处理，合并会退化成"用本机整包覆盖"，另一台机器的配置
+	// 就被一次网络抖动抹掉了。这种情况直接中止，让用户重试。
 	remotePlain, etag, getErr := g.pullPlainForMerge(t)
 	if getErr != nil {
+		if !errors.Is(getErr, errSyncRemoteAbsent) {
+			wrapped := fmt.Errorf("读取远端备份失败，已中止同步以避免覆盖另一台机器的配置: %w", getErr)
+			g.noteSyncResult(0, "", wrapped)
+			return 0, "", wrapped
+		}
 		remotePlain, etag = nil, ""
 	}
 
