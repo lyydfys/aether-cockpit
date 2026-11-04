@@ -128,6 +128,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     var showSessions by remember { mutableStateOf(false) }
     var showWake by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
+    var showOnboard by remember { mutableStateOf(false) }
     var showPlugins by remember { mutableStateOf(false) }
     var showClients by remember { mutableStateOf(false) }
     var showAgents by remember { mutableStateOf(false) }
@@ -275,11 +276,10 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     ) { innerPadding ->
         // safeDrawing 不含 IME inset：键盘弹出时页面底部输入框会被遮住，
         // 这里补一次 imePadding（对话框是独立 window，另有自己的处理）。
-        // 底部再预留球高 + 边距，保证默认停在右下角时不压住列表最后一张卡。
+        // 列表底部由各页 contentPadding 留出悬浮球安全区，页面根容器不再常驻留白。
         val modifier = Modifier
             .padding(innerPadding)
             .imePadding()
-            .padding(bottom = BubbleReservedBottom)
         GatewayBubble(
             status = state.status,
             overlayVisible = overlayVisible,
@@ -358,6 +358,34 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                         showPlugins = false
                         selectedTab = MobileTab.OVERVIEW
                     },
+                    modifier = modifier,
+                )
+            }            showOnboard -> {
+                val onboardViewModel: ChannelsViewModel = viewModel()
+                val onboardState by onboardViewModel.state.collectAsStateWithLifecycle()
+                val onboardQoder by onboardViewModel.qoderLogin.collectAsStateWithLifecycle()
+                val onboardBundle = rememberBundleImportHost(
+                    onPreview = onboardViewModel::previewAccountBundle,
+                    onImport = onboardViewModel::importAccountBundle,
+                )
+                OnboardPage(
+                    status = state.status,
+                    providers = (onboardState as? ChannelsUiState.Ready)?.providers.orEmpty(),
+                    accounts = (onboardState as? ChannelsUiState.Ready)?.accounts.orEmpty(),
+                    qoderLoginState = onboardQoder,
+                    onStartQoderLogin = onboardViewModel::startQoderLogin,
+                    onOpenQoderLogin = { url ->
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        }.isSuccess
+                    },
+                    onCancelQoderLogin = onboardViewModel::cancelQoderLogin,
+                    onDismissQoderLogin = onboardViewModel::dismissQoderLogin,
+                    onPickBundle = onboardBundle::onPick,
+                    onImportBundle = onboardBundle::onPromptImport,
+                    bundleHost = { onboardBundle.Host() },
+                    onRefresh = { onboardViewModel.onAction(ChannelsAction.Refresh) },
+                    onBack = { showOnboard = false },
                     modifier = modifier,
                 )
             }            showLibrary -> {
@@ -688,16 +716,10 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 val channelsToggling by channelsViewModel.toggling.collectAsStateWithLifecycle()
                 val channelsModels by channelsViewModel.models.collectAsStateWithLifecycle()
                 val channelsToggleError by channelsViewModel.toggleError.collectAsStateWithLifecycle()
-                var pendingBundle by remember { mutableStateOf<Uri?>(null) }
-                var askPassphrase by remember { mutableStateOf<BundlePassphrasePurpose?>(null) }
-                val bundlePicker = rememberLauncherForActivityResult(
-                    ActivityResultContracts.OpenDocument(),
-                ) { uri ->
-                    if (uri != null) {
-                        pendingBundle = uri
-                        askPassphrase = BundlePassphrasePurpose.PREVIEW
-                    }
-                }
+                val bundleImport = rememberBundleImportHost(
+                    onPreview = channelsViewModel::previewAccountBundle,
+                    onImport = channelsViewModel::importAccountBundle,
+                )
                 ChannelsPage(
                     status = state.status,
                     state = channelsState,
@@ -714,8 +736,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     },
                     onCancelQoderLogin = channelsViewModel::cancelQoderLogin,
                     onDismissQoderLogin = channelsViewModel::dismissQoderLogin,
-                    onPickBundle = { bundlePicker.launch(arrayOf("*/*")) },
-                    onImportBundle = { askPassphrase = BundlePassphrasePurpose.IMPORT },
+                    onPickBundle = bundleImport::onPick,
+                    onImportBundle = bundleImport::onPromptImport,
                     onDismissBundle = channelsViewModel::dismissBundlePreview,
                     probes = channelProbes,
                     probing = channelProbing,
@@ -725,9 +747,10 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onLoadModels = channelsViewModel::loadModels,
                     onDismissModels = channelsViewModel::dismissModels,
                     onToggleProvider = channelsViewModel::toggleProvider,
+                    onOpenOnboard = { showOnboard = true },
                     modifier = modifier,
                 )
-                val purpose = askPassphrase
+                bundleImport.Host()
                 // 启停失败：必须让用户看到错误码，而不是点了没反应。
                 channelsToggleError?.let { (code, message) ->
                     McaDialog(
@@ -746,32 +769,6 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                                 style = McaButtonStyle.Outlined,
                             ) { Text("知道了") }
                         },
-                    )
-                }
-                if (purpose != null) {
-                    val importing = purpose == BundlePassphrasePurpose.IMPORT
-                    BundlePassphraseDialog(
-                        onConfirm = { passphrase ->
-                            when (purpose) {
-                                BundlePassphrasePurpose.PREVIEW ->
-                                    pendingBundle?.let { channelsViewModel.previewAccountBundle(it, passphrase) }
-                                BundlePassphrasePurpose.IMPORT ->
-                                    channelsViewModel.importAccountBundle(passphrase)
-                            }
-                            askPassphrase = null
-                            pendingBundle = null
-                        },
-                        onDismiss = {
-                            askPassphrase = null
-                            pendingBundle = null
-                        },
-                        title = if (importing) "确认导入账号包" else "输入账号包口令",
-                        detail = if (importing) {
-                            "口令只用于本次导入，不会保存或上传。导入会把账号写入本机账号池。"
-                        } else {
-                            "口令只用于本次本地解密，不会保存或上传。"
-                        },
-                        confirmLabel = if (importing) "确认导入" else "解密预览",
                     )
                 }
             }
@@ -836,6 +833,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                         WorkspaceAction.Sessions -> showSessions = true
                         WorkspaceAction.Wake -> showWake = true
                         WorkspaceAction.Library -> showLibrary = true
+                        WorkspaceAction.Onboard -> showOnboard = true
                         WorkspaceAction.Plugins -> showPlugins = true
                         WorkspaceAction.Clients -> showClients = true
                         WorkspaceAction.Agents -> showAgents = true

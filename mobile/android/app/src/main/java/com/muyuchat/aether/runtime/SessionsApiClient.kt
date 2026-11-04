@@ -27,6 +27,8 @@ data class SessionRow(
     val messages: Int,
     val toolCalls: Int,
     val cost: Double,
+    /** 会话文件字节数；桌面行右侧显示 `fmtSize(size)`（`sessions.js:200`）。缺失时为 0。 */
+    val sizeBytes: Long = 0L,
 )
 
 data class SessionList(
@@ -177,5 +179,6 @@ private fun parseSessionRow(item: JSONObject): SessionRow? {
         messages = item.optInt("messages", 0).coerceAtLeast(0),
         toolCalls = item.optInt("tool_calls", 0).coerceAtLeast(0),
         cost = item.optDouble("cost", 0.0).coerceAtLeast(0.0),
+        sizeBytes = item.optLong("size", 0L).coerceAtLeast(0L),
     )
 }

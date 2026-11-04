@@ -15,6 +15,13 @@ enum class LibraryKind(val label: String) {
     SKILL("技能"),
     MCP("MCP"),
     SUBAGENT("子代理"),
+    ;
+
+    companion object {
+        /** 页签状态是 Saveable 的字符串，回来时找不到就退回「指令」（桌面默认页签）。 */
+        fun fromName(name: String): LibraryKind =
+            entries.firstOrNull { it.name == name } ?: PROMPT
+    }
 }
 
 /**

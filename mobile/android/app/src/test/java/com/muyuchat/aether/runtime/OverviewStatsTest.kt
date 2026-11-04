@@ -5,96 +5,187 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 概览页四张统计卡的数据映射。
+ * 概览页 KPI 的数据映射（对标桌面 `overview.js:157-164`）。
  *
- * 口径必须与「用量」页一致（否则同一台手机上两个页面会给出不同数字）：
- * - 请求数 = `summary.calls`
- * - Token  = `inputTokens + outputTokens`（**不含缓存**，与「用量」页一致）
- * - 成本   = `summary.cost`，格式 `$0` / `$0.0000`
- * - 已启用账号 = `/api/providers` 里 readyCount 之和
+ * 四条口径必须与桌面一致，否则同一台手机上两页会打架：
+ * - 可用账号 = `/api/providers` 的 readyCount 之和；注解是「真实登录态 / 测试渠道」拆分
+ * - 今日请求 = `summary.calls`；注解「失败 N · 成功率 X%」
+ * - 今日 Token = `input + output + cache_read + cache_write`（桌面 `overview.js:148-149`）
+ * - 会话     = `GET /api/sessions/stats` 的 count；注解「本机记录 · 只读」
  */
 class OverviewStatsTest {
     private fun summary(
         calls: Long = 0,
+        errors: Long = 0,
         input: Long = 0,
         output: Long = 0,
+        cacheRead: Long = 0,
+        cacheWrite: Long = 0,
         cost: Double = 0.0,
-        cacheRead: Long = 999,
+        unpriced: Long = 0,
     ) = UsageSummary(
         period = "today",
         calls = calls,
-        errors = 0,
+        errors = errors,
         inputTokens = input,
         outputTokens = output,
         cacheReadTokens = cacheRead,
-        cacheWriteTokens = 0,
+        cacheWriteTokens = cacheWrite,
         cost = cost,
         models = emptyList(),
         series = emptyList(),
+        unpriced = unpriced,
+    )
+
+    private fun provider(
+        id: String,
+        accounts: Int,
+        ready: Int,
+        name: String = id,
+    ) = ProviderSummary(
+        id = id,
+        name = name,
+        description = "",
+        accountCount = accounts,
+        readyCount = ready,
+        ready = ready > 0,
+        off = false,
+        brandColor = "",
     )
 
     @Test
-    fun mapsUsageAndAccounts() {
-        val stats = overviewStats(usage = summary(calls = 7, input = 1200, output = 300, cost = 0.0123), enabledAccounts = 2)
-        assertEquals("7", stats.calls)
-        // 1200 + 300 = 1500 → 1.5K；缓存 999 **不计入**（与用量页口径一致）
-        assertEquals("1.5K", stats.tokens)
-        assertEquals("$0.0123", stats.cost)
+    fun mapsFourKpisWithDesktopTokenScope() {
+        val stats = overviewStats(
+            usage = summary(calls = 7, errors = 2, input = 1200, output = 300, cacheRead = 999, cost = 0.0123),
+            providers = listOf(provider("claude", accounts = 3, ready = 2)),
+            sessions = 12,
+            nowMs = 1_700_000_000_000L,
+        )
         assertEquals("2", stats.accounts)
-        assertTrue(stats.captions.all { it.isNotBlank() })
+        assertEquals("7", stats.calls)
+        // 1200 + 999(缓存读) + 0 + 300 = 2499 → 2.5K（桌面把缓存算进 Token 总量）
+        assertEquals("2.5K", stats.tokens)
+        assertEquals("12", stats.sessions)
+        assertEquals(1_700_000_000_000L, stats.updatedAtMs)
+        assertEquals(4, stats.captions.size)
+    }
+
+    @Test
+    fun captionsCarryTheDesktopWording() {
+        val stats = overviewStats(
+            usage = summary(calls = 10, errors = 2, input = 100, cacheRead = 50, cost = 0.5, unpriced = 3),
+            providers = listOf(provider("claude", accounts = 2, ready = 2)),
+            sessions = 1,
+        )
+        assertTrue(stats.captions[0], stats.captions[0].contains("真实登录态"))
+        assertTrue(stats.captions[0], stats.captions[0].contains("测试渠道"))
+        assertTrue(stats.captions[1], stats.captions[1].contains("失败 2"))
+        assertTrue(stats.captions[1], stats.captions[1].contains("80.0%"))
+        assertTrue(stats.captions[2], stats.captions[2].contains("缓存"))
+        assertTrue(stats.captions[2], stats.captions[2].contains("命中"))
+        assertTrue(stats.captions[2], stats.captions[2].contains("成本"))
+        assertTrue(stats.captions[2], stats.captions[2].contains("未计价 3 次"))
+        assertEquals("本机记录 · 只读", stats.captions[3])
+    }
+
+    @Test
+    fun testProvidersAreCountedSeparately() {
+        val stats = overviewStats(
+            usage = summary(calls = 1),
+            providers = listOf(
+                provider("claude", accounts = 2, ready = 2),
+                provider("mock-fast", accounts = 1, ready = 1),
+            ),
+            sessions = 0,
+        )
+        assertTrue(stats.captions[0], stats.captions[0].contains("2 个真实登录态"))
+        assertTrue(stats.captions[0], stats.captions[0].contains("1 个测试渠道"))
+        assertEquals("3", stats.accounts)
+        assertEquals("0", stats.sessions)
     }
 
     @Test
     fun zeroValuesRenderAsZeroNotPlaceholder() {
-        val stats = overviewStats(usage = summary(), enabledAccounts = 0)
+        val stats = overviewStats(usage = summary(), providers = emptyList(), sessions = 0)
         assertEquals("0", stats.calls)
         assertEquals("0", stats.tokens)
-        assertEquals("$0", stats.cost)
         assertEquals("0", stats.accounts)
-        // 关键：不许出现阶段占位
-        stats.captions.forEach { c ->
-            assertTrue("不能退回阶段占位：$c", !c.contains("Stage"))
+        assertEquals("0", stats.sessions)
+        stats.captions.forEach { caption ->
+            assertTrue("不能退回阶段占位：$caption", !caption.contains("Stage"))
         }
     }
 
     @Test
-    fun usageFailureOnlyAffectsItsOwnCards() {
-        val stats = overviewStats(usage = null, enabledAccounts = 3, usageError = "读取失败")
-        assertEquals("—", stats.calls)
-        assertEquals("—", stats.tokens)
-        assertEquals("—", stats.cost)
-        // 账号那一侧照常显示真实值
-        assertEquals("3", stats.accounts)
-        assertTrue(stats.captions[0].contains("读不到"))
-        assertTrue(!stats.captions[3].contains("读不到"))
-    }
+    fun eachFailureOnlyAffectsItsOwnKpi() {
+        val usageFail = overviewStats(
+            usage = null,
+            providers = listOf(provider("claude", accounts = 1, ready = 1)),
+            sessions = 4,
+            usageError = "读取失败",
+        )
+        assertEquals("—", usageFail.calls)
+        assertEquals("—", usageFail.tokens)
+        assertEquals("1", usageFail.accounts)
+        assertEquals("4", usageFail.sessions)
+        assertEquals("读不到", usageFail.captions[1])
 
-    @Test
-    fun accountsFailureOnlyAffectsItsOwnCard() {
-        val stats = overviewStats(
-            usage = summary(calls = 2, input = 10, output = 5, cost = 0.5),
-            enabledAccounts = null,
+        val accountsFail = overviewStats(
+            usage = summary(calls = 2, input = 10, output = 5),
+            providers = null,
+            sessions = 1,
             accountsError = "读取失败",
         )
-        assertEquals("2", stats.calls)
-        assertEquals("—", stats.accounts)
-        assertTrue(stats.captions[3].contains("读不到"))
-        assertTrue(!stats.captions[1].contains("读不到"))
+        assertEquals("—", accountsFail.accounts)
+        assertEquals("读不到", accountsFail.captions[0])
+        assertEquals("2", accountsFail.calls)
+
+        val sessionsFail = overviewStats(
+            usage = summary(calls = 2),
+            providers = emptyList(),
+            sessions = null,
+            sessionsError = "读取失败",
+        )
+        assertEquals("—", sessionsFail.sessions)
+        assertEquals("读不到", sessionsFail.captions[3])
     }
 
     @Test
-    fun bothFailuresShowDashesEverywhere() {
-        val stats = overviewStats(usage = null, enabledAccounts = null)
-        assertEquals(listOf("—", "—", "—", "—"), listOf(stats.calls, stats.tokens, stats.cost, stats.accounts))
+    fun allThreeFailuresShowDashesEverywhere() {
+        val stats = overviewStats(
+            usage = null,
+            providers = null,
+            sessions = null,
+            usageError = "x",
+            accountsError = "y",
+            sessionsError = "z",
+        )
+        assertEquals(
+            listOf("—", "—", "—", "—"),
+            listOf(stats.accounts, stats.calls, stats.tokens, stats.sessions),
+        )
+        assertEquals(listOf("读不到", "读不到", "读不到", "读不到"), stats.captions)
     }
 
     @Test
-    fun captionsCarryTheScope() {
-        val stats = overviewStats(usage = summary(calls = 1, input = 1, output = 1), enabledAccounts = 1)
-        // 前三张是"今日"口径，第四张是"已启用"
-        assertTrue(stats.captions[0].contains("今日"))
-        assertTrue(stats.captions[1].contains("今日"))
-        assertTrue(stats.captions[2].contains("今日"))
-        assertTrue(stats.captions[3].contains("已启用"))
+    fun testProviderRuleMatchesDesktop() {
+        // 桌面 overview.js:30：`/^mock/.test(id) || id === 'openai-compat'`——只看前缀
+        assertTrue(isTestProviderId("mock-fast"))
+        assertTrue(isTestProviderId("openai-compat"))
+        assertTrue(!isTestProviderId("claude"))
+        // 只认前缀：名字里含 mock 但不在开头的渠道不算测试渠道
+        assertTrue(!isTestProviderId("acme-mock"))
+    }
+
+    @Test
+    fun ratesBecomeNullWhenTheDenominatorIsZero() {
+        assertEquals(null, usageSuccessRatePercent(0, 0))
+        assertEquals(80.0, usageSuccessRatePercent(10, 2)!!, 0.0001)
+        // 脏数据（失败数 > 请求数）不能给出负数
+        assertEquals(0.0, usageSuccessRatePercent(2, 5)!!, 0.0001)
+        assertEquals(null, usageCacheHitRatePercent(0, 0, 0))
+        assertEquals(33.3333, usageCacheHitRatePercent(100, 50, 0)!!, 0.001)
+        assertEquals("—", percentText(null))
+        assertEquals("80.0%", percentText(80.0))
     }
 }

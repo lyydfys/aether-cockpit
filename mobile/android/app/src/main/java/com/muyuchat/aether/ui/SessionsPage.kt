@@ -4,7 +4,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,10 +34,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
-import com.muyuchat.aether.runtime.sessionContentSearchLine
-import com.muyuchat.aether.runtime.shortenSessionId
-import com.muyuchat.aether.runtime.sessionStatsLine
-import com.muyuchat.aether.runtime.sessionStatsTokensLine
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.SessionRow
 import com.muyuchat.aether.runtime.SessionTranscriptPart
@@ -97,7 +92,7 @@ internal fun SessionsPage(
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
@@ -155,42 +150,27 @@ internal fun SessionsPage(
                 }
             }
         }
-        // 空态解释排在统计之前：这是手机上最常见、也最容易被误读成故障的状态。
-        item { DeepSectionTitle("为什么这里通常是空的") }
+        // 桌面 KPI 行（sessions.js:152-157）：会话总数 / 客户端 / 近 7 天活跃 / 当前筛选。
+        val readyList = (state as? SessionsUiState.Ready)?.sessions.orEmpty()
+        val readyAgents = (state as? SessionsUiState.Ready)?.agents.orEmpty()
         item {
             DeepCard {
-                DeepCardBody(
-                    "会话列表来自 Claude Code / Codex / Gemini 等 Agent 写在桌面用户目录里的文件。" +
-                        "Android 应用只能读自己的沙箱，也不会去扫描其它 App 的私有目录，所以这里是空的——" +
-                        "这不是故障，本页与 Windows 数据之间也没有任何同步通路。",
+                SessionKpiRow("会话总数", readyList.size.toString(), "本机可读取的会话文件")
+                SessionKpiRow(
+                    "客户端",
+                    readyAgents.size.toString(),
+                    readyAgents.joinToString(" · ") { it.label }.ifBlank { "—" },
                 )
-            }
-        }
-        // 会话统计：只有计数与 token 分布，不解析 top/shape 里的会话级明细。
-        item { DeepSectionTitle("本机会话统计") }
-        item {
-            DeepCard {
-                when (val current = stats) {
-                    SessionStatsUiState.Idle, SessionStatsUiState.Running -> DeepCardBody("正在读取…")
-                    is SessionStatsUiState.Failed -> Text(
-                        text = if (current.code == "gateway_not_running") {
-                            "网关未启动，读不到统计。"
-                        } else {
-                            "${current.message}（错误码：${current.code}）"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    is SessionStatsUiState.Ready -> {
-                        Text(
-                            text = sessionStatsLine(current.stats),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        DeepCardBody(sessionStatsTokensLine(current.stats))
-                    }
-                }
+                SessionKpiRow(
+                    "近 7 天活跃",
+                    ((stats as? SessionStatsUiState.Ready)?.stats?.sessions ?: 0).toString(),
+                    "活跃记录 · 最近 7 天",
+                )
+                SessionKpiRow(
+                    "当前筛选",
+                    readyList.count { sessionMatches(it, agentFilter, query) }.toString(),
+                    readyAgents.firstOrNull { it.id == agentFilter }?.label ?: "全部客户端",
+                )
             }
         }
         if (currentView == SessionView.USAGE) {
@@ -223,92 +203,61 @@ internal fun SessionsPage(
                 )
             }
             is SessionsUiState.Ready -> {
-                item { SearchField(query, onQueryChange, placeholder = "搜索标题或目录") }
+                // 桌面卡片头（sessions.js:159-182）：标题「会话列表」+「N 个」+ 搜索 + 客户端页签（带计数）+ 刷新。
                 item {
-                    // 内容检索：只回答"哪些会话提到过"，**不展示正文片段**
-                    //（服务端命中体里 before/match/after 就是会话正文，手机端不碰）。
-                    Column(Modifier.fillMaxWidth()) {
+                    DeepSectionTitle(
+                        text = "会话列表",
+                        trailing = sessionCountLabel(state.sessions.size),
+                        action = {
+                            McaIconButton(
+                                contentDescription = "刷新会话",
+                                onClick = onRefresh,
+                                enabled = state !is SessionsUiState.Loading,
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_refresh),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(McaIconSize.Optical.Action),
+                                )
+                            }
+                        },
+                    )
+                }
+                item { SearchField(query, onQueryChange, placeholder = "搜索标题、项目路径或客户端…") }
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         McaButton(
-                            onClick = onSearchContent,
-                            style = McaButtonStyle.Outlined,
-                            enabled = query.isNotBlank() && contentSearch !is SessionContentUiState.Running,
-                        ) {
-                            Text(if (contentSearch is SessionContentUiState.Running) "检索中…" else "在会话内容里搜索")
-                        }
-                        when (val current = contentSearch) {
-                            SessionContentUiState.Idle, SessionContentUiState.Running -> Unit
-                            is SessionContentUiState.Failed -> {
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    text = "${current.message}（错误码：${current.code}）",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                            is SessionContentUiState.Ready -> {
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    text = sessionContentSearchLine(current.result),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                                if (current.result.hits.isNotEmpty()) {
-                                    Text(
-                                        text = current.result.hits.joinToString("、") {
-                                            shortenSessionId(it.sessionId)
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                Text(
-                                    text = "只显示命中的会话，不显示会话正文。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                McaButton(
-                                    onClick = onDismissContentSearch,
-                                    style = McaButtonStyle.Text,
-                                ) { Text("收起结果") }
-                            }
-                        }
-                    }
-                }
-                if (state.agents.isNotEmpty()) {
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
+                            onClick = { onAgentChange("") },
+                            style = if (agentFilter.isEmpty()) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                        ) { Text("全部 ${state.sessions.size}") }
+                        state.agents.forEach { agent ->
                             McaButton(
-                                onClick = { onAgentChange("") },
-                                style = if (agentFilter.isEmpty()) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                            ) { Text("全部") }
-                            state.agents.forEach { agent ->
-                                McaButton(
-                                    onClick = { onAgentChange(agent.id) },
-                                    style = if (agentFilter == agent.id) {
-                                        McaButtonStyle.Primary
-                                    } else {
-                                        McaButtonStyle.Outlined
-                                    },
-                                ) { Text(agent.label) }
-                            }
+                                onClick = { onAgentChange(agent.id) },
+                                style = if (agentFilter == agent.id) {
+                                    McaButtonStyle.Primary
+                                } else {
+                                    McaButtonStyle.Outlined
+                                },
+                            ) { Text("${agent.label} ${state.sessions.count { it.agent == agent.id }}") }
                         }
                     }
                 }
+                val visible = state.sessions.filter { sessionMatches(it, agentFilter, query) }
                 if (state.sessions.isEmpty()) {
                     item {
                         DeepStateCard(
-                            title = if (query.isBlank()) "本机索引里没有会话记录" else "没有匹配「$query」的会话",
+                            title = if (query.isBlank()) "还没有可读取的会话" else "没有匹配「$query」的会话",
                             detail = if (query.isBlank()) {
-                                "手机上是正常状态：会话文件在桌面端的用户目录里，这里读不到。"
+                                "本机 Claude Code / Codex CLI 的会话文件出现后，这里会自动显示；" +
+                                    "会话文件写在桌面用户目录，手机端读不到属于正常状态。"
                             } else {
-                                "换一个关键词，或切换上方的 Agent 筛选。"
+                                "换一个关键词，或切换上方的客户端筛选。"
                             },
                             actionLabel = if (query.isBlank()) "重新扫描" else "清空搜索",
                             onAction = if (query.isBlank()) {
@@ -318,20 +267,35 @@ internal fun SessionsPage(
                             },
                         )
                     }
-                } else {
+                } else if (visible.isEmpty()) {
                     item {
-                        DeepSectionTitle(
-                            text = "会话列表",
-                            trailing = sessionCountLabel(state.sessions.size),
+                        DeepStateCard(
+                            title = "没有匹配的会话",
+                            detail = "换一个关键词，或切换客户端筛选。",
+                            actionLabel = "清空筛选",
+                            onAction = {
+                                onAgentChange("")
+                                onQueryChange("")
+                            },
                         )
                     }
-                    items(state.sessions.size) { index ->
-                        val row = state.sessions[index]
+                } else {
+                    items(visible.size) { index ->
+                        val row = visible[index]
                         SessionRowCard(
                             row = row,
                             onClick = onOpenSession?.let { open -> { open(row) } },
                         )
                     }
+                }
+                // 桌面脚注（sessions.js:205）。
+                item {
+                    Text(
+                        text = "会话内容只从本机客户端写入的本地文件读取，不修改原始记录；" +
+                            "Gemini CLI 历史会话展示最近 90 天。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -389,6 +353,29 @@ private fun SessionsDetailDialog(
         },
         text = {
             Column {
+                // 动作在上、正文在下：桌面把按钮组放在用量与正文之前（`sessions.js:409-478`）。
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val usage = (detail as? SessionDetailUiState.Ready)?.usage
+                    if (usage != null && usage.resume.isNotBlank()) {
+                        McaButton(
+                            onClick = { clipboard.setText(AnnotatedString(usage.resume)) },
+                            style = McaButtonStyle.Outlined,
+                        ) { Text("复制恢复命令") }
+                    }
+                    if (detail is SessionDetailUiState.Ready) {
+                        McaButton(
+                            onClick = {
+                                val agent = sessionKey.substringBefore(":", "")
+                                val id = sessionKey.substringAfter(":", "")
+                                if (agent.isNotBlank() && id.isNotBlank()) {
+                                    onLoadMarkdown(agent, id)
+                                }
+                            },
+                            style = McaButtonStyle.Outlined,
+                        ) { Text(if (markdown is SessionMarkdownUiState.Ready) "已复制" else "复制 Markdown") }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
                 when (detail) {
                     SessionDetailUiState.Idle -> Unit
                     is SessionDetailUiState.Loading -> Text(
@@ -473,29 +460,6 @@ private fun SessionsDetailDialog(
                                 color = MaterialTheme.colorScheme.error,
                             )
                         }
-                    }
-                }
-                // 两个动作：复制恢复命令（桌面 sessions.js:422）、复制 Markdown（桌面是下载，:412）
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val usage = (detail as? SessionDetailUiState.Ready)?.usage
-                    if (usage != null && usage.resume.isNotBlank()) {
-                        McaButton(
-                            onClick = { clipboard.setText(AnnotatedString(usage.resume)) },
-                            style = McaButtonStyle.Outlined,
-                        ) { Text("复制恢复命令") }
-                    }
-                    if (detail is SessionDetailUiState.Ready) {
-                        McaButton(
-                            onClick = {
-                                val agent = sessionKey.substringBefore(":", "")
-                                val id = sessionKey.substringAfter(":", "")
-                                if (agent.isNotBlank() && id.isNotBlank()) {
-                                    onLoadMarkdown(agent, id)
-                                }
-                            },
-                            style = McaButtonStyle.Outlined,
-                        ) { Text(if (markdown is SessionMarkdownUiState.Ready) "已复制" else "复制 Markdown") }
                     }
                 }
             }
@@ -682,16 +646,46 @@ private fun LazyListScope.sessionUsageItems(
             if (current == null) {
                 item { DeepCard { DeepCardBody("这个周期还没有数据。") } }
             } else {
+                // 桌面 6 个 KPI（sessions.js:226-232）：合计 / 请求数 / 估算费用 / 输入 / 缓存输入 / 输出。
                 item {
-                    DeepSectionTitle(
-                        text = "会话用量",
-                        trailing = sessionUsagePeriodLabel(current.days.takeIf { it > 0 } ?: period),
-                    )
-                }
-                item {
+                    val inputTotal = current.totals.input + current.totals.cacheRead + current.totals.cacheWrite
+                    val cacheRate = if (inputTotal > 0L) {
+                        current.totals.cacheRead.toDouble() / inputTotal.toDouble() * 100.0
+                    } else {
+                        0.0
+                    }
                     DeepCard {
-                        DeepCardBody("合计 " + sessionUsageTotalsLine(current.totals, current.unpriced))
-                        Spacer(Modifier.height(6.dp))
+                        SessionKpiRow(
+                            "合计 Tokens",
+                            sessionUsageBigLabel(current.totals.tokens),
+                            "输入 ${sessionUsageBigLabel(inputTotal)} · 输出 ${sessionUsageBigLabel(current.totals.output)}",
+                        )
+                        SessionKpiRow(
+                            "请求数",
+                            current.totals.requests.toString(),
+                            "${current.sessions} 个会话 · 本窗口",
+                        )
+                        SessionKpiRow(
+                            "估算费用",
+                            sessionUsageCostLabel(current.totals.cost, current.unpriced),
+                            if (current.unpriced > 0L) "未计价 ${current.unpriced} 次" else "按当前价格表",
+                        )
+                        SessionKpiRow(
+                            "输入 Tokens",
+                            sessionUsageBigLabel(inputTotal),
+                            "不含缓存 ${sessionUsageBigLabel(current.totals.input)}",
+                        )
+                        SessionKpiRow(
+                            "缓存输入 Tokens",
+                            sessionUsageBigLabel(current.totals.cacheRead),
+                            String.format(java.util.Locale.US, "命中率 %.1f%%", cacheRate),
+                        )
+                        SessionKpiRow(
+                            "输出 Tokens",
+                            sessionUsageBigLabel(current.totals.output),
+                            "含推理输出",
+                        )
+                        Spacer(Modifier.height(8.dp))
                         Text(
                             text = "${current.from} ~ ${current.to} · ${current.sessions} 个会话 · 扫描 ${current.files} 个文件",
                             style = MaterialTheme.typography.labelSmall,
@@ -701,44 +695,44 @@ private fun LazyListScope.sessionUsageItems(
                         McaButton(onClick = onRefresh, style = McaButtonStyle.Outlined) { Text("重新扫描") }
                     }
                 }
-                item { DeepSectionTitle(text = "按模型", trailing = "${current.models.size} 行") }
-                if (current.models.isEmpty()) {
-                    item { DeepCard { DeepCardBody("这个周期没有模型用量。") } }
-                } else {
-                    current.models.forEach { row ->
-                        item { SessionUsageRowCard(name = row.name, detail = sessionUsageTotalsLine(row.totals)) }
-                    }
-                }
-                item { DeepSectionTitle(text = "按实例", trailing = "${sessionUsageAgentRows(current).size} 行") }
-                if (sessionUsageAgentRows(current).isEmpty()) {
-                    item { DeepCard { DeepCardBody("这个周期没有实例用量。") } }
-                } else {
-                    sessionUsageAgentRows(current).forEach { row ->
-                        item {
-                            SessionUsageRowCard(
-                                name = row.name,
-                                detail = "${row.sessions} 个会话 · " + sessionUsageTotalsLine(row.totals),
-                            )
-                        }
-                    }
-                }
+                // 桌面三张表（sessions.js:236-252），列顺序逐字对齐。
                 item {
-                    DeepSectionTitle(
-                        text = "按日期",
-                        trailing = sessionCountLabel(sessionUsageDayRows(current).size),
+                    SessionUsageTable(
+                        title = "按模型",
+                        trailing = "${current.models.size} 行",
+                        headers = SESSION_USAGE_MODEL_HEADERS,
+                        rows = current.models.map { row ->
+                            sessionUsageColumns(row.name, row.totals)
+                        },
                     )
                 }
-                if (sessionUsageDayRows(current).isEmpty()) {
-                    item { DeepCard { DeepCardBody("这个周期没有按日数据。") } }
-                } else {
-                    sessionUsageDayRows(current).forEach { row ->
-                        item { SessionUsageRowCard(name = row.date, detail = sessionUsageTotalsLine(row.totals)) }
-                    }
+                item {
+                    SessionUsageTable(
+                        title = "按实例",
+                        trailing = "${sessionUsageAgentRows(current).size} 行",
+                        headers = SESSION_USAGE_AGENT_HEADERS,
+                        rows = sessionUsageAgentRows(current).map { row ->
+                            sessionUsageColumns(
+                                listOf(row.name, row.sessions.toString()),
+                                row.totals,
+                            )
+                        },
+                    )
+                }
+                item {
+                    SessionUsageTable(
+                        title = "按日期",
+                        trailing = sessionCountLabel(sessionUsageDayRows(current).size),
+                        headers = SESSION_USAGE_DAY_HEADERS,
+                        rows = sessionUsageDayRows(current).map { row ->
+                            sessionUsageColumns(row.date, row.totals)
+                        },
+                    )
                 }
                 item {
                     Text(
                         text = "从本机各 Agent 的会话 JSONL 汇总，不依赖官方额度或网关请求日志；" +
-                            "费用按当前价格表估算，未计价的请求会单独标注。",
+                            "Codex 开启「统一会话历史」后，官方与第三方会话都会计入。费用按当前价格表估算。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -748,26 +742,77 @@ private fun LazyListScope.sessionUsageItems(
     }
 }
 
+/** 桌面三张表的列头（`sessions.js:236` / `:242` / `:252`），顺序逐字对齐。 */
+internal val SESSION_USAGE_MODEL_HEADERS: List<String> =
+    listOf("模型", "输入 Tokens", "缓存 Tokens", "输出 Tokens", "合计 Tokens", "请求", "估算费用")
+internal val SESSION_USAGE_AGENT_HEADERS: List<String> =
+    listOf("实例", "会话", "输入 Tokens", "缓存 Tokens", "输出 Tokens", "合计 Tokens", "请求", "估算费用")
+internal val SESSION_USAGE_DAY_HEADERS: List<String> =
+    listOf("日期", "输入 Tokens", "缓存 Tokens", "输出 Tokens", "合计 Tokens", "请求", "估算费用")
+
+/** 一行表格数据：前置列（名称 / 会话数）+ totals 的六列（`sessions.js:238-250`）。 */
+internal fun sessionUsageColumns(leading: String, totals: SessionUsageTotals): List<String> =
+    sessionUsageColumns(listOf(leading), totals)
+
+internal fun sessionUsageColumns(leading: List<String>, totals: SessionUsageTotals): List<String> = buildList {
+    addAll(leading)
+    add(sessionUsageBigLabel(totals.input + totals.cacheRead + totals.cacheWrite))
+    add(sessionUsageBigLabel(totals.cacheRead))
+    add(sessionUsageBigLabel(totals.output))
+    add(sessionUsageBigLabel(totals.tokens))
+    add(totals.requests.toString())
+    add(sessionUsageCostLabel(totals.cost, 0L))
+}
+
+/** 窄屏上按桌面列顺序横向滚动的表格（列宽固定，避免数字挤成一团）。 */
 @Composable
-private fun SessionUsageRowCard(name: String, detail: String) {
-    DeepCard {
-        Text(
-            text = name,
-            // UI_REFRESH_SPEC §1.1：行主文本用 bodyMedium（Bold/Medium 只作轻强调）
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = detail,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+private fun SessionUsageTable(
+    title: String,
+    trailing: String,
+    headers: List<String>,
+    rows: List<List<String>>,
+) {
+    Column {
+        DeepSectionTitle(text = title, trailing = trailing)
+        if (rows.isEmpty()) {
+            DeepCard { DeepCardBody("暂无数据 · 当前时间范围内没有对应的会话用量。") }
+            return@Column
+        }
+        DeepCard {
+            Column(Modifier.horizontalScroll(rememberScrollState())) {
+                Row {
+                    headers.forEachIndexed { index, head ->
+                        Text(
+                            text = head,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            modifier = Modifier.width(sessionUsageColumnWidth(index)),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                rows.forEach { cells ->
+                    Row(Modifier.padding(vertical = 4.dp)) {
+                        cells.forEachIndexed { index, cell ->
+                            Text(
+                                text = cell,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.width(sessionUsageColumnWidth(index)),
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
+
+/** 首列（名称）宽一些，数字列等宽。 */
+private fun sessionUsageColumnWidth(index: Int) = if (index == 0) 104.dp else 84.dp
 
 /** 列表计数文案：0 条时不写「共 0 条」，交给空态卡解释。 */
 internal fun sessionCountLabel(count: Int): String = "$count 条"
@@ -784,6 +829,84 @@ internal fun sessionMetaLine(row: SessionRow): String = buildString {
 /** 第二行副标题：相对时间 + 请求数 + 消息数。 */
 internal fun sessionStatsMetaLine(row: SessionRow, nowMs: Long): String =
     "${sessionAgeLabel(row.lastAt, nowMs)} · ${row.requests} 请求 · ${row.messages} 消息"
+
+/** 桌面 `fmtSize`（`sessions.js:22-27`）：≥1 MB 用 MB、≥1 KB 用 KB，否则 B。 */
+internal fun sessionSizeLabel(bytes: Long): String {
+    val v = bytes.coerceAtLeast(0L)
+    return when {
+        v >= (1L shl 20) -> String.format(java.util.Locale.US, "%.1f MB", v / (1L shl 20).toDouble())
+        v >= (1L shl 10) -> String.format(java.util.Locale.US, "%.1f KB", v / (1L shl 10).toDouble())
+        else -> "$v B"
+    }
+}
+
+/** 桌面 `fmtDate`（`sessions.js:200` 行右侧）：绝对时间，读不出时给「时间未知」。 */
+internal fun sessionDateLabel(lastAtSeconds: Long): String {
+    if (lastAtSeconds <= 0L) {
+        return "时间未知"
+    }
+    return java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+        .format(java.util.Date(lastAtSeconds * 1000L))
+}
+
+/** 行右侧：文件大小 · 最后活动时间（桌面 `sessions.js:199-201`）。 */
+internal fun sessionRowRightLine(row: SessionRow): String = buildString {
+    if (row.sizeBytes > 0L) {
+        append(sessionSizeLabel(row.sizeBytes))
+        append(" · ")
+    }
+    append(sessionDateLabel(row.lastAt))
+}
+
+/**
+ * 客户端 + 关键词筛选（桌面 `sessions.js:150` 的 `all.filter(...)`）。
+ *
+ * 服务端已经按同样条件过滤过一次，这里再过滤是为了让「当前筛选」KPI 与列表口径一致：
+ * 切页签是本地即时生效，不必等往返。
+ */
+internal fun sessionMatches(row: SessionRow, agentFilter: String, query: String): Boolean {
+    if (agentFilter.isNotEmpty() && row.agent != agentFilter) {
+        return false
+    }
+    val needle = query.trim()
+    if (needle.isEmpty()) {
+        return true
+    }
+    return listOf(row.title, row.id, row.directory, row.agent, row.agentName)
+        .joinToString(" ")
+        .contains(needle, ignoreCase = true)
+}
+
+/** KPI 一行：左标签 + 说明，右数值（桌面 `.kpi`，`sessions.js:480-482`）。 */
+@Composable
+private fun SessionKpiRow(label: String, value: String, detail: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
 
 @Composable
 private fun SessionRowCard(row: SessionRow, onClick: (() -> Unit)? = null) {
@@ -810,9 +933,9 @@ private fun SessionRowCard(row: SessionRow, onClick: (() -> Unit)? = null) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
-            text = sessionStatsMetaLine(row, System.currentTimeMillis()),
+            text = sessionRowRightLine(row),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

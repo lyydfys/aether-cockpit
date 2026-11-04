@@ -18,18 +18,13 @@ enum class MobileTab(
 /**
  * 「更多」页每一行的真实去处。
  *
- * 上一版把去向藏在 `title == "路由"` 这类字符串比较里，于是 17 个工作区里只有 3 个真跳，
+ * 上一版把去向藏在 `title == "路由"` 这类字符串比较里，于是只有 3 个真跳，
  * 用量/请求/渠道明明已经能用却点了弹「后续阶段」。改成显式的 sealed 类型后，
  * 「这一行到底去哪」是数据的一部分，可以被单测锁住，也不会再靠标题字符串猜。
  *
- * **条目数是 18，不是 17**：多出来的那条不是"手机端自己加的功能"，而是桌面端
- * 本来就有、而手机端此前合并掉的一个视图——
- * 「Agent 接入」与「客户端」在桌面端是两个独立视图：
- * `internal/web/ui2/js/views/misc.js:10`（agents 视图，看各 agent 的模型）与
- * `internal/web/ui2/js/views/gateway.js:113`（客户端接入片段卡）＋ `overview.js:64`。
- * 手机端曾经把「Agent」这一行错指到客户端页（[WorkspaceAction.Clients]），
- * 于是两个视图只剩一个入口。这里按桌面端拆回两行（DESKTOP_PARITY_GAPS §2-12 / §3-2）。
- * 换句话说：17→18 是**对齐桌面端**，不是给手机端加桌面端没有的东西。
+ * **条目数是 13**（见 [workspaceEntries] 的说明）：桌面 16 项导航里，
+ * 概览 / 账号与额度 / 用量 / 请求日志 已经在手机底栏的 4 个 Tab 上，不再重复列出；
+ * 剩下 12 项 + 「客户端」（桌面是 `gateway.js:113` 的一张卡）＝ 13。
  */
 sealed interface WorkspaceAction {
     /** 切到某个真实存在的底部 Tab。 */
@@ -71,6 +66,9 @@ sealed interface WorkspaceAction {
     /** 打开资源库页（真实页面：查看与删除，发现/下发仅桌面端）。 */
     data object Library : WorkspaceAction
 
+    /** 打开「接入渠道」页（真实页面：桌面 `views/onboard.js` 的落点，含 Qoder 登录与账号包）。 */
+    data object Onboard : WorkspaceAction
+
     /** 尚未实现：显示明确阶段占位，不伪装成可用。 */
     data class Pending(val stage: String) : WorkspaceAction
 
@@ -104,39 +102,62 @@ data class SettingsGroup(
     val available: Boolean = false,
 )
 
+/**
+ * 「更多」页的条目 = 桌面 16 项导航里**底栏放不下**的那些。
+ *
+ * 桌面导航（`internal/web/ui2/js/shell.js:17-36`）共三组 12 项：工作（概览 / 接入渠道 /
+ * 账号与额度 / 用量 / 唤醒任务 / 应用启动）、资产（会话 / 库）、系统（请求日志 /
+ * 网关与探针 / 2FA 管理 / 设置）；`shell.js:38-43` 另有「更多」4 项（Agent 接入 / 路由 /
+ * 脱敏 / 插件）。
+ *
+ * 手机底栏只有 5 格：概览 / 额度(=账号与额度) / 用量 / 请求(=请求日志) / 更多。
+ * 所以那 4 项**不能**再出现在本列表里——同一目的地出现两次，用户会以为是两个页面。
+ * 剩下的 12 项（接入渠道 / 唤醒任务 / 应用启动 / 会话 / 库 / 网关与探针 / 2FA 管理 / 设置 /
+ * Agent 接入 / 路由 / 脱敏 / 插件）全部在这里，再加 1 项「客户端」：
+ * 桌面把它做成网关页的一张卡（`views/gateway.js:113`），手机端有独立页，需要入口。
+ *
+ * 标题与桌面逐字一致，方便逐条对照；副标题写手机端能做什么。
+ */
 fun workspaceEntries(): List<WorkspaceEntry> = listOf(
-    WorkspaceEntry("概览", "本机网关状态与入口", WorkspaceAction.Tab(MobileTab.OVERVIEW)),
-    WorkspaceEntry("渠道接入", "登录、新增账号、导入；PC 扫描仅 Windows", WorkspaceAction.Tab(MobileTab.CHANNELS)),
-    WorkspaceEntry("账号额度", "额度、优先级与并发", WorkspaceAction.Tab(MobileTab.CHANNELS)),
-    WorkspaceEntry("用量", "成本、Token 与趋势", WorkspaceAction.Tab(MobileTab.USAGE)),
+    // 工作（shell.js:18-25）
+    WorkspaceEntry("接入渠道", "多平台登录：本机导入、浏览器授权、设备码、手动凭据", WorkspaceAction.Onboard),
     // 签到调度器已随移动运行时接线（Go 侧），但手机端还没有独立的签到页面，
     // 所以这里不再写"签到仅 Windows"——那会变成一句假话。
-    WorkspaceEntry("任务", "唤醒队列（签到调度已接线）", WorkspaceAction.Wake),
-    WorkspaceEntry("应用", "启动 PC 客户端；仅 Windows", WorkspaceAction.DesktopOnly),
+    WorkspaceEntry("唤醒任务", "唤醒队列（签到调度已接线）", WorkspaceAction.Wake),
+    WorkspaceEntry("应用启动", "启动 PC 客户端；仅 Windows", WorkspaceAction.DesktopOnly),
+    // 资产（shell.js:26-29）
     WorkspaceEntry("会话", "本机 Agent 会话（只读）", WorkspaceAction.Sessions),
-    WorkspaceEntry("资源库", "指令、技能、MCP、子代理（查看/删除）", WorkspaceAction.Library),
-    WorkspaceEntry("请求", "请求日志与诊断", WorkspaceAction.Tab(MobileTab.REQUESTS)),
-    WorkspaceEntry("网关探针", "健康、版本与指标", WorkspaceAction.Probe),
-    WorkspaceEntry("2FA", "TOTP 验证码", WorkspaceAction.Totp),
-    WorkspaceEntry("设置", "常规、网络、隐私与备份", WorkspaceAction.Settings),
+    WorkspaceEntry("库（指令/技能/MCP）", "指令、技能、MCP 与子代理（查看/删除）", WorkspaceAction.Library),
+    // 系统（shell.js:30-35）；请求日志在底栏「请求」Tab，不重复列
+    WorkspaceEntry("网关与探针", "健康、版本与指标", WorkspaceAction.Probe),
+    WorkspaceEntry("2FA 管理", "TOTP 验证码", WorkspaceAction.Totp),
+    WorkspaceEntry("设置", "网络与共享、隐私、同步与备份", WorkspaceAction.Settings),
+    // 更多（shell.js:38-43）+ 客户端（桌面是 gateway.js:113 的卡）
     WorkspaceEntry("Agent 接入", "本机 agent 的模型与 CLI 巡检（只读）", WorkspaceAction.Agents),
     WorkspaceEntry("客户端", "客户端接入片段（只读）", WorkspaceAction.Clients),
     WorkspaceEntry("路由", "模型映射与回退", WorkspaceAction.Routing),
     WorkspaceEntry("脱敏", "隐私与请求改写", WorkspaceAction.Settings),
     WorkspaceEntry("插件", "请求改写规则与内置插件（只读）", WorkspaceAction.Plugins),
-    WorkspaceEntry("额度快捷查看", "渠道余量速览", WorkspaceAction.Tab(MobileTab.CHANNELS)),
 )
 
+/**
+ * 设置页的分组 = 桌面 `settings.js:44-47` 的 10 个 tab，**标题与顺序逐字照抄**：
+ * 常规 / 网络与共享 / 工具服务 / 预设 / 定价 / 模型目录 / 隐私 / 可观测 / 同步与备份 / 关于。
+ *
+ * [available] 表示该组内容**今天真的能在手机的设置页里找到**（02 网络与共享、07 隐私）。
+ * 其余 8 组桌面有、手机端还没做——点了要如实说"尚未移植"，不能因为设置页存在就宣称 10 组都能用。
+ */
 fun settingsGroups(): List<SettingsGroup> = listOf(
     SettingsGroup("01", "常规", "外观、语言、通知、更新与启动策略"),
-    SettingsGroup("02", "网络与共享", "监听端口、局域网、代理、CORS 与访问控制", available = true),
+    SettingsGroup("02", "网络与共享", "监听、局域网、代理、CORS 与访问控制", available = true),
     SettingsGroup("03", "工具服务", "搜索、图像、音频、视频与实时语音"),
     SettingsGroup("04", "预设", "客户端、模型与请求参数模板"),
     SettingsGroup("05", "定价", "模型单价、自定义倍率与成本估算"),
-    SettingsGroup("06", "隐私", "脱敏规则、请求正文与本机日志留存", available = true),
-    SettingsGroup("07", "可观测", "OTLP、指标、链路与运行诊断"),
-    SettingsGroup("08", "同步与备份", "本机加密备份；外部同步需主动配置"),
-    SettingsGroup("09", "关于与更新", "版本、更新通道、许可与诊断包"),
+    SettingsGroup("06", "模型目录", "模型重定向与目录刷新"),
+    SettingsGroup("07", "隐私", "脱敏开关、动作、自定义规则与个人信息", available = true),
+    SettingsGroup("08", "可观测", "OTLP、指标、链路与运行诊断"),
+    SettingsGroup("09", "同步与备份", "本机加密备份；云同步需主动配置"),
+    SettingsGroup("10", "关于", "版本、更新通道、许可与诊断包"),
 )
 
 fun filterWorkspaces(query: String): List<WorkspaceEntry> = workspaceEntries().filter { entry ->

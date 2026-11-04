@@ -24,14 +24,17 @@ class UsageSectionCopyTest {
 
     @Test
     fun emptyHintsExplainWhyAndWhatNext() {
+        // 配额历史 / 价格表两块在本轮重构里搬去了别的文件（旧函数已删除），
+        // 这里只锁仍然存在于这三个区块的空态。
         for (hint in listOf(
             modelRedirectEmptyHint(),
             recentFailuresEmptyHint(),
             heatmapEmptyHint(),
-            pricingEmptyHint(),
+            usageModelsEmptyHint(),
+            usageSeriesEmptyHint(),
+            usageBreakdownEmptyDetail(),
         )) {
             assertTrue(hint, hint.isNotBlank())
-            assertTrue(hint, hint.contains("为什么空"))
             assertTrue(hint, hint.contains("下一步"))
             assertFalse(hint, hint.contains("暂无数据"))
             // 空态只指一次路：不叠加"点击下面的按钮"这种第二动作。

@@ -3,37 +3,56 @@ package com.muyuchat.aether.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.muyuchat.aether.runtime.AgentCliInfo
+import com.muyuchat.aether.runtime.AgentsApiClient
 import com.muyuchat.aether.runtime.AnonymousProbeReport
+import com.muyuchat.aether.runtime.CallerKeySummary
+import com.muyuchat.aether.runtime.CallerKeysApiClient
+import com.muyuchat.aether.runtime.ChannelProbeApiClient
+import com.muyuchat.aether.runtime.ChannelProbeReport
+import com.muyuchat.aether.runtime.ClientEntry
+import com.muyuchat.aether.runtime.ClientsApiClient
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
+import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.ProbeApiClient
 import com.muyuchat.aether.runtime.SessionProbeReport
+import com.muyuchat.aether.runtime.SettingsApiClient
+import com.muyuchat.aether.runtime.SettingsSummary
 import com.muyuchat.aether.runtime.failedAnonymousReport
 import com.muyuchat.aether.runtime.failedSessionReport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * 探针工作区的状态。
+ *
+ * 对齐桌面 `js/views/gateway.js` 的 8 个区块：额度提醒（无端点，见汇报）、API 服务(:101-114)、
+ * 接入片段(:116-120)、调用方密钥(:202-257)、Codex 身份对照（无端点，见汇报）、
+ * 渠道探测(:122-127)、版本与探针(:129-134)、本机 Agent 版本(:177-200)。
+ */
 sealed interface ProbeUiState {
     data object Idle : ProbeUiState
     data object Loading : ProbeUiState
 
-    /**
-     * 匿名组与会话组分开持有：一组失败不会影响另一组的展示，
-     * 页面也就可以分开写「匿名端点」与「会话端点（需会话凭据）」两块。
-     */
     data class Ready(
         val anonymous: AnonymousProbeReport,
         val session: SessionProbeReport,
+        val settings: SettingsSummary?,
+        val clients: List<ClientEntry>,
+        val clientsAvailable: Boolean,
+        val callerKeys: List<CallerKeySummary>,
+        val channels: ChannelProbeReport,
+        val agents: List<AgentCliInfo>,
+        val agentsCheckedAt: Long,
         val sampledAtMs: Long,
+        val probingChannels: Boolean = false,
     ) : ProbeUiState
 
     data class Failed(val code: String, val message: String) : ProbeUiState
@@ -42,59 +61,120 @@ sealed interface ProbeUiState {
 /**
  * 探针工作区的 ViewModel。
  *
- * 探针只代表"当前这一刻"：网关一停就回到 `Failed("gateway_not_running", "网关未启动")`，
- * 既不留上一次的结果，也不再发任何请求——旧数据在这张卡上比空态更容易误导人。
+ * 与桌面 `gateway.js:22-52` 同策略：各块各自兜底（`Promise.all(... .catch(() => ({})))`），
+ * 一个端点/一块数据失败不会让整页变空。只有网关没起来才是整页失败。
  */
 class GatewayProbeViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = GatewayRuntimeRepository(application)
-    private val client = ProbeApiClient()
-    private val refresh = MutableStateFlow(0)
+    private val probeClient = ProbeApiClient()
+    private val settingsClient = SettingsApiClient()
+    private val clientsClient = ClientsApiClient()
+    private val callerKeysClient = CallerKeysApiClient()
+    private val channelClient = ChannelProbeApiClient()
+    private val agentsClient = AgentsApiClient()
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val state: StateFlow<ProbeUiState> = combine(repository.status, refresh) { status, _ -> status }
-        .flatMapLatest { status ->
-            flow {
-                if (!status.running) {
-                    emit(ProbeUiState.Failed("gateway_not_running", "网关未启动"))
-                    return@flow
-                }
-                emit(ProbeUiState.Loading)
-                try {
-                    emit(
-                        withContext(Dispatchers.IO) {
-                            // 两组各自兜底：匿名组炸了不影响会话组的卡片，反之亦然。
-                            val anonymous = try {
-                                client.fetchAnonymous(status)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                failedAnonymousReport(e)
-                            }
-                            val session = try {
-                                client.fetchSession(status)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                failedSessionReport(e)
-                            }
-                            ProbeUiState.Ready(
-                                anonymous = anonymous,
-                                session = session,
-                                sampledAtMs = System.currentTimeMillis(),
-                            )
-                        },
-                    )
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: ManagementApiException) {
-                    emit(ProbeUiState.Failed(e.code, e.message))
-                } catch (_: Exception) {
-                    emit(ProbeUiState.Failed("unknown", "探针检查失败，请重试"))
-                }
-            }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProbeUiState.Idle)
+    private val _state = MutableStateFlow<ProbeUiState>(ProbeUiState.Idle)
+    val state: StateFlow<ProbeUiState> = _state.asStateFlow()
 
     fun refresh() {
-        refresh.value++
+        load(userInitiated = true)
+    }
+
+    private fun load(userInitiated: Boolean) {
+        val status = repository.status.value
+        if (!status.running) {
+            _state.value = ProbeUiState.Failed("gateway_not_running", "网关未启动")
+            return
+        }
+        val current = _state.value
+        if (current is ProbeUiState.Ready && !userInitiated) {
+            return
+        }
+        if (current !is ProbeUiState.Ready) {
+            _state.value = ProbeUiState.Loading
+        }
+        viewModelScope.launch {
+            _state.value = withContext(Dispatchers.IO) { collect(status, current) }
+        }
+    }
+
+    /** 各块独立取，失败就留空/留旧值，绝不让一块拖垮整页。 */
+    private fun collect(status: GatewayStatus, previous: ProbeUiState): ProbeUiState {
+        val before = previous as? ProbeUiState.Ready
+        val anonymous = try {
+            probeClient.fetchAnonymous(status)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failedAnonymousReport(e)
+        }
+        val session = try {
+            probeClient.fetchSession(status)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failedSessionReport(e)
+        }
+        val settings = runCatching { settingsClient.fetchSettings(status) }.getOrNull() ?: before?.settings
+        val clients = runCatching { clientsClient.fetchClients(status) }.getOrNull()
+        val keys = runCatching { callerKeysClient.fetch(status) }.getOrNull()?.keys ?: before?.callerKeys.orEmpty()
+        val channels = runCatching { channelClient.fetchStatus(status) }.getOrNull()
+            ?: before?.channels
+            ?: ChannelProbeReport(entries = emptyList(), reading = false, checkedAt = 0L)
+        val agents = runCatching { agentsClient.fetchCli(status) }.getOrNull()
+        return ProbeUiState.Ready(
+            anonymous = anonymous,
+            session = session,
+            settings = settings,
+            clients = clients?.clients ?: before?.clients.orEmpty(),
+            clientsAvailable = clients?.available ?: before?.clientsAvailable ?: false,
+            callerKeys = keys,
+            channels = channels,
+            agents = agents?.agents ?: before?.agents.orEmpty(),
+            agentsCheckedAt = agents?.checkedAtSec ?: before?.agentsCheckedAt ?: 0L,
+            sampledAtMs = System.currentTimeMillis(),
+            probingChannels = before?.probingChannels ?: false,
+        )
+    }
+
+    /**
+     * 「全部探测」（桌面 `gateway.js:303-317`）：POST /api/channels/check 之后轮询
+     * /api/channels/status，直到 `reading` 变假；最多等 40×800ms，与桌面同上限。
+     */
+    fun probeChannels() {
+        val status = repository.status.value
+        if (!status.running) {
+            _state.value = ProbeUiState.Failed("gateway_not_running", "网关未启动")
+            return
+        }
+        val current = _state.value as? ProbeUiState.Ready ?: return
+        if (current.probingChannels) {
+            return
+        }
+        _state.value = current.copy(probingChannels = true)
+        viewModelScope.launch {
+            var latest = current
+            try {
+                withContext(Dispatchers.IO) { channelClient.startCheck(status, "") }
+                for (round in 0 until 40) {
+                    delay(800)
+                    val snapshot = runCatching {
+                        withContext(Dispatchers.IO) { channelClient.fetchStatus(status) }
+                    }.getOrNull() ?: break
+                    latest = latest.copy(channels = snapshot)
+                    _state.value = latest.copy(probingChannels = !snapshot.reading)
+                    if (!snapshot.reading) {
+                        break
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 探测失败不把页面打回 Failed：其它块仍然有效，只是没有新结果。
+            } finally {
+                val settle = (_state.value as? ProbeUiState.Ready) ?: latest
+                _state.value = settle.copy(probingChannels = false)
+            }
+        }
     }
 }

@@ -65,7 +65,7 @@ internal fun MorePage(
     val settings = filterSettings(query)
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item {
@@ -180,6 +180,7 @@ internal fun workspaceRowTrailing(entry: WorkspaceEntry): String {
         WorkspaceAction.Totp, WorkspaceAction.Clients, WorkspaceAction.Agents,
         WorkspaceAction.Sessions,
         WorkspaceAction.Wake, WorkspaceAction.Library, WorkspaceAction.Plugins,
+        WorkspaceAction.Onboard,
         -> "已接入"
     }
 }

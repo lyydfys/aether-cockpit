@@ -275,6 +275,16 @@ internal fun agentStatusLabel(agent: AgentSummary): String = when {
     else -> "未检测到"
 }
 
+/**
+ * 桌面清单的两个布尔字段逐项写出来（`misc.js:25` 用 `detected || wired` 过滤）：
+ * detected = 本机装了 / wired = 已接入网关。两个都展示，避免"已接入"掩盖"没装"。
+ */
+internal fun agentPresenceLine(agent: AgentSummary): String {
+    val installed = if (agent.detected) "已安装" else "未安装"
+    val wired = if (agent.wired) "已接入" else "未接入"
+    return "$installed · $wired"
+}
+
 /** 一行副文案：当前模型 + 可选模型数；未设置模型时直说。 */
 internal fun agentModelLine(agent: AgentSummary): String {
     val head = if (agent.model.isBlank()) "当前模型未设置" else "当前模型 ${agent.model}"

@@ -91,7 +91,7 @@ internal fun WakePage(
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
@@ -133,15 +133,19 @@ internal fun WakePage(
                 }
             }
         }
-        // 这条说明是页面的核心口径，放在最上面而不是底部小字。
-        item { DeepSectionTitle("手机端只能尽力而为") }
+        // 桌面 KPI 行（scheduler.js:192-197）：任务数 / 今日完成 / 下次唤醒 / 唤醒次数。
         item {
+            val sched = (scheduler as? SchedulerUiState.Ready)?.state
             DeepCard {
-                DeepCardBody(
-                    "唤醒任务的定时器跑在网关进程里：应用退到后台、系统省电策略或进程被回收都会让它停下，" +
-                        "所以「已启用」不等于「一定按时执行」。需要准点执行请用桌面端；" +
-                        "这里可以查看当前状态，并对某条任务点一次「立即唤醒」。",
+                WakeKpiRow("任务数", (sched?.info?.jobs ?: sched?.jobs?.size ?: 0).toString(), "按渠道分组")
+                WakeKpiRow("今日完成", (sched?.info?.completedToday ?: 0).toString(), "签到 / 刷新")
+                WakeKpiRow(
+                    "下次唤醒",
+                    sched?.info?.nextFireAt?.takeIf { it > 0L }?.let { wakeNextRunLabel(it, System.currentTimeMillis()) }
+                        ?: "—",
+                    "最近一次调度时间",
                 )
+                WakeKpiRow("唤醒次数", (sched?.info?.wakeCount ?: 0).toString(), "本进程")
             }
         }
         notice?.let { message ->
@@ -150,9 +154,40 @@ internal fun WakePage(
         actionError?.let { message ->
             item { DeepNotice(message, isError = true, onDismiss = onDismissActionError) }
         }
+        // 桌面「任务队列」（scheduler.js:199-240）：标题 + 条数 + 刷新 + 一键签到，然后是签到任务。
         item {
             DeepSectionTitle(
-                text = "唤醒任务",
+                text = "任务队列",
+                trailing = ((scheduler as? SchedulerUiState.Ready)?.state?.jobs?.size)
+                    ?.let { "$it 条" },
+                action = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        McaButton(onClick = onRefreshScheduler, style = McaButtonStyle.Outlined) { Text("刷新") }
+                        McaButton(
+                            onClick = onRunCheckin,
+                            style = McaButtonStyle.Primary,
+                            enabled = !checkinRunning &&
+                                (scheduler as? SchedulerUiState.Ready)?.state?.enabled == true,
+                        ) { Text(if (checkinRunning) "入队中…" else "一键签到") }
+                    }
+                },
+            )
+        }
+        item {
+            SchedulerSection(
+                scheduler = scheduler,
+                checkinRunning = checkinRunning,
+                checkinNote = checkinNote,
+                checkinSummary = checkinSummary,
+                onRunCheckin = onRunCheckin,
+                onDismissCheckinNote = onDismissCheckinNote,
+                onRefresh = onRefreshScheduler,
+            )
+        }
+        // 桌面「账号唤醒」（scheduler.js:348-385）。
+        item {
+            DeepSectionTitle(
+                text = "账号唤醒",
                 trailing = if (state is WakeUiState.Ready) wakeTaskCountLabel(state.tasks.size) else null,
                 action = {
                     McaButton(
@@ -207,18 +242,13 @@ internal fun WakePage(
                 }
             }
         }
-        // —— 签到调度：与唤醒任务分开的一节 ——
-        // 放在同一页而不是新增第 18 个工作区入口：WorkspaceTest 锁着 17 条的批准设计。
-        item { DeepSectionTitle("签到调度") }
+        // 桌面脚注（scheduler.js:378 的空态提示 + 手机端如实口径）。
         item {
-            SchedulerSection(
-                scheduler = scheduler,
-                checkinRunning = checkinRunning,
-                checkinNote = checkinNote,
-                checkinSummary = checkinSummary,
-                onRunCheckin = onRunCheckin,
-                onDismissCheckinNote = onDismissCheckinNote,
-                onRefresh = onRefreshScheduler,
+            Text(
+                text = "定时器跑在网关进程里：应用退到后台、系统省电策略或进程被回收都会让它停下，" +
+                    "所以「已启用」不等于「一定按时执行」；需要准点执行请用桌面端。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -247,6 +277,37 @@ internal fun WakePage(
 
 /** 列表计数文案。 */
 internal fun wakeTaskCountLabel(count: Int): String = "$count 条任务"
+
+/** KPI 一行（桌面 `.kpi`，`scheduler.js:456-458`）。 */
+@Composable
+private fun WakeKpiRow(label: String, value: String, detail: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
 
 /**
  * 任务副标题：间隔 · 下次执行 · 执行中 · 连续失败。

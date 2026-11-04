@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,6 +92,9 @@ internal fun LibraryPage(
     var showCreate by remember { mutableStateOf(false) }
     var mcpTarget by remember { mutableStateOf<String?>(null) }
     var toolsTarget by remember { mutableStateOf<String?>(null) }
+    // 桌面默认停在「指令」页签（library.js:42 `state.tab = 'prompts'`）。
+    var tab by rememberSaveable { mutableStateOf(LibraryKind.PROMPT.name) }
+    var libQuery by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(Unit) { onRefresh() }
     // 登录流程结束（成功/失败）时把弹窗关掉，失败原因留在 flow 状态里给下一次打开看不如直接弹掉——
     // 所以只在 Done 时自动关，失败保留弹窗显示原因。
@@ -103,7 +107,7 @@ internal fun LibraryPage(
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
@@ -150,14 +154,14 @@ internal fun LibraryPage(
                 }
             }
         }
-        item { DeepSectionTitle("手机端能做什么") }
+        // 桌面 KPI 行（library.js:118-125）：指令 / 技能 / MCP 服务器 / 子代理。
+        val readyEntries = (state as? LibraryUiState.Ready)?.entries.orEmpty()
         item {
             DeepCard {
-                DeepCardBody(
-                    "「发现」要以桌面用户目录为根扫描，「下发给 Agent」会写桌面端的配置文件，" +
-                        "两者在手机上都不做。这里可以列出、新增和删除本机网关沙盒里的条目。" +
-                        "MCP 的完整配置（可能包含密钥）不会显示在页面上，也不允许在手机上编辑。",
-                )
+                LibraryKpiRow("指令", readyEntries.count { it.kind == LibraryKind.PROMPT }, "库中条目")
+                LibraryKpiRow("技能", readyEntries.count { it.kind == LibraryKind.SKILL }, "库中条目")
+                LibraryKpiRow("MCP 服务器", readyEntries.count { it.kind == LibraryKind.MCP }, "库中条目")
+                LibraryKpiRow("子代理", readyEntries.count { it.kind == LibraryKind.SUBAGENT }, "库中条目")
             }
         }
         notice?.let { message ->
@@ -184,48 +188,55 @@ internal fun LibraryPage(
                 )
             }
             is LibraryUiState.Ready -> {
-                val visible = state.entries.filter { kindFilter == null || it.kind == kindFilter }
+                // 桌面页签（library.js:9 / :127-139）：指令 / 技能 / MCP 服务器 / 子代理，带计数。
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        McaButton(
-                            onClick = { onKindFilter(null) },
-                            style = if (kindFilter == null) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                        ) { Text("全部") }
                         LibraryKind.entries.forEach { kind ->
+                            val count = state.entries.count { it.kind == kind }
                             McaButton(
-                                onClick = { onKindFilter(kind) },
-                                style = if (kindFilter == kind) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                            ) { Text(kind.label) }
+                                onClick = { tab = kind.name },
+                                style = if (tab == kind.name) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                            ) { Text("${libraryTabLabel(kind)} $count") }
                         }
                     }
+                }
+                item { SearchField(libQuery, { libQuery = it }, placeholder = "搜索名称…") }
+                val currentKind = LibraryKind.fromName(tab)
+                val visible = state.entries
+                    .filter { it.kind == currentKind }
+                    .filter { libQuery.isBlank() || it.name.contains(libQuery.trim(), ignoreCase = true) }
+                item {
+                    DeepSectionTitle(
+                        text = librarySectionTitle(currentKind),
+                        trailing = libraryCountLabel(visible.size),
+                        action = {
+                            McaButton(
+                                onClick = { showCreate = true },
+                                style = McaButtonStyle.Outlined,
+                                enabled = status.running && !saving,
+                            ) { Text(libraryCreateLabel(currentKind)) }
+                        },
+                    )
                 }
                 if (visible.isEmpty()) {
                     val copy = libraryEmptyCopy(
                         hasAnyEntry = state.entries.isNotEmpty(),
-                        kindLabel = kindFilter?.label,
+                        kindLabel = libraryTabLabel(currentKind),
                     )
                     item {
                         DeepStateCard(
                             title = copy.title,
                             detail = copy.detail,
                             actionLabel = copy.action,
-                            onAction = if (state.entries.isEmpty()) {
-                                { if (status.running) showCreate = true }
-                            } else {
-                                { onKindFilter(null) }
+                            onAction = {
+                                if (status.running) showCreate = true else onRefresh()
                             },
                         )
                     }
                 } else {
-                    item {
-                        DeepSectionTitle(
-                            text = "本机条目",
-                            trailing = libraryCountLabel(visible.size),
-                        )
-                    }
                     items(visible.size) { index ->
                         val entry = visible[index]
                         LibraryRow(
@@ -248,6 +259,16 @@ internal fun LibraryPage(
                             },
                         )
                     }
+                }
+                // 桌面脚注（library.js:102-103）：手机端把「发现/下发」两件事说清。
+                item {
+                    Text(
+                        text = "库里的条目可在本机查看、新增与删除；「本机已有（未入库）」的发现与" +
+                            "「写入各 agent」都要以桌面用户目录为根，手机端不做。MCP 的完整配置可能含密钥，" +
+                            "不在页面上显示。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -332,6 +353,61 @@ internal fun LibraryPage(
 
 /** 列表计数文案。 */
 internal fun libraryCountLabel(count: Int): String = "$count 条"
+
+/** 桌面页签文案（`library.js:9`）：指令 / 技能 / MCP 服务器 / 子代理。 */
+internal fun libraryTabLabel(kind: LibraryKind): String = when (kind) {
+    LibraryKind.PROMPT -> "指令"
+    LibraryKind.SKILL -> "技能"
+    LibraryKind.MCP -> "MCP 服务器"
+    LibraryKind.SUBAGENT -> "子代理"
+}
+
+/** 桌面区块标题（`library.js:175` / `:263` / `:314` / `:359`）。 */
+internal fun librarySectionTitle(kind: LibraryKind): String = when (kind) {
+    LibraryKind.PROMPT -> "共享指令集"
+    LibraryKind.SKILL -> "库中技能"
+    LibraryKind.MCP -> "库中服务器"
+    LibraryKind.SUBAGENT -> "库中子代理"
+}
+
+/** 桌面区块内的主操作（`library.js:177` / `:275` / `:316` / `:361`）。 */
+internal fun libraryCreateLabel(kind: LibraryKind): String = when (kind) {
+    LibraryKind.PROMPT -> "新建指令"
+    LibraryKind.SKILL -> "新建技能"
+    LibraryKind.MCP -> "添加服务器"
+    LibraryKind.SUBAGENT -> "新建子代理"
+}
+
+/** KPI 一行（桌面 `.kpi`，`library.js:33-35`）。 */
+@Composable
+private fun LibraryKpiRow(label: String, value: Int, detail: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "$detail $value",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = value.toString(),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
 
 /** 空态文案：标题说清是哪一种空，正文说下一步能做什么。 */
 internal data class LibraryEmptyCopy(val title: String, val detail: String, val action: String)

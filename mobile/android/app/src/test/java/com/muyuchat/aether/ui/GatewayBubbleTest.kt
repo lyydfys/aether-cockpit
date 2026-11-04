@@ -17,11 +17,45 @@ import kotlin.math.abs
  */
 class GatewayBubbleTest {
     @Test
-    fun stoppedBubbleNeverShowsAHalo() {
-        assertEquals(0f, gatewayHaloAlpha(running = false, animatedAlpha = 0.9f))
-        assertEquals(0f, gatewayHaloAlpha(running = false, animatedAlpha = Float.NaN))
-        assertEquals(0.55f, gatewayHaloAlpha(running = true, animatedAlpha = 0.55f))
-        assertEquals(1f, gatewayHaloAlpha(running = true, animatedAlpha = 2f))
+    fun stoppedOrbHasNoLight() {
+        // 用户规格：停止网关时「就是一个圆 + 品牌标识，没有灯光」。
+        assertEquals(0f, orbRingAlpha(running = false, phase = 0f))
+        assertEquals(0f, orbRingAlpha(running = false, phase = 0.5f))
+        assertEquals(0f, orbRingAlpha(running = false, phase = 1f))
+        assertEquals(0f, orbGlowAlpha(running = false, phase = 0.5f))
+    }
+
+    @Test
+    fun runningOrbBreathesInsideTheRingRange() {
+        // 运行态：环亮度在 0.35 ↔ 0.85 之间来回，超界要被夹住（不能亮成实心、也不能灭掉）。
+        assertEquals(OrbRingAlphaLow, orbRingAlpha(running = true, phase = 0f))
+        assertEquals(OrbRingAlphaHigh, orbRingAlpha(running = true, phase = 1f))
+        val mid = orbRingAlpha(running = true, phase = 0.5f)
+        assertTrue(mid > OrbRingAlphaLow && mid < OrbRingAlphaHigh)
+        assertEquals(OrbRingAlphaLow, orbRingAlpha(running = true, phase = -3f))
+        assertEquals(OrbRingAlphaHigh, orbRingAlpha(running = true, phase = 9f))
+        // 内发光极淡，且有上限；与环反相（环最亮时发光最弱）。
+        assertTrue(orbGlowAlpha(running = true, phase = 0f) <= OrbGlowAlphaMax)
+        assertEquals(0f, orbGlowAlpha(running = true, phase = 1f), 1e-6f)
+    }
+
+    @Test
+    fun orbKeepsTheSameDiameterInBothStates() {
+        // 「不许扩大圆形」：运行态的灯光只画在圆内，直径与停止态完全一致。
+        assertEquals(OrbDiameter, orbDiameter(running = true))
+        assertEquals(OrbDiameter, orbDiameter(running = false))
+        assertEquals(OrbDiameter, orbDiameter(running = true))
+        assertEquals(48f, OrbDiameter.value)
+        // 灯环宽度在用户给的 1.5–2dp 区间内。
+        assertTrue(OrbRingWidth.value >= 1.5f && OrbRingWidth.value <= 2f)
+        // 环的呼吸周期 1.6s。
+        assertEquals(1600, OrbRingPeriodMs)
+    }
+
+    @Test
+    fun orbGlyphIsNeverTinted() {
+        // 图标永远品牌本色：单色 tint 会把气泡/星芒涂平（上一轮线上事故）。
+        assertFalse(orbTintsGlyph())
     }
 
     @Test
@@ -59,27 +93,13 @@ class GatewayBubbleTest {
     }
 
     @Test
-    fun stoppedOrbKeepsPlateAndGlyphDistinct() {
-        // 线上 bug：停止态整块灰方块。根因是"图形色 == 底板色"或"用带背景的图去 tint"。
-        // 这条合同锁住取色：底板与气泡必须是两个可区分的颜色，星芒用底板色挖亮。
-        val light = stoppedOrbColors(
-            surfaceVariant = Color(0xFFF1F3F4), // MCA 浅色 surfaceVariant
-            onSurfaceVariant = Color(0xFF5F6368), // MCA 浅色 onSurfaceVariant
-        )
-        assertNotEquals("底板色与图形色不能相同，否则图标糊成实心块", light.plate, light.glyph)
-        assertEquals("星芒用底板色挖亮，停止态才认得出气泡轮廓", light.plate, light.star)
-
-        val dark = stoppedOrbColors(
-            surfaceVariant = Color(0xFF303134), // MCA 深色 surfaceVariant
-            onSurfaceVariant = Color(0xFF9AA0A6), // MCA 深色 onSurfaceVariant
-        )
-        assertNotEquals(dark.plate, dark.glyph)
-        assertEquals(dark.plate, dark.star)
-
-        // 亮度差要够大：1.3× 字号放大后仍能看出"深灰气泡 + 浅灰底板"。
-        for ((name, c) in listOf("light" to light, "dark" to dark)) {
-            val delta = abs(c.glyph.luminance() - c.plate.luminance())
-            assertTrue("$name 亮度差 $delta 太小（要求 ≥0.20），停止态会看不出气泡轮廓", delta >= 0.20f)
-        }
+    fun stoppedOrbPlateContrastsWithBrandGlyph() {
+        // 用户规格：停止态 = 浅灰圆 + 品牌本色图标（不做 tint）。这里锁"底板与品牌蓝"的亮度差，
+        // 保证 1.3× 下气泡轮廓看得清（不再出现"灰色实心方块"）。
+        val plateLight = Color(0xFFF1F3F4) // MCA 浅色 surfaceVariant
+        val brandBlue = Color(0xFF1A73E8) // 品牌气泡色
+        assertNotEquals("底板色不能等于品牌气泡色", plateLight, brandBlue)
+        val delta = abs(brandBlue.luminance() - plateLight.luminance())
+        assertTrue("底板与品牌蓝亮度差 $delta 太小（要求 ≥0.20），停止态会看不出气泡", delta >= 0.20f)
     }
 }

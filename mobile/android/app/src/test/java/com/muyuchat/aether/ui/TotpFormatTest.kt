@@ -47,4 +47,30 @@ class TotpFormatTest {
         assertEquals(0f, totpRemainingFraction(10, 0), 0.0001f)
         assertEquals(0f, totpRemainingFraction(10, -30), 0.0001f)
     }
+
+    /** 桌面条目卡的「算法 · 周期」chip（twofa.js:78）；缺省按 SHA1 兜底，不显示空算法。 */
+    @Test
+    fun algoPeriodLabelMatchesDesktopChip() {
+        val entry = com.muyuchat.aether.runtime.TotpEntry(
+            id = "x",
+            issuer = "GitHub",
+            account = "",
+            note = "",
+            digits = 6,
+            period = 30,
+            algorithm = "SHA256",
+            createdAt = 0L,
+            secretTail = "abcd",
+        )
+        assertEquals("SHA256 · 30s", totpAlgoPeriodLabel(entry))
+        assertEquals("SHA1 · 60s", totpAlgoPeriodLabel(entry.copy(algorithm = "", period = 60)))
+    }
+
+    /** 桌面添加抽屉的三个下拉：位数 6|8、周期 30|60、算法三种（不允许自造第四种）。 */
+    @Test
+    fun addDialogChoicesMatchDesktop() {
+        assertEquals(listOf(6, 8), TOTP_DIGIT_OPTIONS)
+        assertEquals(listOf(30, 60), TOTP_PERIOD_OPTIONS)
+        assertEquals(listOf("SHA1", "SHA256", "SHA512"), TOTP_ALGORITHM_OPTIONS)
+    }
 }

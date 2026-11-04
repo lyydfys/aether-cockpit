@@ -85,6 +85,54 @@ class UsageDetailApiClient(
     fun fetchPricing(status: GatewayStatus): PricingCatalog =
         parsePricing(get(status, "/api/pricing"))
 
+    /**
+     * 额度窗口（`GET /api/usage/quotas`，桌面概览页的「额度余量」卡读它）。
+     *
+     * 契约：`[{provider,name,user,windows:[{name,used,amount,limit,resetsAt,pool,family}]}]`
+     * （`usage_quota_api.go:33-75`）。`used` 的三种口径由 [quotaUsedPercent] 归一。
+     */
+    fun fetchQuotas(status: GatewayStatus): List<QuotaGroup> =
+        parseQuotas(get(status, "/api/usage/quotas"))
+
+    /**
+     * 切换计价币种：桌面 `usage.js:78` → `POST /api/pricing/save {price_currency}`，
+     * 回最新价格表（含 currency / usd_cny），页面据此重画所有金额。
+     */
+    fun saveCurrency(status: GatewayStatus, currency: String): PricingCatalog =
+        parsePricing(post(status, "/api/pricing/save", "{\"price_currency\":\"$currency\"}"))
+
+    private fun post(status: GatewayStatus, path: String, body: String): String {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val connection = (URL("http://${status.addr}$path").openConnection() as HttpURLConnection)
+        connection.connectTimeout = connectTimeoutMs
+        connection.readTimeout = readTimeoutMs
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+        try {
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(2_048) }
+                        ?.let { JSONObject(it).optString("error") }
+                }.getOrNull().orEmpty()
+                throw ManagementApiException("http_$code", detail.ifBlank { "管理接口返回 $code" }.take(160))
+            }
+            return connection.inputStream.bufferedReader(Charsets.UTF_8).use { readLimited(it) }
+        } catch (e: ManagementApiException) {
+            throw e
+        } catch (_: IOException) {
+            throw ManagementApiException("network_error", "无法连接本机管理接口")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun get(status: GatewayStatus, path: String): String {
         if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
             throw ManagementApiException("gateway_not_running", "网关未启动")
@@ -232,4 +280,100 @@ internal fun formatTokens(tokens: Long): String = when {
     tokens < 1_000 -> tokens.toString()
     tokens < 1_000_000 -> String.format(Locale.US, "%.1fk", tokens / 1_000.0)
     else -> String.format(Locale.US, "%.1fM", tokens / 1_000_000.0)
+}
+
+/* ============================================================================
+ * 额度窗口（概览页「额度余量」卡）
+ * ========================================================================== */
+
+data class QuotaWindow(
+    val name: String,
+    val used: Double,
+    val amount: Long?,
+    val limit: Long?,
+    val resetsAt: String,
+    val pool: String,
+    val family: String,
+)
+
+data class QuotaGroup(
+    val provider: String,
+    val name: String,
+    val user: String,
+    val windows: List<QuotaWindow>,
+)
+
+internal fun parseQuotas(body: String): List<QuotaGroup> {
+    val array = try {
+        JSONArray(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的额度数据格式不正确")
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val provider = item.optString("provider").trim()
+        if (provider.isEmpty()) {
+            return@mapNotNull null
+        }
+        val windows = item.optJSONArray("windows")
+        val rows = if (windows == null) {
+            emptyList()
+        } else {
+            (0 until windows.length()).mapNotNull { w ->
+                val win = windows.optJSONObject(w) ?: return@mapNotNull null
+                val name = win.optString("name").trim()
+                if (name.isEmpty()) {
+                    return@mapNotNull null
+                }
+                QuotaWindow(
+                    name = name,
+                    used = win.optDouble("used", 0.0).takeIf { it.isFinite() } ?: 0.0,
+                    amount = win.optLong("amount", 0L).takeIf { it > 0L },
+                    limit = win.optLong("limit", 0L).takeIf { it > 0L },
+                    resetsAt = win.optString("resetsAt").trim(),
+                    pool = win.optString("pool").trim(),
+                    family = win.optString("family").trim(),
+                )
+            }
+        }
+        QuotaGroup(
+            provider = provider,
+            name = item.optString("name").trim().ifBlank { provider },
+            user = item.optString("user").trim(),
+            windows = rows,
+        )
+    }
+}
+
+/**
+ * 已用百分比（0–100）。后端三种口径并存（桌面 `format.js:usedPct` 同一套规则）：
+ * `amount/limit` 优先，其次 `used` 为 0–1 小数或 0–100 百分数。
+ */
+internal fun quotaUsedPercent(window: QuotaWindow): Double {
+    val amount = window.amount
+    val limit = window.limit
+    if (amount != null && limit != null && limit > 0L) {
+        return ((amount.toDouble() / limit.toDouble()) * 100.0).coerceIn(0.0, 100.0)
+    }
+    val raw = window.used.takeIf { it.isFinite() } ?: 0.0
+    return if (raw <= 1.0) (raw * 100.0).coerceIn(0.0, 100.0) else raw.coerceIn(0.0, 100.0)
+}
+
+/**
+ * 重置时间：后端给 ISO 8601（`unixISO`），显示成本地 `MM/dd HH:mm`（桌面 `fmtReset` 同格式）。
+ * 解析不了就原样返回——不编一个时间给自己看。
+ */
+internal fun formatQuotaReset(raw: String): String {
+    val text = raw.trim()
+    if (text.isEmpty()) {
+        return ""
+    }
+    val parsed = runCatching { java.time.OffsetDateTime.parse(text) }
+        .recoverCatching { java.time.Instant.parse(text).atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime() }
+        .recoverCatching {
+            java.time.LocalDateTime.parse(text).atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime()
+        }
+        .getOrNull() ?: return text
+    return parsed.atZoneSameInstant(java.time.ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("MM/dd HH:mm", Locale.US))
 }

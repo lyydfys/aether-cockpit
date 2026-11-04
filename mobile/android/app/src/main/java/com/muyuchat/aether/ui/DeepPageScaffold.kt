@@ -59,6 +59,30 @@ internal val DeepBlockGap: Dp = 24.dp
 /** 列表行的垂直内边距：统一 16dp（行高约 52dp，顺带满足 48dp 触控下限）。 */
 internal val DeepRowVertical: Dp = 16.dp
 
+/**
+ * 页面可滚动内容底部给悬浮球预留的空间：球 64 + 边距 8 + 余量 16 = 88。
+ *
+ * 只作为 LazyColumn 的 `contentPadding` 使用；不要给页面根容器加常驻 padding，
+ * 否则每页底部会永久出现一条空白带。
+ */
+internal val BubbleSafeBottom: Dp = 88.dp
+
+/**
+ * 深层页面 LazyColumn 的统一 contentPadding：底部滚出悬浮球的安全区。
+ *
+ * 页面正常滚动时看不到这块空间，只有滚到末尾才多出 88dp，最后一张卡不会被球压住。
+ */
+internal fun bubbleSafeContentPadding(
+    horizontal: Dp = 20.dp,
+    top: Dp = 8.dp,
+    bottom: Dp = BubbleSafeBottom,
+): PaddingValues = PaddingValues(
+    start = horizontal,
+    top = top,
+    end = horizontal,
+    bottom = bottom,
+)
+
 /** 卡片色调。只在这三档里选，避免每页各发明一种底色。 */
 internal enum class DeepTone { Neutral, Info, Danger }
 

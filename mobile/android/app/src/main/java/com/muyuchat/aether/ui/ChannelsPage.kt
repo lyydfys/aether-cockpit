@@ -42,6 +42,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -121,10 +125,14 @@ internal fun ChannelsPage(
     onLoadModels: (String) -> Unit = {},
     onDismissModels: (String) -> Unit = {},
     onToggleProvider: (String, Boolean) -> Unit = { _, _ -> },
+    /** 打开「接入渠道」页（桌面 `channels.js:176/188` 的入口）；为 null 时不画入口。 */
+    onOpenOnboard: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(AccountFilter.ALL) }
+    // 桌面 channels.js:183 的「列表 / 网格」：网格 2 列，1.3× 字号下自动退回单列。
+    var layout by rememberSaveable { mutableStateOf(AccountsLayout.GRID) }
     var selecting by rememberSaveable { mutableStateOf(false) }
     // 选中项存成 List（Bundle 可保存）；N 很小，查表用 contains 足够。
     var selectedIds by rememberSaveable { mutableStateOf(listOf<String>()) }
@@ -138,10 +146,15 @@ internal fun ChannelsPage(
     val visibleSelected = visibleSelection(selectedIds, filtered)
     val checkinTargets = batchCheckinTargets(filtered, visibleSelected)
     val allSelected = allVisibleSelected(visibleSelected, filtered)
+    val fontScale = LocalDensity.current.fontScale
+    val columns = accountGridColumns(layout, fontScale)
+    // 桌面 channels.js:186：网格布局且账号少于 3 个时补一张虚线卡（列表布局没有）。
+    val showAddCard = showAddChannelCard(layout, fontScale, filtered.size)
+    val cardRows = filtered.chunked(columns)
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { MobileHeader(status) }
@@ -220,9 +233,9 @@ internal fun ChannelsPage(
                     item {
                         StateCard(
                             title = "还没有账号",
-                            detail = "导入加密账号包，或在下方「接入与迁移」里用 Qoder 登录；账号与额度会显示在这里。",
-                            actionLabel = "选择账号包",
-                            onAction = onPickBundle,
+                            detail = "点「接入渠道」选择接入方式：Qoder 设备码登录，或导入加密账号包。",
+                            actionLabel = if (onOpenOnboard != null) "接入渠道" else null,
+                            onAction = onOpenOnboard,
                         )
                     }
                 } else {
@@ -235,6 +248,29 @@ internal fun ChannelsPage(
                     }
                     item {
                         SearchField(query = query, onQueryChange = { query = it }, placeholder = "搜索账号或渠道")
+                    }
+                    // 工具条：视图切换（桌面 channels.js:183 的 list/grid）+ 接入渠道入口
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            AccountsLayout.entries.forEach { mode ->
+                                McaChip(
+                                    selected = layout == mode,
+                                    onClick = { layout = mode },
+                                    label = { Text(accountLayoutLabel(mode)) },
+                                )
+                            }
+                            Spacer(Modifier.weight(1f))
+                            if (onOpenOnboard != null) {
+                                McaButton(
+                                    onClick = onOpenOnboard,
+                                    style = McaButtonStyle.Outlined,
+                                ) { Text("接入渠道") }
+                            }
+                        }
                     }
                     if (selecting) {
                         item {
@@ -269,74 +305,54 @@ internal fun ChannelsPage(
                             )
                         }
                     } else {
-                        items(filtered.size) { index ->
-                            val row = filtered[index]
-                            AccountQuotaCard(
-                                row = row,
-                                provider = state.providers.firstOrNull { it.id == row.providerId },
-                                action = state.accountAction,
-                                probe = probes[row.providerId],
-                                probing = probing == row.providerId,
-                                toggling = toggling == row.providerId,
-                                modelsState = models[row.providerId],
-                                readOutcome = state.quotaReadOutcomes[row.accountId],
-                                edit = state.accountEdit,
-                                presetsState = state.presets,
-                                onAccountAction = onAction,
-                                baseUrl = gatewayBaseUrl,
-                                selectionMode = selecting,
-                                selected = row.accountId in visibleSelected,
-                                onToggleSelected = {
-                                    selectedIds = toggleSelection(selectedIds, row.accountId)
-                                },
-                                onLongPress = {
-                                    selecting = true
-                                    if (row.accountId !in selectedIds) {
-                                        selectedIds = (selectedIds + row.accountId).distinct()
+                        items(cardRows.size) { rowIndex ->
+                            val pair = cardRows[rowIndex]
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                pair.forEach { row ->
+                                    Column(Modifier.weight(1f)) {
+                                        AccountCard(
+                                            row = row,
+                                            providers = state.providers,
+                                            state = state,
+                                            probes = probes,
+                                            probing = probing,
+                                            toggling = toggling,
+                                            models = models,
+                                            baseUrl = gatewayBaseUrl,
+                                            selecting = selecting,
+                                            visibleSelected = visibleSelected,
+                                            selectedIds = selectedIds,
+                                            onAction = onAction,
+                                            onLoadModels = onLoadModels,
+                                            onToggleProvider = onToggleProvider,
+                                            onTestProvider = onTestProvider,
+                                            onSelect = { selectedIds = toggleSelection(selectedIds, row.accountId) },
+                                            onLongPress = {
+                                                selecting = true
+                                                if (row.accountId !in selectedIds) {
+                                                    selectedIds = (selectedIds + row.accountId).distinct()
+                                                }
+                                            },
+                                        )
                                     }
-                                },
-                                onSetDisabled = { disabled ->
-                                    onAction(ChannelsAction.SetAccountDisabled(row.accountId, disabled))
-                                },
-                                onCheckin = { onAction(ChannelsAction.CheckinAccount(row.accountId)) },
-                                onReadQuota = { onAction(ChannelsAction.ReadAccountQuota(row.accountId)) },
-                                onLoadModels = { onLoadModels(row.providerId) },
-                                onToggleProvider = { enable -> onToggleProvider(row.providerId, enable) },
-                                onTest = { onTestProvider(row.providerId) },
-                            )
+                                }
+                                if (pair.size < columns) {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                        if (showAddCard && onOpenOnboard != null) {
+                            item { AddChannelCard(onClick = onOpenOnboard) }
                         }
                     }
                 }
             }
         }
 
-        // ——— 收尾：接入与迁移 ———
-        item {
-            SectionHeader(
-                title = "接入与迁移",
-                note = "账号包导入/导出与 Qoder 登录。这些动作会真的往本机账号池里写账号。",
-            )
-        }
-        item {
-            QoderLoginSection(
-                state = qoderLoginState,
-                onStart = onStartQoderLogin,
-                onOpenUrl = onOpenQoderLogin,
-                onCancel = onCancelQoderLogin,
-                onDismiss = onDismissQoderLogin,
-            )
-        }
-        item {
-            BundlePreviewSection(
-                state = bundleState,
-                importState = bundleImportState,
-                onPick = onPickBundle,
-                onImport = onImportBundle,
-                onDismiss = onDismissBundle,
-            )
-        }
-        // 账号包的另一半：把本机账号导回桌面。放在导入卡片旁边，口径成对出现。
-        item { AccountExportSection(status = status) }
+        // ——— 收尾：口径说明（账号包与 Qoder 登录已移到「接入渠道」页） ———
         item {
             Text(
                 text = "额度来自本机管理接口的最近一次读数，卡片不展示任何凭据；" +
@@ -361,7 +377,123 @@ internal fun ChannelsPage(
     }
 }
 
-/** 选择态顶栏：已选 N / 全选 / 取消。 */
+/**
+ * 账号区布局（桌面 `channels.js:183`：`filter.layout === 'list'` 时单列，否则 `acct-grid` 两列）。
+ */
+internal enum class AccountsLayout {
+    LIST,
+    GRID,
+}
+
+internal fun accountLayoutLabel(layout: AccountsLayout): String = when (layout) {
+    AccountsLayout.LIST -> "列表"
+    AccountsLayout.GRID -> "网格"
+}
+
+/**
+ * 实际列数：网格在 1.3× 以上字号时退回单列（桌面靠 auto-fill 自适应，Android 130% 字号下
+ * 两列会把额度条和按钮挤成一列，所以直接单列）。
+ */
+internal fun accountGridColumns(layout: AccountsLayout, fontScale: Float): Int =
+    if (layout == AccountsLayout.GRID && fontScale < 1.3f) 2 else 1
+
+/**
+ * 「接入新渠道」虚线卡是否出现（桌面 `channels.js:186`）：
+ * **只在网格布局**、且筛选后账号数 1–2 个时补位（0 个走空态、≥3 个网格已填满）。
+ * 1.3× 字号退成单列时不出现（桌面此时是 list 布局，也没有虚线卡）。
+ */
+internal fun showAddChannelCard(layout: AccountsLayout, fontScale: Float, count: Int): Boolean =
+    accountGridColumns(layout, fontScale) > 1 && count in 1..2
+
+/** 账号卡的统一入口：网格/列表两种布局共用同一份参数装配。 */
+@Composable
+private fun AccountCard(
+    row: AccountQuotaRow,
+    providers: List<ProviderSummary>,
+    state: ChannelsUiState.Ready,
+    probes: Map<String, ChannelProbe>,
+    probing: String?,
+    toggling: String?,
+    models: Map<String, ProviderModelsUiState>,
+    baseUrl: String,
+    selecting: Boolean,
+    visibleSelected: List<String>,
+    selectedIds: List<String>,
+    onAction: (ChannelsAction) -> Unit,
+    onLoadModels: (String) -> Unit,
+    onToggleProvider: (String, Boolean) -> Unit,
+    onTestProvider: (String) -> Unit,
+    onSelect: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    AccountQuotaCard(
+        row = row,
+        provider = providers.firstOrNull { it.id == row.providerId },
+        action = state.accountAction,
+        probe = probes[row.providerId],
+        probing = probing == row.providerId,
+        toggling = toggling == row.providerId,
+        modelsState = models[row.providerId],
+        readOutcome = state.quotaReadOutcomes[row.accountId],
+        edit = state.accountEdit,
+        presetsState = state.presets,
+        onAccountAction = onAction,
+        baseUrl = baseUrl,
+        selectionMode = selecting,
+        selected = row.accountId in visibleSelected || row.accountId in selectedIds,
+        onToggleSelected = onSelect,
+        onLongPress = onLongPress,
+        onSetDisabled = { disabled -> onAction(ChannelsAction.SetAccountDisabled(row.accountId, disabled)) },
+        onCheckin = { onAction(ChannelsAction.CheckinAccount(row.accountId)) },
+        onReadQuota = { onAction(ChannelsAction.ReadAccountQuota(row.accountId)) },
+        onLoadModels = { onLoadModels(row.providerId) },
+        onToggleProvider = { enable -> onToggleProvider(row.providerId, enable) },
+        onTest = { onTestProvider(row.providerId) },
+    )
+}
+
+/** 桌面 `channels.js:187-189` 的虚线「接入新渠道」卡：网格里账号少于 3 个时补位。 */
+@Composable
+private fun AddChannelCard(onClick: () -> Unit) {
+    val outline = MaterialTheme.colorScheme.outline
+    val gap = MaterialTheme.colorScheme.outlineVariant
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 132.dp)
+            .clip(McaShape.Sheet)
+            .drawBehind {
+                val width = 1.dp.toPx()
+                val dash = 6.dp.toPx()
+                drawRoundRect(
+                    color = gap,
+                    style = Stroke(
+                        width = width,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(dash, dash), 0f),
+                    ),
+                )
+            }
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // 仓库里没有「+」图标资源（本页写集不含 res/），用字形画，避免新增资源
+            Text(
+                text = "+",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = outline,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "接入新渠道",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 @Composable
 private fun SelectionBar(
     selectedCount: Int,

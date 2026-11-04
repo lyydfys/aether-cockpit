@@ -3,76 +3,82 @@ package com.muyuchat.aether.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
-import com.muyuchat.aether.runtime.AnonymousProbeReport
+import com.muyuchat.aether.runtime.AgentCliInfo
+import com.muyuchat.aether.runtime.CallerKeySummary
+import com.muyuchat.aether.runtime.ChannelProbeReport
 import com.muyuchat.aether.runtime.GatewayStatus
-import com.muyuchat.aether.runtime.HealthProbe
 import com.muyuchat.aether.runtime.HealthzProbe
 import com.muyuchat.aether.runtime.MetricsDigest
 import com.muyuchat.aether.runtime.ProbeOutcome
 import com.muyuchat.aether.runtime.ReadyzProbe
-import com.muyuchat.aether.runtime.RuntimeInfo
-import com.muyuchat.aether.runtime.SessionProbeReport
 import com.muyuchat.aether.runtime.VersionInfo
+import com.muyuchat.aether.runtime.channelProbeAgeLabel
+import com.muyuchat.aether.runtime.channelProbeSummary
+import com.muyuchat.core.designsystem.McaButton
+import com.muyuchat.core.designsystem.McaButtonSize
+import com.muyuchat.core.designsystem.McaButtonStyle
+import com.muyuchat.core.designsystem.McaDialog
+import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
+import com.muyuchat.core.designsystem.McaShape
+import com.muyuchat.core.designsystem.McaTonal
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /*
- * 网关探针页。
+ * 网关与探针，1:1 对齐桌面 `internal/web/ui2/js/views/gateway.js`。
  *
- * 版面顺序：页头（返回 + 标题 + 重新探测 + 采样时刻）→ 探针结果（匿名端点 / 会话端点，
- * 各一张卡，卡内 16dp、端点之间 16dp）→ 自检 → 最近异常 → 配置漂移 → 口径说明。
+ * 桌面区块顺序（gateway.js:136 的 append 顺序）：
+ *   API 服务(:101-114) → 接入片段(:116-120) → 调用方密钥(:202-257) →
+ *   Codex 身份对照(:141-175) → grid2[渠道探测(:122-127) + 版本与探针(:129-134)] →
+ *   本机 Agent 版本(:177-200)。
+ * 「额度提醒」(:86-100) 与「Codex 身份对照」在移动端没有端点/客户端，本轮不做（见汇报）。
  *
- * 三个诊断区块（自检 / 最近异常 / 配置漂移）各自在自己的文件里画卡与标题，本页只负责
- * 把它们排成 24dp 的区块间距：列表本身是 12dp，所以给每块补 12dp 上内距。
- * 本页不套第二层卡：端点明细直接排在区块卡里，不再一条端点一张卡。
+ * 手机上一列排：grid2 拆成「渠道探测」在上、「版本与探针」在下，顺序不变。
  */
 
-/** 字段行：label 左，value 右；[emphasis] 用于 reasons 这种要报警的文案。 */
-internal data class ProbeField(
-    val label: String,
-    val value: String,
-    val emphasis: Boolean = false,
-)
-
-/**
- * 一个端点一格的渲染模型。已经把 [ProbeOutcome] 折平：页面不再关心泛型，
- * 只按 [httpStatus]/[attention] 决定徽标颜色，按 [fields] 决定明细。
- */
-internal data class ProbeRow(
-    val path: String,
-    val httpStatus: Int,
-    val badge: String,
-    val attention: Boolean,
-    val code: String,
-    val message: String,
-    val fields: List<ProbeField>,
+/** 桌面 `gateway.js:6-11` 的四个协议 tab。 */
+internal val ProbeProtocols: List<Triple<String, String, String>> = listOf(
+    Triple("openai", "OpenAI", "/v1"),
+    Triple("responses", "Responses", "/v1"),
+    Triple("anthropic", "Anthropic", ""),
+    Triple("gemini", "Gemini", "/v1beta"),
 )
 
 @Composable
@@ -84,19 +90,30 @@ internal fun GatewayProbePage(
     onOpenOverview: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var protocol by remember { mutableStateOf("openai") }
+    var drawer by remember { mutableStateOf<String?>(null) }
+    var troubleshootOpen by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+
+    LaunchedEffect(Unit) {
+        if (state is ProbeUiState.Idle) {
+            onRefresh()
+        }
+    }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
+        item { MobileHeader(status) }
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
-                MobileHeader(status)
-                ProbeHeadline(onBack = onBack, onRefresh = onRefresh, enabled = state !is ProbeUiState.Loading)
-                if (state is ProbeUiState.Ready) {
-                    ProbeSampledLine(state.sampledAtMs)
-                }
-            }
+            ProbeHeadline(
+                state = state,
+                onBack = onBack,
+                onRefresh = onRefresh,
+                enabled = state !is ProbeUiState.Loading,
+            )
         }
         when (state) {
             ProbeUiState.Idle, ProbeUiState.Loading -> item { ProbeLoadingCard() }
@@ -104,7 +121,7 @@ internal fun GatewayProbePage(
                 if (state.code == "gateway_not_running") {
                     DeepStateCard(
                         title = "网关未启动",
-                        detail = "探针读的是本机回环上的 /healthz、/api/health、/readyz 等端点；" +
+                        detail = "本页读的是本机回环上的 /healthz、/api/health、/readyz、/version、/metrics；" +
                             "网关没起来时这些端点没有服务可应答。先启动网关，再回本页重新探测。",
                         actionLabel = "前往概览",
                         onAction = onOpenOverview,
@@ -113,7 +130,7 @@ internal fun GatewayProbePage(
                     DeepStateCard(
                         title = "探测失败",
                         detail = "${state.message}（错误码：${state.code}）。这次没有拿到任何端点结果，" +
-                            "所以下面不显示上一次的旧数据。重试一次，仍失败就看「自检」区块。",
+                            "所以下面不显示上一次的旧数据。",
                         tone = DeepTone.Danger,
                         actionLabel = "重试",
                         onAction = onRefresh,
@@ -122,42 +139,45 @@ internal fun GatewayProbePage(
             }
             is ProbeUiState.Ready -> {
                 item {
-                    ProbeSectionCard(
-                        title = "匿名端点",
-                        note = "不带 Authorization：/healthz 由移动运行时在进入网关前接管，" +
-                            "/api/health 在移动鉴权里被显式放行。给它们带会话凭据只会把凭据扩散到本可匿名的地方。",
-                        rows = anonymousProbeRows(state.anonymous),
+                    ApiServiceCard(
+                        status = status,
+                        state = state,
+                        protocol = protocol,
+                        onCopy = { clipboard.setText(AnnotatedString(it)) },
                     )
                 }
                 item {
-                    ProbeSectionCard(
-                        title = "会话端点（需会话凭据）",
-                        note = "移动运行时把 /readyz、/version、/metrics 纳入管理面（回环不等于可信），" +
-                            "桌面端这三个是匿名端点；/api/runtime 同样在管理面之下。" +
-                            "本页按移动运行时的真实面分组，所以这四项都带 Authorization: Bearer 会话凭据访问。",
-                        rows = sessionProbeRows(state.session),
+                    SnippetCard(
+                        status = status,
+                        state = state,
+                        protocol = protocol,
+                        onProtocol = { protocol = it },
+                        onCopy = { clipboard.setText(AnnotatedString(it)) },
+                    )
+                }
+                item { CallerKeysCard(state.callerKeys) }
+                item {
+                    ChannelProbeCard(
+                        report = state.channels,
+                        probing = state.probingChannels,
+                        onProbe = onRefresh,
+                    )
+                }
+                item {
+                    VersionProbeCard(
+                        state = state,
+                        onOpenEndpoint = { drawer = it },
+                    )
+                }
+                item { AgentVersionCard(state.agents, state.agentsCheckedAt, onCopy = { clipboard.setText(AnnotatedString(it)) }) }
+                item {
+                    TroubleshootCard(
+                        open = troubleshootOpen,
+                        onToggle = { troubleshootOpen = !troubleshootOpen },
+                        status = status,
                     )
                 }
             }
-        }
-        // 自检 / 最近异常 / 配置漂移：三块都是独立区块，彼此留 24dp（列表 12 + 上内距 12）。
-        item {
-            DiagnoseSection(
-                status = status,
-                modifier = Modifier.padding(top = DeepBlockGap - DeepCardGap),
-            )
-        }
-        item {
-            RecentFailuresSection(
-                status = status,
-                modifier = Modifier.padding(top = DeepBlockGap - DeepCardGap),
-            )
-        }
-        item {
-            DriftSection(
-                status = status,
-                modifier = Modifier.padding(top = DeepBlockGap - DeepCardGap),
-            )
         }
         item {
             Text(
@@ -168,11 +188,21 @@ internal fun GatewayProbePage(
             )
         }
     }
+
+    drawer?.let { path ->
+        ProbeEndpointDialog(path = path, state = state, onDismiss = { drawer = null })
+    }
 }
 
-/** 页头：返回 + 标题/副标题 + 重新探测。三段的左右内边距由页框的 20dp 统一给。 */
+/* ---------------- 页头 ---------------- */
+
 @Composable
-private fun ProbeHeadline(onBack: () -> Unit, onRefresh: () -> Unit, enabled: Boolean) {
+private fun ProbeHeadline(
+    state: ProbeUiState,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    enabled: Boolean,
+) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         McaIconButton(contentDescription = "返回", onClick = onBack) {
             Icon(
@@ -185,22 +215,25 @@ private fun ProbeHeadline(onBack: () -> Unit, onRefresh: () -> Unit, enabled: Bo
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                text = "探针",
+                text = "网关与探针",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-                text = "网关探针工作区 · 只读",
+                text = "监听、探针、指标与版本",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (state is ProbeUiState.Ready) {
+                Text(
+                    text = "本次探测：${probeClockFormat.format(probeInstant(state.sampledAtMs))}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
-        McaIconButton(
-            contentDescription = "重新探测",
-            onClick = onRefresh,
-            enabled = enabled,
-        ) {
+        McaIconButton(contentDescription = "重新探测", onClick = onRefresh, enabled = enabled) {
             Icon(
                 painter = painterResource(R.drawable.ic_refresh),
                 contentDescription = null,
@@ -211,136 +244,554 @@ private fun ProbeHeadline(onBack: () -> Unit, onRefresh: () -> Unit, enabled: Bo
     }
 }
 
-/**
- * 一组端点的卡：标题（titleMedium + Bold）+ 右对齐的端点计数 + 口径说明 + 端点明细。
- *
- * 端点之间用 16dp 垂直节奏；标题与首个端点也隔 16dp，所以卡内不会出现「标题贴着数据」。
- */
+/* ---------------- API 服务（gateway.js:101-114） ---------------- */
+
 @Composable
-private fun ProbeSectionCard(title: String, note: String, rows: List<ProbeRow>) {
+private fun ApiServiceCard(
+    status: GatewayStatus,
+    state: ProbeUiState.Ready,
+    protocol: String,
+    onCopy: (String) -> Unit,
+) {
+    val base = probeBaseUrl(status, state)
+    val lan = state.settings?.lanEnabled ?: false
+    val health = (state.anonymous.health as? ProbeOutcome.Ok)?.value
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) { DeepCardTitle(title) }
+            DeepCardTitle("API 服务")
+            Spacer(Modifier.width(8.dp))
             Text(
-                text = probeRowsSummary(rows),
+                text = "实例网关",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = if (health?.status == "ok") "运行中" else "未就绪",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = if (health?.status == "ok") {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        ProbeFieldRow("入口", base, trailing = {
+            McaIconButton(contentDescription = "复制入口", onClick = { onCopy(base) }) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_copy),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(McaIconSize.Xs),
+                )
+            }
+        })
+        ProbeFieldRow("监听范围", if (lan) "局域网（需密钥）· 外部可达" else "仅本机 · 外部不可达")
+        ProbeFieldRow("调用方密钥", "${state.callerKeys.size} 把 · 也可以在这里生成和管理")
+        ProbeFieldRow(
+            "客户端接入",
+            if (state.clients.isEmpty()) "未检测到" else state.clients.joinToString(" · ") { it.name.ifBlank { it.id } },
+        )
+        Spacer(Modifier.height(8.dp))
+        McaButton(
+            onClick = { onCopy(probeSnippet(base, protocol, probeSampleModel())) },
+            style = McaButtonStyle.Outlined,
+            size = McaButtonSize.CardAction,
+        ) { Text("复制接入片段") }
+    }
+}
+
+/* ---------------- 接入片段（gateway.js:116-120） ---------------- */
+
+@Composable
+private fun SnippetCard(
+    status: GatewayStatus,
+    state: ProbeUiState.Ready,
+    protocol: String,
+    onProtocol: (String) -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    val base = probeBaseUrl(status, state)
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("接入片段")
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "五种 API · 一个地址",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ProbeProtocols.forEach { (id, label, _) ->
+                McaButton(
+                    onClick = { onProtocol(id) },
+                    style = if (protocol == id) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text(label) }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Surface(
+            shape = McaShape.CardAction,
+            color = McaTonal.fill(),
+            border = McaHairline.stroke(),
+        ) {
+            Text(
+                text = probeSnippet(base, protocol, probeSampleModel()),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        McaButton(
+            onClick = { onCopy(probeSnippet(base, protocol, probeSampleModel())) },
+            style = McaButtonStyle.Outlined,
+            size = McaButtonSize.CardAction,
+        ) { Text("复制片段") }
+    }
+}
+
+/* ---------------- 调用方密钥（gateway.js:202-257，只读版） ---------------- */
+
+@Composable
+private fun CallerKeysCard(keys: List<CallerKeySummary>) {
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("调用方密钥")
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "${keys.size} 把",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Spacer(Modifier.height(6.dp))
-        DeepCardBody(note)
-        Spacer(Modifier.height(DeepRowVertical))
-        rows.forEachIndexed { index, row ->
-            if (index > 0) {
-                Spacer(Modifier.height(DeepRowVertical))
+        DeepCardBody(
+            "生成、轮换、删除与限额在「设置 → 调用方密钥」里操作；本页只列现状，避免两处入口各写一套。",
+        )
+        if (keys.isEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            DeepCardBody("还没有调用方密钥。生成一把给 CI 或其它电脑用；本机回环可免密钥。")
+            return@DeepCard
+        }
+        keys.forEach { key ->
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = key.name.ifBlank { key.id },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = key.masked.ifBlank { "—" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = if (key.off) "已停用" else "启用",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (key.off) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                )
             }
-            ProbeRowBlock(row)
         }
     }
 }
 
-/** 端点计数：只用真实的 [ProbeRow.attention] 判定「需注意」，不估算、不上色。 */
-internal fun probeRowsSummary(rows: List<ProbeRow>): String {
-    if (rows.isEmpty()) {
-        return "0 个端点"
-    }
-    val attention = rows.count { it.attention }
-    return if (attention == 0) {
-        "${rows.size} 个端点"
-    } else {
-        "${rows.size} 个端点 · $attention 项需注意"
+/* ---------------- 渠道探测（gateway.js:122-127, 289-301） ---------------- */
+
+@Composable
+private fun ChannelProbeCard(report: ChannelProbeReport, probing: Boolean, onProbe: () -> Unit) {
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("渠道探测")
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = if (report.checkedAt > 0) {
+                    "上次 ${probeDateAuto(report.checkedAt)}"
+                } else {
+                    "未探测"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        McaButton(
+            onClick = onProbe,
+            style = McaButtonStyle.Primary,
+            size = McaButtonSize.CardAction,
+            enabled = !probing,
+        ) { Text(if (probing) "探测中…" else "全部探测") }
+        if (report.entries.isEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            DeepCardBody("还没有探测结果。点「全部探测」发一次最小请求；会消耗真实账号额度。")
+            return@DeepCard
+        }
+        report.entries.forEach { entry ->
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = entry.providerId + if (entry.label.isNotBlank()) " · ${entry.label}" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = channelProbeSummary(entry),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (entry.ok) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                    maxLines = 1,
+                )
+            }
+            Text(
+                text = channelProbeAgeLabel(entry.at, System.currentTimeMillis() / 1000),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
-/** 匿名组两格：移动运行时里不带凭据就能读的端点。失败只占自己那一格。 */
-internal fun anonymousProbeRows(report: AnonymousProbeReport): List<ProbeRow> = listOf(
-    when (val outcome = report.healthz) {
-        is ProbeOutcome.Ok -> ProbeRow(
-            path = "/healthz",
-            httpStatus = 200,
-            badge = "正常",
-            attention = false,
-            code = "",
-            message = "",
-            fields = healthzFields(outcome.value),
-        )
-        is ProbeOutcome.Failed -> probeFailedRow("/healthz", outcome)
-    },
-    when (val outcome = report.health) {
-        is ProbeOutcome.Ok -> ProbeRow(
-            path = "/api/health",
-            httpStatus = 200,
-            badge = if (outcome.value.status == "ok") "正常" else "异常",
-            attention = outcome.value.status != "ok",
-            code = "",
-            message = "",
-            fields = healthFields(outcome.value),
-        )
-        is ProbeOutcome.Failed -> probeFailedRow("/api/health", outcome)
-    },
-)
+/* ---------------- 版本与探针（gateway.js:129-134） ---------------- */
 
-/** 会话组四格：移动运行时里必须带 Bearer 的端点，与匿名组完全独立的一盏灯。 */
-internal fun sessionProbeRows(report: SessionProbeReport): List<ProbeRow> = listOf(
-    when (val outcome = report.readyz) {
-        is ProbeOutcome.Ok -> ProbeRow(
-            path = "/readyz",
-            httpStatus = outcome.value.httpStatus,
-            badge = if (outcome.value.ready) "就绪" else "未就绪",
-            attention = !outcome.value.ready,
-            code = "",
-            message = "",
-            fields = readyzFields(outcome.value),
-        )
-        is ProbeOutcome.Failed -> probeFailedRow("/readyz", outcome)
-    },
-    when (val outcome = report.version) {
-        is ProbeOutcome.Ok -> ProbeRow(
-            path = "/version",
-            httpStatus = 200,
-            badge = "正常",
-            attention = false,
-            code = "",
-            message = "",
-            fields = versionFields(outcome.value),
-        )
-        is ProbeOutcome.Failed -> probeFailedRow("/version", outcome)
-    },
-    when (val outcome = report.metrics) {
-        is ProbeOutcome.Ok -> ProbeRow(
-            path = "/metrics",
-            httpStatus = 200,
-            badge = "正常",
-            attention = false,
-            code = "",
-            message = "",
-            fields = metricsFields(outcome.value),
-        )
-        is ProbeOutcome.Failed -> probeFailedRow("/metrics", outcome)
-    },
-    when (val outcome = report.runtime) {
-        is ProbeOutcome.Ok -> ProbeRow(
-            path = "/api/runtime",
-            httpStatus = 200,
-            badge = "正常",
-            attention = false,
-            code = "",
-            message = "",
-            fields = runtimeFields(outcome.value),
-        )
-        is ProbeOutcome.Failed -> probeFailedRow("/api/runtime", outcome)
-    },
-)
+@Composable
+private fun VersionProbeCard(state: ProbeUiState.Ready, onOpenEndpoint: (String) -> Unit) {
+    val version = (state.session.version as? ProbeOutcome.Ok)?.value
+    DeepCard {
+        DeepCardTitle("版本与探针")
+        Spacer(Modifier.height(10.dp))
+        ProbeFieldRow("版本", version?.version?.ifBlank { "dev" } ?: "—")
+        ProbeFieldRow("构建时间", version?.buildTime?.ifBlank { "—" } ?: "—")
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "存活 / 就绪",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.widthIn(min = 96.dp),
+            )
+            McaButton(
+                onClick = { onOpenEndpoint("/healthz") },
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+            ) { Text("查看 /healthz") }
+            Spacer(Modifier.width(6.dp))
+            McaButton(
+                onClick = { onOpenEndpoint("/readyz") },
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+            ) { Text("查看 /readyz") }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "指标",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.widthIn(min = 96.dp),
+            )
+            McaButton(
+                onClick = { onOpenEndpoint("/metrics") },
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+            ) { Text("查看 /metrics") }
+        }
+    }
+}
 
-private fun probeFailedRow(path: String, failed: ProbeOutcome.Failed): ProbeRow = ProbeRow(
-    path = path,
-    httpStatus = 0,
-    badge = "失败",
-    attention = true,
-    code = failed.code,
-    message = failed.message,
-    fields = emptyList(),
-)
+/* ---------------- 本机 Agent 版本（gateway.js:177-200） ---------------- */
+
+@Composable
+private fun AgentVersionCard(agents: List<AgentCliInfo>, checkedAtSec: Long, onCopy: (String) -> Unit) {
+    if (agents.isEmpty()) {
+        DeepCard {
+            DeepCardTitle("本机 Agent 版本")
+            Spacer(Modifier.height(6.dp))
+            DeepCardBody("还没有巡检结果。网关起来后会自动扫描本机 CLI。")
+        }
+        return
+    }
+    val installed = agents.count { it.installed }
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("本机 Agent 版本")
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "$installed / ${agents.size} 已安装" +
+                    if (checkedAtSec > 0) " · 巡检于 ${probeDateAuto(checkedAtSec)}" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        agents.forEach { agent ->
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = agent.name.ifBlank { agent.id },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = if (agent.installed) agent.version.ifBlank { "已安装" } else "未安装",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (agent.installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            val cmd = if (agent.installed) agent.updateCmd else agent.installCmd
+            if (cmd.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                McaButton(
+                    onClick = { onCopy(cmd) },
+                    style = McaButtonStyle.Outlined,
+                    size = McaButtonSize.CardAction,
+                ) { Text(if (agent.installed) "复制升级命令" else "复制安装命令") }
+            }
+        }
+    }
+}
+
+/* ---------------- 排障（桌面无此入口：三块手机端独有，收进一个折叠入口） ---------------- */
+
+@Composable
+private fun TroubleshootCard(open: Boolean, onToggle: () -> Unit, status: GatewayStatus) {
+    DeepCard {
+        DeepCardTitle("排障（移动端独有）")
+        Spacer(Modifier.height(6.dp))
+        DeepCardBody(
+            "桌面网关页没有这三块：自检、最近异常、配置漂移。手机上它们仍然有用（尤其是没有桌面可看的时候），" +
+                "所以收进一个入口，不占版面。默认收起。",
+        )
+        Spacer(Modifier.height(12.dp))
+        McaButton(
+            onClick = onToggle,
+            style = if (open) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+            size = McaButtonSize.CardAction,
+        ) { Text(if (open) "收起排障" else "展开排障") }
+        if (open) {
+            Spacer(Modifier.height(12.dp))
+            DiagnoseSection(status = status)
+            Spacer(Modifier.height(DeepCardGap))
+            RecentFailuresSection(status = status)
+            Spacer(Modifier.height(DeepCardGap))
+            DriftSection(status = status)
+        }
+    }
+}
+
+/* ---------------- 探针端点抽屉（gateway.js:321-357） ---------------- */
+
+@Composable
+private fun ProbeEndpointDialog(path: String, state: ProbeUiState, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val fields = probeEndpointFields(path, state)
+    val text = fields.joinToString("\n") { "${it.label}: ${it.value}" }
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "探针 · $path",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = probeEndpointStatusText(path, state),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = if (probeEndpointBad(path, state)) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+                if (fields.isEmpty()) {
+                    Text(
+                        text = "这次没有拿到该端点的结果。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    fields.forEach { field -> ProbeFieldRow(field.label, field.value) }
+                }
+            }
+        },
+        confirmButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Primary) { Text("关闭") }
+        },
+        dismissButton = {
+            McaButton(
+                onClick = { clipboard.setText(AnnotatedString(text)) },
+                style = McaButtonStyle.Outlined,
+            ) { Text("复制") }
+        },
+    )
+}
+
+/* ---------------- 纯函数（单测覆盖） ---------------- */
+
+/**
+ * 接入地址：优先 `/api/runtime` 的 publicAddr，其次 settings 的 addr，最后 status.addr。
+ * 与桌面 `gateway.js:54-57` 同级回退；settings.addr 是 `host:port` 形态，这里补上 scheme。
+ */
+internal fun probeBaseUrl(status: GatewayStatus, state: ProbeUiState.Ready): String {
+    val runtime = (state.session.runtime as? ProbeOutcome.Ok)?.value
+    val fromSettings = state.settings?.addr?.takeIf { it.isNotBlank() }?.let { addr ->
+        if (addr.startsWith("http://") || addr.startsWith("https://")) addr else "http://$addr"
+    }
+    return runtime?.publicAddr?.takeIf { it.isNotBlank() }
+        ?: fromSettings
+        ?: "http://${status.addr}"
+}
+
+/**
+ * 接入片段。桌面 `gateway.js:63-74` 用"已接入的第一个模型"当示例；
+ * 移动端的 provider 摘要不含模型清单，所以用 `provider/model` 占位（桌面在无模型时也这样）。
+ */
+internal fun probeSnippet(baseUrl: String, protocolId: String, sampleModel: String): String {
+    val path = ProbeProtocols.firstOrNull { it.first == protocolId }?.third ?: ""
+    val base = baseUrl + path
+    return listOf(
+        "# OpenAI 兼容",
+        "\$env:OPENAI_BASE_URL=\"$base\"",
+        "\$env:OPENAI_API_KEY=\"aether\"",
+        "",
+        "curl $base/chat/completions \\",
+        "  -H \"Content-Type: application/json\" \\",
+        "  -d '{\"model\":\"$sampleModel\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'",
+    ).joinToString("\n")
+}
+
+/** 示例模型占位（与桌面 `gateway.js:58-62` 的兜底同值）。 */
+internal fun probeSampleModel(): String = "provider/model"
+
+/** 端点抽屉里的字段：复用探针解析结果，不重发请求。 */
+internal fun probeEndpointFields(path: String, state: ProbeUiState): List<ProbeField> {
+    if (state !is ProbeUiState.Ready) {
+        return emptyList()
+    }
+    return when (path) {
+        "/healthz" -> (state.anonymous.healthz as? ProbeOutcome.Ok)?.value?.let(::healthzFields)
+        "/readyz" -> (state.session.readyz as? ProbeOutcome.Ok)?.value?.let(::readyzFields)
+        "/metrics" -> (state.session.metrics as? ProbeOutcome.Ok)?.value?.let(::metricsFields)
+        "/version" -> (state.session.version as? ProbeOutcome.Ok)?.value?.let(::versionFields)
+        else -> null
+    }.orEmpty()
+}
+
+/** 端点徽标文案：就绪/未就绪、正常、失败（失败时带错误码）。 */
+internal fun probeEndpointStatusText(path: String, state: ProbeUiState): String {
+    if (state !is ProbeUiState.Ready) {
+        return "—"
+    }
+    return when (path) {
+        "/healthz" -> outcomeLabel(state.anonymous.healthz) { "HTTP 200" }
+        "/readyz" -> when (val outcome = state.session.readyz) {
+            is ProbeOutcome.Ok -> if (outcome.value.ready) "HTTP ${outcome.value.httpStatus} 就绪" else "HTTP ${outcome.value.httpStatus} 未就绪"
+            is ProbeOutcome.Failed -> "失败 · ${outcome.code}"
+        }
+        "/metrics" -> outcomeLabel(state.session.metrics) { "HTTP 200" }
+        "/version" -> outcomeLabel(state.session.version) { "HTTP 200" }
+        else -> "—"
+    }
+}
+
+/** 该端点是否处于"需要注意"的状态（用于抽屉里的颜色）。 */
+internal fun probeEndpointBad(path: String, state: ProbeUiState): Boolean {
+    if (state !is ProbeUiState.Ready) {
+        return false
+    }
+    return when (path) {
+        "/readyz" -> when (val outcome = state.session.readyz) {
+            is ProbeOutcome.Ok -> !outcome.value.ready
+            is ProbeOutcome.Failed -> true
+        }
+        "/healthz" -> state.anonymous.healthz is ProbeOutcome.Failed
+        "/metrics" -> state.session.metrics is ProbeOutcome.Failed
+        "/version" -> state.session.version is ProbeOutcome.Failed
+        else -> false
+    }
+}
+
+private fun <T> outcomeLabel(outcome: ProbeOutcome<T>, okText: () -> String): String = when (outcome) {
+    is ProbeOutcome.Ok -> okText()
+    is ProbeOutcome.Failed -> "失败 · ${outcome.code}"
+}
+
+/* ---------------- 小 UI 件 ---------------- */
+
+/** 字段行：label 左、value 右；[trailing] 放复制按钮这类行内动作。 */
+@Composable
+internal fun ProbeFieldRow(label: String, value: String, trailing: (@Composable () -> Unit)? = null) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.widthIn(min = 96.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        if (trailing != null) {
+            trailing()
+        }
+    }
+}
+
+@Composable
+private fun ProbeLoadingCard() {
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = "正在探测本机网关…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+internal data class ProbeField(val label: String, val value: String, val emphasis: Boolean = false)
 
 internal fun healthzFields(probe: HealthzProbe): List<ProbeField> = listOf(
     ProbeField(label = "应答", value = probe.status),
@@ -374,26 +825,6 @@ internal fun metricsFields(digest: MetricsDigest): List<ProbeField> = buildList 
     }
 }
 
-internal fun healthFields(health: HealthProbe): List<ProbeField> = listOf(
-    ProbeField(label = "状态", value = health.status),
-    ProbeField(label = "版本", value = health.version.ifBlank { "未记录" }),
-    ProbeField(label = "修订", value = health.revision.ifBlank { "未记录" }),
-    ProbeField(label = "渠道", value = health.providers.toString()),
-    ProbeField(label = "账号", value = health.accounts.toString()),
-    ProbeField(label = "运行", value = probeUptime(health.uptimeSec)),
-)
-
-internal fun runtimeFields(info: RuntimeInfo): List<ProbeField> = listOf(
-    ProbeField(label = "Go", value = info.goVersion.ifBlank { "未记录" }),
-    ProbeField(label = "协程", value = info.goroutines.toString()),
-    ProbeField(label = "堆内存", value = "${info.heapMb} MB"),
-    ProbeField(label = "状态记录", value = info.stateRecords.toString()),
-    ProbeField(label = "模型", value = info.models.toString()),
-    ProbeField(label = "TUN", value = if (info.tun) "已检测到" else "未检测到"),
-    ProbeField(label = "接入地址", value = info.publicAddr.ifBlank { "未上报" }),
-    ProbeField(label = "运行", value = probeUptime(info.uptimeSec)),
-)
-
 internal fun probeUptime(seconds: Int): String {
     if (seconds <= 0) {
         return "—"
@@ -408,109 +839,33 @@ internal fun probeUptime(seconds: Int): String {
     }
 }
 
-/** 单个端点：路径 + HTTP 状态 + 徽标一行，明细在下方；失败只占自己这一块。 */
-@Composable
-private fun ProbeRowBlock(row: ProbeRow) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "GET ${row.path}",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (row.httpStatus > 0) {
-                Text(
-                    text = "HTTP ${row.httpStatus}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(
-                text = row.badge,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (row.attention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-            )
-        }
-        if (row.httpStatus == 0) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = row.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-            Text(
-                text = "错误码：${row.code}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error.copy(alpha = 0.75f),
-            )
-        } else {
-            row.fields.forEach { field -> ProbeFieldRow(field) }
-        }
-    }
-}
-
-@Composable
-private fun ProbeFieldRow(field: ProbeField) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp),
-    ) {
-        Text(
-            text = field.label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            // 不写死宽度也不限行：1.3x 字体下「构建时间」需要 ≈57dp，固定 56dp + maxLines=1
-            // 会把字硬裁掉。用 widthIn 当最小对齐宽度，放不下就换行。
-            modifier = Modifier.widthIn(min = 56.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = field.value,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (field.emphasis) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
-private fun ProbeSampledLine(sampledAtMs: Long) {
-    Text(
-        text = "本次探测：${probeClockFormat.format(probeInstant(sampledAtMs))}",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-@Composable
-private fun ProbeLoadingCard() {
-    DeepCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(22.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = "正在探测本机网关…",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
 private val probeClockFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.US)
 
 private fun probeInstant(ms: Long) = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
+
+private val probeDateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm", Locale.US)
+
+/** 秒级时间戳 → `yyyy/MM/dd HH:mm`（桌面 `format.js:25-30` 同形状）。 */
+internal fun probeDate(epochSeconds: Long): String {
+    if (epochSeconds <= 0) {
+        return "—"
+    }
+    return Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(probeDateFormat)
+}
+
+/**
+ * 时间戳展示，秒/毫秒都吃：`/api/channels/status` 的 `checkedAt` 与
+ * `/api/agents/cli` 的 `checked_at` 在服务端口径并不一致，这里按量级判断，
+ * 免得把一个 1.7e12 当成秒显示成五万年后。
+ */
+internal fun probeDateAuto(epoch: Long): String {
+    if (epoch <= 0) {
+        return "—"
+    }
+    val instant = if (epoch > 100_000_000_000L) {
+        Instant.ofEpochMilli(epoch)
+    } else {
+        Instant.ofEpochSecond(epoch)
+    }
+    return instant.atZone(ZoneId.systemDefault()).format(probeDateFormat)
+}

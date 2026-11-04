@@ -136,7 +136,7 @@ internal fun SettingsPage(
     var redactCustomFirst by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item { MobileHeader(status) }
@@ -180,8 +180,16 @@ internal fun SettingsPage(
         }
         // 首选端口是**本机运行配置**，不是网关状态：必须始终可编辑。
         // 否则首选端口被占用 → 启动失败 → 设置页因「网关未启动」拒绝渲染 → 用户再也改不回来那个端口。
+        // 标题用「本机监听」：桌面把端口放在启动参数里（settings.js:216 的「监听地址」只读），
+        // 手机端必须能在页内改，所以单列一节并注明这是手机端才有的。
         item {
-            SettingsSection("本机运行配置") {
+            SettingsSection("本机监听") {
+                Text(
+                    text = "手机端特有：桌面版的端口由启动参数决定（设置里只读），手机端必须在页内改，" +
+                        "否则端口被占用后没有入口改回来。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 PreferredPortRow(
                     preferredPort = preferredPort,
                     saving = preferredPortSaving,
@@ -191,20 +199,12 @@ internal fun SettingsPage(
                 )
             }
         }
-        // 备份导出放在设置里（IA 的「同步与备份」），不新增工作区入口：
-        // 手机端只做导出，导入仍在桌面端完成。
         item {
             HealthReportSection(
                 status = status,
                 settings = (state as? SettingsUiState.Ready)?.settings,
                 onShare = onShareReport,
             )
-            SettingsSection("备份") {
-                SettingsRow("配置备份", "口令密封导出与导入")
-                McaButton(onClick = onOpenBackup, style = McaButtonStyle.Outlined) {
-                    Text("导出备份…")
-                }
-            }
         }
         when (state) {
             SettingsUiState.Idle -> item {
@@ -262,6 +262,22 @@ internal fun SettingsPage(
                 }
             }
         }
+        // 桌面设置的第 9 个 tab「同步与备份」（settings.js:45 TABS）。
+        // 手机端只做导出与导入（备份页）；云同步要 WebDAV 口令，桌面端才有。
+        item {
+            SettingsSection("同步与备份") {
+                SettingsRow("配置备份", "口令密封导出与导入；不含账号凭证")
+                McaButton(onClick = onOpenBackup, style = McaButtonStyle.Outlined) {
+                    Text("打开备份…")
+                }
+                Text(
+                    text = "云同步（WebDAV）只在桌面端提供：手机端没有填写远端地址与口令的入口，" +
+                        "也不把口令存进本机设置。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         item {
             Text(
                 text = "脱敏引擎开关经 /api/settings/redact-actions 仅合并 enabled；个人信息开关经 /api/settings 按 key 合并 redactPersonal；动作覆盖按 kind 整表回写；密钥、OTLP Headers、WebDAV 密码与远程额度密文不在本页展示。",
@@ -303,6 +319,42 @@ private fun RedactDetailDialog(
     onDelete: (Int) -> Unit,
 ) {
     var editor by remember { mutableStateOf<Pair<Int, RedactCustomRule>?>(null) }
+    // 删除规则会让这条规则立刻停止生效（可能要漏掉本该脱敏的内容），所以二次确认。
+    var deleteTarget by remember { mutableStateOf<Int?>(null) }
+    deleteTarget?.let { index ->
+        McaDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = {
+                Text(
+                    text = "删除这条脱敏规则？",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Text(
+                    text = "删掉后它立刻不再生效，命中的内容会原样发给上游。" +
+                        "如果只是暂时不想用，可以改成「只记录」而不是删除。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        deleteTarget = null
+                        onDelete(index)
+                    },
+                    style = McaButtonStyle.Destructive,
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                McaButton(onClick = { deleteTarget = null }, style = McaButtonStyle.Outlined) {
+                    Text("取消")
+                }
+            },
+        )
+    }
     McaDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -416,7 +468,7 @@ private fun RedactDetailDialog(
                                 ) { Text("编辑") }
                                 Spacer(Modifier.width(4.dp))
                                 McaButton(
-                                    onClick = { onDelete(index) },
+                                    onClick = { deleteTarget = index },
                                     style = McaButtonStyle.Outlined,
                                 ) { Text("删除") }
                             }
@@ -1095,22 +1147,14 @@ private fun SettingsSections(
     onSaveAllowIPs: (List<String>) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SettingsSection("网关") {
-            SettingsRow("监听地址", settings.addr.ifBlank { status.addr.ifBlank { "—" } })
-            SettingsRow(
-                "当前端口",
-                when {
-                    settings.port > 0 -> settings.port.toString()
-                    status.addr.substringAfterLast(':', "").isNotBlank() ->
-                        status.addr.substringAfterLast(':')
-                    else -> "—"
-                },
-            )
+        SettingsSection("网络与共享") {
+            // 桌面顺序（settings.js:212-226）：监听（局域网访问 / 监听地址）→ 网络（代理 / CORS / 允许的 IP）。
+            // 手机端把「局域网访问」放在最前，并明确它是只读的桌面端开关。
             // 局域网共享在手机端**只读**：移动运行时 Start 里只绑 127.0.0.1，
             // 非回环直接返回 listen_host_must_be_loopback。开这个开关只会翻一个配置位，
             // 永远不会有局域网监听——那是假开关，所以这里不提供切换。
             SettingsToggleRow(
-                label = "局域网共享",
+                label = "局域网访问",
                 value = (if (settings.lanEnabled) "配置为开启" else "关闭") + " · 仅桌面端生效",
                 actionLabel = "仅桌面端",
                 enabled = false,
@@ -1122,6 +1166,16 @@ private fun SettingsSections(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            SettingsRow("监听地址", settings.addr.ifBlank { status.addr.ifBlank { "—" } })
+            SettingsRow(
+                "当前端口",
+                when {
+                    settings.port > 0 -> settings.port.toString()
+                    status.addr.substringAfterLast(':', "").isNotBlank() ->
+                        status.addr.substringAfterLast(':')
+                    else -> "—"
+                },
+            )
             SettingsSecuritySection(status = status)
             if (lanError != null) {
                 Text(
@@ -1132,6 +1186,42 @@ private fun SettingsSections(
             }
             var proxyEditing by remember { mutableStateOf(false) }
             var proxyDraft by remember { mutableStateOf("") }
+            var proxyClearConfirm by remember { mutableStateOf(false) }
+            if (proxyClearConfirm) {
+                McaDialog(
+                    onDismissRequest = { proxyClearConfirm = false },
+                    title = {
+                        Text(
+                            text = "清除全局代理？",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "会从本机设置里删掉这个代理地址（${settings.proxyMasked.ifBlank { "未设置" }}），" +
+                                "不影响账号与其它设置，保存后立即生效。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    confirmButton = {
+                        McaButton(
+                            onClick = {
+                                proxyClearConfirm = false
+                                onSaveProxy("")
+                            },
+                            style = McaButtonStyle.Destructive,
+                        ) { Text("清除") }
+                    },
+                    dismissButton = {
+                        McaButton(
+                            onClick = { proxyClearConfirm = false },
+                            style = McaButtonStyle.Outlined,
+                        ) { Text("取消") }
+                    },
+                )
+            }
             SettingsToggleRow(
                 label = "全局代理",
                 value = settings.proxyMasked.ifBlank { "未设置" },
@@ -1180,8 +1270,10 @@ private fun SettingsSections(
                         style = McaButtonStyle.Primary,
                         enabled = !proxySaving,
                     ) { Text(if (proxySaving) "保存中…" else "保存") }
+                    // 清除是不可撤销的配置删除：二次确认（桌面对「关闭云同步 / 从云端恢复」这类
+                    // 破坏性操作也都用 confirmDialog，见 settings.js:674/679）。
                     McaButton(
-                        onClick = { onSaveProxy("") },
+                        onClick = { proxyClearConfirm = true },
                         style = McaButtonStyle.Outlined,
                         enabled = !proxySaving && settings.proxyMasked.isNotBlank(),
                     ) { Text("清除") }
@@ -1221,7 +1313,7 @@ private fun SettingsSections(
                 onSave = onSaveAllowIPs,
             )
         }
-        SettingsSection("隐私与脱敏") {
+        SettingsSection("隐私") {
             SettingsToggleRow(
                 label = "脱敏引擎",
                 value = if (settings.redactEnabled) "开启" else "关闭",
@@ -1270,9 +1362,12 @@ private fun SettingsSections(
         // 两张卡自带 ViewModel，因此不需要在 GatewayHome 增参。
         MaskingTryoutSection()
         MaskingRecordsSection()
-        SettingsSection("平台") {
+        SettingsSection("关于") {
             SettingsRow("本机运行形态", if (settings.desktopApp) "桌面端" else "Android 独立运行")
             SettingsRow("仅 Windows 能力", "不在手机端提供")
+            // 桌面「关于」tab 还有版本号与更新通道（settings.js: about），手机端拿不到
+            // GET /api/update 的结果就不写死版本号——见汇报里的"未做"一条。
+            SettingsRow("版本与更新", "未接入：手机端走应用商店/系统安装，不读 /api/update")
         }
     }
 }

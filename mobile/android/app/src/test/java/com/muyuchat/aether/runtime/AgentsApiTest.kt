@@ -43,6 +43,8 @@ class AgentsApiTest {
         assertEquals(14, claude.listedModels)
         assertEquals("已接入", agentStatusLabel(claude))
         assertEquals("当前模型 qwen3-max · 可选 12 / 共 14", agentModelLine(claude))
+        // 桌面清单的两个布尔字段要逐项展示：detected=已装、wired=已接入。
+        assertEquals("已安装 · 已接入", agentPresenceLine(claude))
 
         // 没有 model 字段时不猜默认模型。
         val codex = overview.agents[1]
@@ -50,6 +52,7 @@ class AgentsApiTest {
         assertFalse(codex.detected)
         assertEquals("未检测到", agentStatusLabel(codex))
         assertEquals("当前模型未设置 · 可选 12 / 共 14", agentModelLine(codex))
+        assertEquals("未安装 · 未接入", agentPresenceLine(codex))
 
         assertEquals(1, overview.profiles.size)
         assertEquals("省钱档", overview.profiles[0].name)

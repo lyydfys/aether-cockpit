@@ -9,8 +9,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * 一条插件（请求改写）规则。**只有安全字段**：id/kind/name/enabled/note/范围。
- * 规则里的参数值（温度、max_tokens 等）不在本模型里——手机上只做"看得见状态"。
+ * 一条插件（请求改写）规则。页面展示**只有安全字段**：id/kind/name/enabled/note/范围；
+ * [raw] 保留服务端原样返回的规则 JSON，编辑时做底稿，避免只回写可见字段把 kind 专有参数清空。
  */
 data class PluginRule(
     val id: String,
@@ -20,6 +20,7 @@ data class PluginRule(
     val note: String = "",
     val providers: List<String> = emptyList(),
     val models: List<String> = emptyList(),
+    val raw: String = "",
 )
 
 /** 内置插件说明（只列表，不带任何配置）。 */
@@ -51,17 +52,42 @@ class PluginsApiClient(
     fun fetchPlugins(status: GatewayStatus): PluginsSnapshot =
         parsePlugins(get(status, "/api/plugins"))
 
-    private fun get(status: GatewayStatus, path: String): String {
+    /** 启用/停用或改可见字段：用服务端原 JSON 做底稿，只覆盖 [json] 里出现的键。 */
+    fun savePlugin(status: GatewayStatus, json: String): PluginRule =
+        parseSavedRule(post(status, "/api/plugins", json))
+
+    fun deletePlugin(status: GatewayStatus, id: String) {
+        delete(status, "/api/plugins/" + java.net.URLEncoder.encode(id, Charsets.UTF_8.name()))
+    }
+
+    private fun get(status: GatewayStatus, path: String): String =
+        request(status, "GET", path, null)
+
+    private fun post(status: GatewayStatus, path: String, body: String): String =
+        request(status, "POST", path, body)
+
+    private fun delete(status: GatewayStatus, path: String) {
+        request(status, "DELETE", path, null)
+    }
+
+    private fun request(status: GatewayStatus, method: String, path: String, body: String?): String {
         if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
             throw ManagementApiException("gateway_not_running", "网关未启动")
         }
         val connection = (URL("http://${status.addr}$path").openConnection() as HttpURLConnection)
         connection.connectTimeout = connectTimeoutMs
         connection.readTimeout = readTimeoutMs
-        connection.requestMethod = "GET"
+        connection.requestMethod = method
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+        if (body != null) {
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+        }
         try {
+            if (body != null) {
+                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            }
             val code = connection.responseCode
             if (code !in 200..299) {
                 val detail = runCatching {
@@ -129,6 +155,7 @@ private fun parseRuleArray(array: JSONArray?): List<PluginRule> {
             note = item.optString("note").trim(),
             providers = stringList(item.optJSONArray("providers")),
             models = stringList(item.optJSONArray("models")),
+            raw = item.toString(),
         )
     }
 }
@@ -178,4 +205,61 @@ internal fun pluginsSummaryLine(snapshot: PluginsSnapshot): String {
     }
     val enabled = snapshot.rules.count { it.enabled }
     return "共 ${snapshot.rules.size} 条规则 · 其中 $enabled 条启用"
+}
+
+/** `POST /api/plugins` 的回包：`{rule:{…}}`。 */
+internal fun parseSavedRule(body: String): PluginRule {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的插件规则格式不正确")
+    }
+    val item = root.optJSONObject("rule")
+        ?: throw ManagementApiException("invalid_response", "管理接口返回的插件规则格式不正确")
+    val id = item.optString("id").trim()
+    if (id.isEmpty()) {
+        throw ManagementApiException("invalid_response", "管理接口返回的插件规则缺少 id")
+    }
+    return PluginRule(
+        id = id,
+        kind = item.optString("kind").trim(),
+        name = item.optString("name").trim().ifBlank { id },
+        enabled = item.optBoolean("enabled", false),
+        note = item.optString("note").trim(),
+        providers = stringList(item.optJSONArray("providers")),
+        models = stringList(item.optJSONArray("models")),
+        raw = item.toString(),
+    )
+}
+
+/**
+ * 用服务端原 JSON 做底稿，只覆盖手机端提供编辑的可见字段。
+ * kind 专有字段（temperature/prompt/words/from/to…）原样保留——否则一次"改名保存"就把参数清空。
+ */
+internal fun pluginRuleWithEdits(
+    rule: PluginRule,
+    name: String,
+    note: String,
+    providers: List<String>,
+    models: List<String>,
+    enabled: Boolean,
+): String {
+    val json = runCatching { JSONObject(rule.raw) }.getOrElse { JSONObject() }
+    json.put("id", rule.id)
+    json.put("kind", rule.kind)
+    json.put("name", name.trim().ifBlank { rule.id })
+    json.put("enabled", enabled)
+    if (note.isBlank()) json.remove("note") else json.put("note", note.trim())
+    if (providers.isEmpty()) json.remove("providers") else json.put("providers", JSONArray(providers))
+    if (models.isEmpty()) json.remove("models") else json.put("models", JSONArray(models))
+    return json.toString()
+}
+
+/** 只切启停：其余字段一个不丢。 */
+internal fun pluginRuleToggleJson(rule: PluginRule, enabled: Boolean): String {
+    val json = runCatching { JSONObject(rule.raw) }.getOrElse { JSONObject() }
+    json.put("id", rule.id)
+    json.put("kind", rule.kind)
+    json.put("enabled", enabled)
+    return json.toString()
 }

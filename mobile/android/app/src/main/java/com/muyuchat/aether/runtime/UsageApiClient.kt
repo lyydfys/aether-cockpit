@@ -7,6 +7,31 @@ import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
+
+/**
+ * 用量分布的一行（渠道 / 模型 / 调用方共用同一形状）。
+ *
+ * 契约逐字段对齐桌面 `usage.js` 的 `rankRow`：名称、失败数、调用数、Token、缓存率、费用。
+ * 六个字段全部来自 `GET /api/usage` 的 `providers[] / models[] / agents[]`
+ * （`usage.go:628-662`：每行都带 calls/errors/input/output/cache_read/cache_write/cost）。
+ */
+data class UsageBreakdownRow(
+    val id: String,
+    val name: String,
+    val calls: Long,
+    val errors: Long,
+    val inputTokens: Long,
+    val outputTokens: Long,
+    val cacheReadTokens: Long,
+    val cacheWriteTokens: Long,
+    val cost: Double,
+) {
+    /** 含缓存的 Token 总量：与桌面 `input + output + cache_read + cache_write` 同口径。 */
+    val totalTokens: Long get() = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+
+    val cacheInput: Long get() = inputTokens + cacheReadTokens + cacheWriteTokens
+}
 
 data class UsageModelRow(
     val id: String,
@@ -15,6 +40,9 @@ data class UsageModelRow(
     val inputTokens: Long,
     val outputTokens: Long,
     val cost: Double,
+    val errors: Long = 0,
+    val cacheReadTokens: Long = 0,
+    val cacheWriteTokens: Long = 0,
 )
 
 data class UsageDayPoint(
@@ -30,6 +58,10 @@ data class UsageProviderRow(
     val calls: Long,
     val errors: Long,
     val cost: Double,
+    val inputTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val cacheReadTokens: Long = 0,
+    val cacheWriteTokens: Long = 0,
 )
 
 data class UsageSummary(
@@ -45,7 +77,14 @@ data class UsageSummary(
     val series: List<UsageDayPoint>,
     /** `/api/usage` 的 `providers` 数组；概览聚合链路按它汇总 calls/errors/cost。 */
     val providers: List<UsageProviderRow> = emptyList(),
-)
+    /** 费用按价格表算不出来的请求数（桌面「未计价 N 次」）。 */
+    val unpriced: Long = 0,
+    /** 调用方（客户端）维度：桌面用量分布的第三个 tab。 */
+    val agents: List<UsageBreakdownRow> = emptyList(),
+) {
+    /** 含缓存的 Token 总量（桌面 `usage.js:90-91` 的口径）。 */
+    val totalTokens: Long get() = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+}
 
 /** Read-only projection of `/api/usage`; no prompts or request bodies are mapped. */
 class UsageApiClient(
@@ -125,6 +164,9 @@ internal fun parseUsage(body: String): UsageSummary {
                 inputTokens = item.optLong("input", 0L).coerceAtLeast(0L),
                 outputTokens = item.optLong("output", 0L).coerceAtLeast(0L),
                 cost = item.optDouble("cost", 0.0).coerceAtLeast(0.0),
+                errors = item.optLong("errors", 0L).coerceAtLeast(0L),
+                cacheReadTokens = item.optLong("cache_read", 0L).coerceAtLeast(0L),
+                cacheWriteTokens = item.optLong("cache_write", 0L).coerceAtLeast(0L),
             )
         }
     }
@@ -158,6 +200,10 @@ internal fun parseUsage(body: String): UsageSummary {
                 calls = item.optLong("calls", 0L).coerceAtLeast(0L),
                 errors = item.optLong("errors", 0L).coerceAtLeast(0L),
                 cost = item.optDouble("cost", 0.0).coerceAtLeast(0.0),
+                inputTokens = item.optLong("input", 0L).coerceAtLeast(0L),
+                outputTokens = item.optLong("output", 0L).coerceAtLeast(0L),
+                cacheReadTokens = item.optLong("cache_read", 0L).coerceAtLeast(0L),
+                cacheWriteTokens = item.optLong("cache_write", 0L).coerceAtLeast(0L),
             )
         }
     }
@@ -173,5 +219,55 @@ internal fun parseUsage(body: String): UsageSummary {
         models = modelRows,
         series = points,
         providers = providerRows,
+        unpriced = root.optLong("unpriced", 0L).coerceAtLeast(0L),
+        agents = parseBreakdownRows(root.optJSONArray("agents")),
     )
+}
+
+/** `providers[] / models[] / agents[]` 是同一套行结构，统一解析。 */
+internal fun parseBreakdownRows(array: org.json.JSONArray?): List<UsageBreakdownRow> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id").trim()
+        if (id.isEmpty()) {
+            return@mapNotNull null
+        }
+        UsageBreakdownRow(
+            id = id,
+            name = item.optString("name").trim().ifBlank { id },
+            calls = item.optLong("calls", 0L).coerceAtLeast(0L),
+            errors = item.optLong("errors", 0L).coerceAtLeast(0L),
+            inputTokens = item.optLong("input", 0L).coerceAtLeast(0L),
+            outputTokens = item.optLong("output", 0L).coerceAtLeast(0L),
+            cacheReadTokens = item.optLong("cache_read", 0L).coerceAtLeast(0L),
+            cacheWriteTokens = item.optLong("cache_write", 0L).coerceAtLeast(0L),
+            cost = item.optDouble("cost", 0.0).coerceAtLeast(0.0),
+        )
+    }
+}
+
+/**
+ * 金额格式化（与桌面 `format.js:fmtCost` 逐条对齐）：
+ * CNY 时先按汇率换算；0 → `$0`；不足 1 分 6 位；不足 1 元 4 位；其余 2 位。
+ *
+ * 只在「用量」页使用——桌面概览页的金额是固定 USD（`overview.js` 用 `fmtMoney`，不读币种）。
+ */
+internal fun formatUsageAmount(costUsd: Double, currency: String, usdCny: Double): String {
+    val safeCost = if (costUsd.isFinite()) costUsd else 0.0
+    val rate = if (usdCny.isFinite() && usdCny > 0) usdCny else 7.2
+    val cny = currency.equals("CNY", ignoreCase = true)
+    val value = if (cny) safeCost * rate else safeCost
+    val symbol = if (cny) "¥" else "$"
+    if (value == 0.0) {
+        return symbol + "0"
+    }
+    val text = when {
+        kotlin.math.abs(value) < 0.01 -> String.format(Locale.US, "%.6f", value)
+        kotlin.math.abs(value) < 1.0 -> String.format(Locale.US, "%.4f", value)
+        else -> String.format(Locale.US, "%.2f", value)
+    }
+    return symbol + text
 }

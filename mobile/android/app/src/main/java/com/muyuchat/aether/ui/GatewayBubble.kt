@@ -46,12 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -78,16 +75,16 @@ import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
-import com.muyuchat.core.designsystem.McaIconPlate
 import com.muyuchat.core.designsystem.McaShape
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.Stroke
 
 /** 悬浮球直径；页面球和系统 overlay 共用。 */
 internal const val BubbleMarkDp = 64f
-
-/** 页面列表底部预留区：球高 + 默认边距，默认位置不会压住最后一张卡。 */
-internal val BubbleReservedBottom: Dp = 80.dp
 
 /** 页面球拖动时的活动区（root 坐标），由内层 BoxWithConstraints 上报。 */
 private data class BubbleMetrics(
@@ -96,10 +93,6 @@ private data class BubbleMetrics(
     val travelX: Int,
     val travelY: Int,
 )
-
-/** 未运行时永远没有光晕；运行中才使用动画值。 */
-internal fun gatewayHaloAlpha(running: Boolean, animatedAlpha: Float): Float =
-    if (running) animatedAlpha.coerceIn(0f, 1f) else 0f
 
 /** 系统外显的前置条件；顺序就是用户实际会遇到的顺序（先有网关，再要权限）。 */
 internal enum class OverlayAvailability { Available, NeedGateway, NeedPermission }
@@ -497,132 +490,146 @@ private fun BubbleMenu(
     }
 }
 
-/** 品牌图形在球内的显示尺寸：48dp plate 里 32dp（占比 67%，1.3× 字号下仍清晰）。 */
+/** 球内品牌图标的显示尺寸：48dp 圆里 32dp（圆不放大，图标占比 67%）。 */
 private val BrandOrbGlyphDp = 32.dp
 
-/** `ic_brand_mark` 的 viewport（与品牌 SVG 的 viewBox 一致）。 */
-private const val BrandMarkViewport = 108f
+/** 圆形直径：运行态与停止态**完全相同**——灯光只在圆内，不许把圆撑大。 */
+internal val OrbDiameter = 48.dp
+
+/** 圆内呼吸环：宽度、透明度区间、周期（用户规格：1.5–2dp / 0.35↔0.85 / 1.6s 一个来回）。 */
+internal val OrbRingWidth = 1.75.dp
+internal const val OrbRingAlphaLow = 0.35f
+internal const val OrbRingAlphaHigh = 0.85f
+internal const val OrbRingPeriodMs = 1600
+
+/** 圆内极淡内发光的上限（别用外发光：会溢出圆形、显廉价）。 */
+internal const val OrbGlowAlphaMax = 0.10f
 
 /**
- * 停用态/启用态的两色取色。
- *
- * 停止态必须满足 `plate != glyph`：底板取 `surfaceVariant`、图形取 `onSurfaceVariant`；
- * 星芒用底板色"挖亮"，这样深灰气泡里仍能看出一颗亮星芒，而不是糊成一块实心。
+ * 呼吸环透明度：**停止态恒 0**（没有灯），运行态在 [OrbRingAlphaLow] ↔ [OrbRingAlphaHigh] 之间按 phase 插值。
+ * phase 由 InfiniteTransition 在 0..1 之间来回驱动。
  */
-internal data class OrbColors(val plate: Color, val glyph: Color, val star: Color)
-
-internal fun stoppedOrbColors(surfaceVariant: Color, onSurfaceVariant: Color): OrbColors =
-    OrbColors(plate = surfaceVariant, glyph = onSurfaceVariant, star = surfaceVariant)
-
-/**
- * 球内的品牌图形。
- *
- * - 运行态：原色渲染 `ic_brand_mark`（蓝气泡 + 白星芒）。
- * - 停止态：**不能用单一 `ColorFilter.tint` 直接染整张图**——tint 会把白星芒一起染成灰，
- *   形状塌成实心块；更不能用 `ic_brand_avatar`（它带 108×108 圆角背景，一 tint 就是一整块灰方块，
- *   这正是线上那个「灰色实心圆角方块」的成因）。所以用透明的 mark + 双色：
- *   气泡染成 [glyph]，星芒按品牌 SVG 的多边形坐标单独用 [star]（底板色）补画。
- */
-@Composable
-private fun BrandOrbMark(running: Boolean, plate: Color, glyph: Color) {
-    Box(Modifier.size(BrandOrbGlyphDp)) {
-        Image(
-            painter = painterResource(R.drawable.ic_brand_mark),
-            contentDescription = null,
-            colorFilter = if (running) null else ColorFilter.tint(glyph),
-            modifier = Modifier.matchParentSize(),
-        )
-        if (!running) {
-            Canvas(Modifier.matchParentSize()) {
-                val scale = size.minDimension / BrandMarkViewport
-                val star = Path().apply {
-                    // 星芒多边形（与品牌 SVG 的 L 段逐一对应：M54,34 L57,47 L70,50 L57,53 L54,66 L51,53 L38,50 L51,47 Z）
-                    moveTo(54f * scale, 34f * scale)
-                    lineTo(57f * scale, 47f * scale)
-                    lineTo(70f * scale, 50f * scale)
-                    lineTo(57f * scale, 53f * scale)
-                    lineTo(54f * scale, 66f * scale)
-                    lineTo(51f * scale, 53f * scale)
-                    lineTo(38f * scale, 50f * scale)
-                    lineTo(51f * scale, 47f * scale)
-                    close()
-                }
-                drawPath(star, plate)
-            }
-        }
+internal fun orbRingAlpha(running: Boolean, phase: Float): Float {
+    if (!running) {
+        return 0f
     }
+    val p = phase.coerceIn(0f, 1f)
+    return OrbRingAlphaLow + (OrbRingAlphaHigh - OrbRingAlphaLow) * p
 }
 
-/** 运行中才组合呼吸动画；停止态是单独的静态灰，不创建 InfiniteTransition。 */
+/** 内发光强度：停止态恒 0；运行态与环反相（环最亮时内发光最淡），上限 [OrbGlowAlphaMax]。 */
+internal fun orbGlowAlpha(running: Boolean, phase: Float): Float {
+    if (!running) {
+        return 0f
+    }
+    val p = phase.coerceIn(0f, 1f)
+    return OrbGlowAlphaMax * (1f - p)
+}
+
+/** 圆形直径在任何状态下都一样（回归测试用它锁"不许扩大圆形"）。 */
+internal fun orbDiameter(running: Boolean): Dp = OrbDiameter
+
+/** 图标永远用品牌本色：单色 tint 会把气泡/星芒涂平（上一轮线上事故的原因）。 */
+internal fun orbTintsGlyph(): Boolean = false
+
+/**
+ * 球内的品牌图标。
+ *
+ * 用球内专用的 [R.drawable.ic_brand_orb]：气泡 + 星芒 + **放大 1.7× 的 channel-route 徽标**。
+ * 不做任何 tint、不参与动画——灯光由外层圆环/内发光承担，图标本身保持品牌本色。
+ * （`ic_brand_mark` 只有气泡 + 星芒，和 MCA 的图标撞脸；`ic_brand_avatar` 带背景矩形，小尺寸不能用。）
+ */
+@Composable
+private fun BrandOrbIcon() {
+    Image(
+        painter = painterResource(R.drawable.ic_brand_orb),
+        contentDescription = null,
+        modifier = Modifier.size(BrandOrbGlyphDp),
+    )
+}
+
+/** 运行中才组合呼吸动画；停止态是纯静态（不创建 InfiniteTransition，没有灯光）。 */
 @Composable
 private fun GatewayOrb(running: Boolean) {
+    val accent = MaterialTheme.colorScheme.primary
+    var ringAlpha = 0f
+    var glowAlpha = 0f
     if (running) {
-        val accent = MaterialTheme.colorScheme.primary
-        val transition = rememberInfiniteTransition(label = "gatewayBreath")
-        val haloAlpha by transition.animateFloat(
-            initialValue = 0.18f,
-            targetValue = 0.55f,
-            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-            label = "gatewayBreathAlpha",
+        val transition = rememberInfiniteTransition(label = "orbBreath")
+        val phase by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                tween(OrbRingPeriodMs, easing = LinearEasing),
+                RepeatMode.Reverse,
+            ),
+            label = "orbBreathPhase",
         )
-        val haloScale by transition.animateFloat(
-            initialValue = 0.92f,
-            targetValue = 1.08f,
-            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-            label = "gatewayBreathScale",
-        )
-        OrbPlate(
-            running = true,
-            accent = accent,
-            haloAlpha = haloAlpha,
-            haloScale = haloScale,
-        )
-    } else {
-        OrbPlate(
-            running = false,
-            accent = MaterialTheme.colorScheme.onSurfaceVariant,
-            haloAlpha = 0f,
-            haloScale = 1f,
-        )
+        ringAlpha = orbRingAlpha(running = true, phase = phase)
+        glowAlpha = orbGlowAlpha(running = true, phase = phase)
     }
+    OrbPlate(
+        running = running,
+        accent = accent,
+        ringAlpha = ringAlpha,
+        glowAlpha = glowAlpha,
+        container = MaterialTheme.colorScheme.surfaceVariant,
+        border = McaHairline.default(),
+    )
 }
 
+/**
+ * 圆形球体：**一个圆 + 品牌标识**。
+ *
+ * 停止态：浅灰圆 + 品牌本色图标，没有灯光、没有动画。
+ * 运行态：同一个圆（尺寸不变）内部加一圈呼吸环 + 一层极淡内发光；两者都只画在圆内。
+ */
 @Composable
 private fun OrbPlate(
     running: Boolean,
     accent: Color,
-    haloAlpha: Float,
-    haloScale: Float,
+    ringAlpha: Float,
+    glowAlpha: Float,
+    container: Color,
+    border: Color,
+    semantics: Modifier = Modifier,
 ) {
-    val container = if (running) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant
-    }
-    val border = if (running) McaHairline.selected(accent) else McaHairline.default()
+    // 外层仍是 BubbleMarkDp(64dp) 的布局外壳：拖动/贴边的几何按它算，不能改。
+    // 圆本身固定 48dp，运行态也不放大——灯光只画在圆内。
     Box(modifier = Modifier.size(BubbleMarkDp.dp), contentAlignment = Alignment.Center) {
-        if (running) {
-            Box(
-                Modifier
-                    .size(BubbleMarkDp.dp)
-                    .scale(haloScale)
-                    .background(accent.copy(alpha = gatewayHaloAlpha(running, haloAlpha)), CircleShape),
-            )
-        }
-        McaIconPlate(
-            size = 48.dp,
-            shape = CircleShape,
-            selected = running,
-            accent = accent,
-            containerColor = container,
-            borderColor = border,
+        Box(
+            modifier = semantics
+                .size(OrbDiameter)
+                .clip(CircleShape)
+                .background(container)
+                .border(McaHairline.Width, border, CircleShape)
+                // 内发光：在底板之上、图标之下；radialGradient 半径 = 圆半径，天然不外溢。
+                .drawBehind {
+                    if (glowAlpha > 0f) {
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(accent.copy(alpha = glowAlpha), Color.Transparent),
+                                center = center,
+                                radius = size.minDimension / 2f,
+                            ),
+                            radius = size.minDimension / 2f,
+                        )
+                    }
+                },
+            contentAlignment = Alignment.Center,
         ) {
-            // 停止态用 onSurfaceVariant 的深灰气泡 + 底板色星芒（两色，避免糊成实心块）。
-            BrandOrbMark(
-                running = running,
-                plate = container,
-                glyph = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            BrandOrbIcon()
+            // 呼吸环：贴着内缘画，环心半径 = (直径 - 环宽) / 2，不出圆。
+            if (ringAlpha > 0f) {
+                Canvas(Modifier.matchParentSize()) {
+                    val stroke = OrbRingWidth.toPx()
+                    drawCircle(
+                        color = accent.copy(alpha = ringAlpha),
+                        radius = (size.minDimension - stroke) / 2f,
+                        style = Stroke(width = stroke),
+                    )
+                }
+            }
         }
     }
 }
@@ -644,89 +651,39 @@ internal fun GatewaySystemOverlayBubble(
     outline: Color,
     onClick: () -> Unit,
 ) {
+    // 与 app 内那个球同一套规格：同一个圆、停止态无灯、运行态圆内呼吸环 + 内发光。
+    var ringAlpha = 0f
+    var glowAlpha = 0f
     if (running) {
-        val transition = rememberInfiniteTransition(label = "gatewayOverlayBreath")
-        val haloAlpha by transition.animateFloat(
-            initialValue = 0.18f,
-            targetValue = 0.55f,
-            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-            label = "gatewayOverlayBreathAlpha",
+        val transition = rememberInfiniteTransition(label = "orbOverlayBreath")
+        val phase by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                tween(OrbRingPeriodMs, easing = LinearEasing),
+                RepeatMode.Reverse,
+            ),
+            label = "orbOverlayBreathPhase",
         )
-        val haloScale by transition.animateFloat(
-            initialValue = 0.92f,
-            targetValue = 1.08f,
-            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-            label = "gatewayOverlayBreathScale",
-        )
-        SystemOrb(
-            running = true,
-            primary = primary,
-            surface = surface,
-            outline = outline,
-            haloAlpha = haloAlpha,
-            haloScale = haloScale,
-            onClick = onClick,
-        )
-    } else {
-        SystemOrb(
-            running = false,
-            primary = primary,
-            surface = surface,
-            outline = outline,
-            haloAlpha = 0f,
-            haloScale = 1f,
-            onClick = onClick,
-        )
+        ringAlpha = orbRingAlpha(running = true, phase = phase)
+        glowAlpha = orbGlowAlpha(running = true, phase = phase)
     }
-}
-
-@Composable
-private fun SystemOrb(
-    running: Boolean,
-    primary: Color,
-    surface: Color,
-    outline: Color,
-    haloAlpha: Float,
-    haloScale: Float,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .size(BubbleMarkDp.dp)
-            .semantics {
-                contentDescription = if (running) "Aether 网关运行中" else "Aether 网关已停止"
-                role = Role.Button
-                onClick(label = "打开 Aether Cockpit") {
-                    onClick()
-                    true
-                }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        if (running) {
-            Box(
-                Modifier
-                    .size(BubbleMarkDp.dp)
-                    .scale(haloScale)
-                    .background(primary.copy(alpha = gatewayHaloAlpha(running, haloAlpha)), CircleShape),
-            )
-        }
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(surface)
-                .border(
-                    McaHairline.Width,
-                    if (running) primary.copy(alpha = 0.38f) else outline,
-                    CircleShape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            // 系统悬浮球同理：透明 mark + 两色（停止态 outline 气泡 + surface 星芒）。
-            BrandOrbMark(running = running, plate = surface, glyph = outline)
-        }
-    }
+    OrbPlate(
+        running = running,
+        accent = primary,
+        ringAlpha = ringAlpha,
+        glowAlpha = glowAlpha,
+        container = surface,
+        border = if (running) primary.copy(alpha = 0.38f) else outline,
+        semantics = Modifier.semantics {
+            contentDescription = if (running) "Aether 网关运行中" else "Aether 网关已停止"
+            role = Role.Button
+            onClick(label = "打开 Aether Cockpit") {
+                onClick()
+                true
+            }
+        },
+    )
 }
 
 internal fun overlayPermissionIntent(context: Context): Intent =

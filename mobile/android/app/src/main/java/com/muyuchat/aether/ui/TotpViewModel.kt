@@ -93,8 +93,13 @@ class TotpViewModel(application: Application) : AndroidViewModel(application) {
         _actionError.value = null
     }
 
-    /** 新增一条。成功与否只看服务端回读：失败把服务端原文放进 [addError]，不动列表。 */
-    fun add(issuer: String, account: String, note: String, secret: String) {
+    /**
+     * 新增一条。成功与否只看服务端回读：失败把服务端原文放进 [addError]，不动列表。
+     *
+     * [TotpAddRequest] 带桌面的位数 / 周期 / 算法三个字段（`twofa.js:106-108`）；
+     * 服务端 `POST /api/2fa` 接受 digits 4-10、period 5-300、SHA1/SHA256/SHA512。
+     */
+    internal fun add(input: TotpAddRequest) {
         if (_adding.value) {
             return
         }
@@ -103,7 +108,7 @@ class TotpViewModel(application: Application) : AndroidViewModel(application) {
             _addError.value = "网关未启动"
             return
         }
-        if (secret.isBlank()) {
+        if (input.secret.isBlank()) {
             _addError.value = "密钥不能为空"
             return
         }
@@ -112,7 +117,16 @@ class TotpViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    client.addEntry(status, issuer, account, note, secret)
+                    client.addEntry(
+                        status = status,
+                        issuer = input.issuer,
+                        account = input.account,
+                        note = input.note,
+                        secret = input.secret,
+                        digits = input.digits,
+                        period = input.period,
+                        algorithm = input.algorithm,
+                    )
                 }
                 refresh()
             } catch (e: CancellationException) {

@@ -80,4 +80,51 @@ class PluginsApiTest {
             assertEquals("invalid_response", (error as ManagementApiException).code)
         }
     }
+
+    /**
+     * 安全回归：手机端只开放「名称/说明/范围/启用」四个可见字段，
+     * 保存时必须用服务端原 JSON 做底稿——否则一次改名就把 kind 专有字段（温度/提示词）清空。
+     */
+    @Test
+    fun editsKeepKindSpecificFields() {
+        val snapshot = parsePlugins(
+            """{"builtin":[],"plugins":[{"id":"r1","kind":"param_override","name":"温度归零","enabled":true,
+                 "temperature":0.2,"top_p":0.9,"max_tokens":128,"prompt":"keep-me","providers":["a"]}]}""",
+        )
+        val rule = snapshot.rules.single()
+        assertTrue("规则原 JSON 必须带到模型里", rule.raw.contains("temperature"))
+
+        val toggled = pluginRuleToggleJson(rule, false)
+        assertTrue(toggled.contains("\"temperature\":0.2"))
+        assertTrue(toggled.contains("\"prompt\":\"keep-me\""))
+        assertTrue(toggled.contains("\"enabled\":false"))
+
+        val edited = pluginRuleWithEdits(
+            rule = rule,
+            name = "改名后",
+            note = "",
+            providers = listOf("b", "c"),
+            models = emptyList(),
+            enabled = true,
+        )
+        assertTrue(edited.contains("\"temperature\":0.2"))
+        assertTrue(edited.contains("\"top_p\":0.9"))
+        assertTrue(edited.contains("\"max_tokens\":128"))
+        assertTrue(edited.contains("\"prompt\":\"keep-me\""))
+        assertTrue(edited.contains("\"providers\":[\"b\",\"c\"]"))
+        assertTrue("说明为空时应移除该键", !edited.contains("\"note\""))
+    }
+
+    @Test
+    fun parsesSavedRuleResponse() {
+        val rule = parseSavedRule(
+            """{"rule":{"id":"r9","kind":"model_map","name":"映射","enabled":true,"from":"a","to":"b"}}""",
+        )
+        assertEquals("r9", rule.id)
+        assertEquals("model_map", rule.kind)
+        assertTrue(rule.enabled)
+        assertTrue(rule.raw.contains("\"from\":\"a\""))
+        val error = runCatching { parseSavedRule("""{"ok":true}""") }.exceptionOrNull()
+        assertTrue(error is ManagementApiException)
+    }
 }

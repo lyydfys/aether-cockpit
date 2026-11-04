@@ -14,6 +14,8 @@ data class RoutingMember(
     val name: String,
     val providerName: String,
     val providerOff: Boolean,
+    /** `memberInfo[].credit_rate`：桌面端以 `（×1.5）` 显示；0/缺省表示未配置。 */
+    val creditRate: Double = 0.0,
 )
 
 /** One selectable member model from the `models` array of GET /api/groups. */
@@ -36,6 +38,8 @@ data class RoutingGroup(
     val auto: Boolean,
     val disabled: Boolean,
     val memberInfo: List<RoutingMember>,
+    /** `rules` 数组条数（桌面组卡上的「N 条规则」chip）。 */
+    val ruleCount: Int = 0,
 ) {
     val memberCount: Int get() = memberInfo.size
 }
@@ -82,6 +86,25 @@ data class RoutingSavePayload(
     val name: String,
     val members: List<String>,
     val routing: String,
+)
+
+/**
+ * 一条请求预设（`request_presets.go:24-32`）。桌面路由页的「路由预设」对话框按
+ * `route_presets[groupId]` 勾选挂载；手机端只做同一件事（新建/编辑预设仍在桌面端）。
+ */
+data class RoutingPreset(
+    val id: String,
+    val name: String,
+    val description: String,
+    val enabled: Boolean,
+    val hasSystemPrompt: Boolean,
+    val bodyCount: Int,
+    val headerCount: Int,
+)
+
+data class RoutingPresets(
+    val presets: List<RoutingPreset>,
+    val routePresets: Map<String, List<String>>,
 )
 
 /** Read-only model routing groups from GET /api/groups. */
@@ -195,6 +218,130 @@ class RoutingApiClient(
     }
 }
 
+/**
+ * 路由预设（`GET /api/presets`、`POST /api/presets/attach`）。
+ *
+ * 桌面路由页有「管理预设」跳到 设置 → 预设；手机端没有预设编辑器，所以这里只读列表 +
+ * 按组勾选挂载——新建/停用预设仍要回桌面端，避免手机上误改所有请求的 body/headers。
+ */
+internal fun fetchRoutingPresets(status: GatewayStatus): RoutingPresets =
+    parseRoutingPresets(routingRequest(status, "GET", "/api/presets", null))
+
+internal fun attachRoutingPresets(
+    status: GatewayStatus,
+    groupId: String,
+    ids: List<String>,
+): RoutingPresets = parseRoutingPresets(
+    routingRequest(
+        status,
+        "POST",
+        "/api/presets/attach",
+        JSONObject()
+            .put("scope", "route")
+            .put("key", groupId)
+            .put("ids", JSONArray(ids))
+            .toString(),
+    ),
+)
+
+private fun routingRequest(
+    status: GatewayStatus,
+    method: String,
+    path: String,
+    body: String?,
+    connectTimeoutMs: Int = 5_000,
+    readTimeoutMs: Int = 8_000,
+): String {
+    if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+        throw ManagementApiException("gateway_not_running", "网关未启动")
+    }
+    val connection = (URL("http://${status.addr}$path").openConnection() as HttpURLConnection)
+    connection.connectTimeout = connectTimeoutMs
+    connection.readTimeout = readTimeoutMs
+    connection.requestMethod = method
+    connection.setRequestProperty("Accept", "application/json")
+    connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+    if (body != null) {
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+    }
+    try {
+        if (body != null) {
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        }
+        val code = connection.responseCode
+        if (code !in 200..299) {
+            val detail = runCatching {
+                connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(2_048) }
+                    ?.let { JSONObject(it).optString("error") }
+            }.getOrNull().orEmpty()
+            throw ManagementApiException("http_$code", detail.ifBlank { "管理接口返回 $code" }.take(200))
+        }
+        return connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            val out = StringBuilder()
+            val buffer = CharArray(8 * 1024)
+            while (true) {
+                val read = reader.read(buffer)
+                if (read < 0) {
+                    break
+                }
+                out.append(buffer, 0, read)
+                if (out.length > 2 * 1024 * 1024) {
+                    throw ManagementApiException("invalid_response", "管理接口响应过大")
+                }
+            }
+            out.toString()
+        }
+    } catch (e: ManagementApiException) {
+        throw e
+    } catch (_: IOException) {
+        throw ManagementApiException("network_error", "无法连接本机管理接口")
+    } finally {
+        connection.disconnect()
+    }
+}
+
+internal fun parseRoutingPresets(body: String): RoutingPresets {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的预设数据格式不正确")
+    }
+    val presets = ArrayList<RoutingPreset>()
+    val array = root.optJSONArray("presets")
+    if (array != null) {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val id = item.optString("id").trim()
+            if (id.isEmpty()) {
+                continue
+            }
+            presets.add(
+                RoutingPreset(
+                    id = id,
+                    name = item.optString("name").trim().ifBlank { id },
+                    description = item.optString("description").trim(),
+                    enabled = item.optBoolean("enabled", true),
+                    hasSystemPrompt = item.optString("system_prompt").trim().isNotEmpty(),
+                    bodyCount = item.optJSONObject("body")?.length() ?: 0,
+                    headerCount = item.optJSONObject("headers")?.length() ?: 0,
+                ),
+            )
+        }
+    }
+    val attached = LinkedHashMap<String, List<String>>()
+    val routeMap = root.optJSONObject("route_presets")
+    if (routeMap != null) {
+        routeMap.keys().forEach { key ->
+            val ids = routeMap.optJSONArray(key) ?: return@forEach
+            attached[key] = (0 until ids.length()).mapNotNull { i ->
+                ids.optString(i).trim().ifBlank { null }
+            }
+        }
+    }
+    return RoutingPresets(presets = presets, routePresets = attached)
+}
+
 internal fun parseRouting(body: String): RoutingOverview {
     val root = try {
         JSONObject(body.trim())
@@ -227,6 +374,7 @@ internal fun parseRouting(body: String): RoutingOverview {
                     providerName = member.optString("providerName").trim()
                         .ifBlank { member.optString("provider").trim() },
                     providerOff = member.optBoolean("providerOff", false),
+                    creditRate = member.optDouble("credit_rate", 0.0),
                 )
             }
         }
@@ -246,6 +394,7 @@ internal fun parseRouting(body: String): RoutingOverview {
             auto = item.optBoolean("auto", false),
             disabled = item.optBoolean("disabled", false),
             memberInfo = memberInfo,
+            ruleCount = item.optJSONArray("rules")?.length() ?: 0,
         )
     }
     return RoutingOverview(

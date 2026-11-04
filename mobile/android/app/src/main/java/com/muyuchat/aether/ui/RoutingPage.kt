@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,11 +40,22 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
+import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.ManagementApiException
+import com.muyuchat.aether.runtime.RoutingApiClient
 import com.muyuchat.aether.runtime.RoutingCatalogModel
 import com.muyuchat.aether.runtime.RoutingGroup
+import com.muyuchat.aether.runtime.RoutingPreset
+import com.muyuchat.aether.runtime.RoutingPresets
 import com.muyuchat.aether.runtime.RoutingTemplate
+import com.muyuchat.aether.runtime.attachRoutingPresets
+import com.muyuchat.aether.runtime.fetchRoutingPresets
 import com.muyuchat.aether.runtime.routingChainProviders
 import com.muyuchat.aether.runtime.routingGroupMembers
 import com.muyuchat.aether.runtime.routingStrategyLabel
@@ -56,6 +68,13 @@ import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /*
  * 路由页。
@@ -106,9 +125,14 @@ internal fun RoutingPage(
     onSaveDraft: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val presetsViewModel: RoutingPresetsViewModel = viewModel()
+    val presetsState by presetsViewModel.state.collectAsStateWithLifecycle()
+    var presetTarget by remember { mutableStateOf<RoutingGroup?>(null) }
+    LaunchedEffect(Unit) { presetsViewModel.reload() }
+    val presets = (presetsState as? RoutingPresetsUiState.Ready)?.presets
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item {
@@ -162,7 +186,16 @@ internal fun RoutingPage(
                     }
                     items(overview.groups.size) { index ->
                         val group = overview.groups[index]
-                        RoutingGroupCard(group, onClick = { onSelect(group) })
+                        val attached = presets?.routePresets?.get(group.id).orEmpty()
+                        val attachedNames = attached.map { id ->
+                            presets?.presets?.firstOrNull { it.id == id }?.name ?: id
+                        }
+                        RoutingGroupCard(
+                            group = group,
+                            attachedPresetNames = attachedNames,
+                            onOpenPresets = { presetTarget = group },
+                            onClick = { onSelect(group) },
+                        )
                     }
                 }
                 // 组模板（只读）：服务端给的"怎么组一套路由"的现成方案。
@@ -211,6 +244,17 @@ internal fun RoutingPage(
             onMoveMember = onMoveMember,
             onDraftNameChange = onDraftNameChange,
             onSaveDraft = onSaveDraft,
+        )
+    }
+    presetTarget?.let { group ->
+        RoutingPresetDialog(
+            group = group,
+            state = presetsState,
+            saving = presetsViewModel.saving.collectAsStateWithLifecycle().value,
+            saveError = presetsViewModel.error.collectAsStateWithLifecycle().value,
+            onRetry = presetsViewModel::reload,
+            onDismiss = { presetTarget = null },
+            onSave = { ids -> presetsViewModel.attach(group.id, ids) { presetTarget = null } },
         )
     }
 }
@@ -305,7 +349,12 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
  * `clip(McaShape.Sheet)` 在 `clickable` 之前，波纹被裁在圆角里；整卡可点，包括 16dp 内边距。
  */
 @Composable
-private fun RoutingGroupCard(group: RoutingGroup, onClick: () -> Unit) {
+private fun RoutingGroupCard(
+    group: RoutingGroup,
+    attachedPresetNames: List<String>,
+    onOpenPresets: () -> Unit,
+    onClick: () -> Unit,
+) {
     val tally = routingGroupMemberTally(group)
     val names = routingMemberNamesText(group)
     DeepCard(
@@ -331,21 +380,36 @@ private fun RoutingGroupCard(group: RoutingGroup, onClick: () -> Unit) {
             if (group.auto) {
                 Spacer(Modifier.width(6.dp))
                 RoutingBadge(text = "自动", error = false)
+            } else {
+                Spacer(Modifier.width(6.dp))
+                RoutingBadge(text = "手动", error = false)
             }
             if (group.disabled) {
                 Spacer(Modifier.width(6.dp))
                 RoutingBadge(text = "已停用", error = true)
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         Text(
-            text = "${group.id} · ${routingStrategyLabel(group.routingEffective)}",
-            style = MaterialTheme.typography.bodySmall,
+            text = group.id,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(12.dp))
+        // 桌面组卡的三枚 chip：自动/手动（上面）、策略、规则条数（misc.js:201-203）。
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = buildString {
+                append("策略 ").append(routingStrategyLabel(group.routingEffective))
+                if (group.ruleCount > 0) {
+                    append(" · ").append(group.ruleCount).append(" 条规则")
+                }
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(10.dp))
         CountRow(
             label = "成员",
             value = routingMemberTallyText(tally),
@@ -364,6 +428,29 @@ private fun RoutingGroupCard(group: RoutingGroup, onClick: () -> Unit) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (attachedPresetNames.isEmpty()) {
+                    "无预设"
+                } else {
+                    "预设: " + attachedPresetNames.take(3).joinToString("、") +
+                        if (attachedPresetNames.size > 3) "…" else ""
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.width(8.dp))
+            McaButton(
+                onClick = onOpenPresets,
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+                contentPadding = RoutingRowButtonPadding,
+            ) { Text("路由预设") }
         }
         group.warnings.forEach { warning ->
             Spacer(Modifier.height(6.dp))
@@ -444,6 +531,202 @@ private fun RoutingLoadingCard() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * 路由预设对话框（桌面 `routePresetDialog`，misc.js:275-310）：
+ * 只做「这个组挂载哪些已保存预设」；新建/停用预设仍在桌面端 设置 → 预设。
+ */
+@Composable
+private fun RoutingPresetDialog(
+    group: RoutingGroup,
+    state: RoutingPresetsUiState,
+    saving: Boolean,
+    saveError: String?,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+    onSave: (List<String>) -> Unit,
+) {
+    val ready = state as? RoutingPresetsUiState.Ready
+    var selected by remember(group.id, ready) {
+        mutableStateOf(ready?.presets?.routePresets?.get(group.id).orEmpty().toSet())
+    }
+    McaDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("路由预设 · ${group.id}", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                when (state) {
+                    RoutingPresetsUiState.Idle, RoutingPresetsUiState.Loading -> Text(
+                        text = "正在读取预设…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    is RoutingPresetsUiState.Failed -> {
+                        Text(
+                            text = "${state.message}（错误码：${state.code}）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        McaButton(onClick = onRetry, style = McaButtonStyle.Outlined) { Text("重试") }
+                    }
+                    is RoutingPresetsUiState.Ready -> {
+                        if (state.presets.presets.isEmpty()) {
+                            Text(
+                                text = "还没有预设；先到桌面端「设置 → 预设」新建，再回来挂载。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Text(
+                                text = "勾选后在该路由组命中时生效；不勾选 = 不带路由预设，渠道预设仍会生效。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            state.presets.presets.forEach { preset ->
+                                val attached = preset.id in selected
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(role = Role.Checkbox) {
+                                            selected = if (attached) selected - preset.id else selected + preset.id
+                                        }
+                                        .padding(vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            text = preset.name,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                        Text(
+                                            text = presetLine(preset),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = if (attached) "已挂载" else "挂载",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (attached) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                saveError?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            McaButton(
+                onClick = { onSave(selected.toList()) },
+                style = McaButtonStyle.Primary,
+                enabled = ready != null && !saving,
+            ) { Text(if (saving) "保存中…" else "保存") }
+        },
+        dismissButton = {
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("取消") }
+        },
+    )
+}
+
+/** 预设副文案：停用 / 提示词 / Body·Headers 计数（桌面 misc.js:290-292）。 */
+internal fun presetLine(preset: RoutingPreset): String = buildString {
+    if (!preset.enabled) {
+        append("停用 · ")
+    }
+    if (preset.hasSystemPrompt) {
+        append("提示词 · ")
+    }
+    append("Body ").append(preset.bodyCount).append(" · Headers ").append(preset.headerCount)
+    if (preset.description.isNotBlank()) {
+        append(" · ").append(preset.description)
+    }
+}
+
+sealed interface RoutingPresetsUiState {
+    data object Idle : RoutingPresetsUiState
+    data object Loading : RoutingPresetsUiState
+    data class Ready(val presets: RoutingPresets) : RoutingPresetsUiState
+    data class Failed(val code: String, val message: String) : RoutingPresetsUiState
+}
+
+/** 预设列表 / 挂载（自持状态，避免往 GatewayHome 增参）。 */
+class RoutingPresetsViewModel(application: android.app.Application) : AndroidViewModel(application) {
+    private val repository = GatewayRuntimeRepository(application)
+    private val _state = MutableStateFlow<RoutingPresetsUiState>(RoutingPresetsUiState.Idle)
+    val state: StateFlow<RoutingPresetsUiState> = _state.asStateFlow()
+    private val _saving = MutableStateFlow(false)
+    val saving: StateFlow<Boolean> = _saving.asStateFlow()
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    fun reload() {
+        val status = repository.status.value
+        if (!status.running) {
+            _state.value = RoutingPresetsUiState.Failed("gateway_not_running", "网关未启动")
+            return
+        }
+        if (_state.value !is RoutingPresetsUiState.Ready) {
+            _state.value = RoutingPresetsUiState.Loading
+        }
+        viewModelScope.launch {
+            _state.value = try {
+                RoutingPresetsUiState.Ready(withContext(Dispatchers.IO) { fetchRoutingPresets(status) })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                RoutingPresetsUiState.Failed(e.code, e.message)
+            } catch (_: Exception) {
+                RoutingPresetsUiState.Failed("unknown", "读取预设失败，请重试")
+            }
+        }
+    }
+
+    fun attach(groupId: String, ids: List<String>, onDone: () -> Unit) {
+        if (_saving.value) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _error.value = "网关未启动"
+            return
+        }
+        _error.value = null
+        _saving.value = true
+        viewModelScope.launch {
+            try {
+                _state.value = RoutingPresetsUiState.Ready(
+                    withContext(Dispatchers.IO) { attachRoutingPresets(status, groupId, ids) },
+                )
+                onDone()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _error.value = e.message
+            } catch (_: Exception) {
+                _error.value = "保存预设失败，请重试"
+            } finally {
+                _saving.value = false
+            }
         }
     }
 }
@@ -575,18 +858,24 @@ private fun RoutePreviewDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(6.dp))
-                val strategies = listOf("order", "smart", "rotate", "pace", "fast")
+                val strategies = listOf("", "order", "rotate", "usage", "pace", "smart", "fast")
                 strategies.chunked(3).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         row.forEach { value ->
                             McaButton(
                                 onClick = { draft = value },
                                 style = if (draft == value) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                            ) { Text(routingStrategyLabel(value)) }
+                                size = McaButtonSize.CardAction,
+                            ) { Text(if (value.isEmpty()) "默认" else routingStrategyLabel(value)) }
                         }
                     }
                     Spacer(Modifier.height(6.dp))
                 }
+                Text(
+                    text = "weight / free / cheapest / fastest 服务端仍未实现（桌面同样只是列出且不生效），手机端不提供。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 if (saveState is RouteSaveState.Failed) {
                     Text(
                         text = saveState.message,

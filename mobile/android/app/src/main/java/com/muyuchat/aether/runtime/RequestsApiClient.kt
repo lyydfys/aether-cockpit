@@ -6,7 +6,15 @@ import java.io.IOException
 import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
+import java.util.Locale
 
+/**
+ * 账本一行（`/api/usage/requests` 的 `rows[]`）。
+ *
+ * **只读、只映射安全列**：不保存也不暴露请求/回复正文、caller key、Authorization。
+ * 新增字段全部带默认值，既有构造点（测试、`RequestsViewModel`）不用改。
+ */
 data class RequestRow(
     val id: String,
     val timeMs: Long,
@@ -18,10 +26,45 @@ data class RequestRow(
     val outputTokens: Long,
     val ms: Long,
     val cost: Double,
+    /** 协议种类（`kind`）：`openai_chat` / `anthropic_messages` / `openai_responses` 等。 */
+    val kind: String = "",
+    /** 请求里写的模型名（`req`），与 `model`（实际服务模型）可能不同。 */
+    val requestedModel: String = "",
+    val providerId: String = "",
+    val accountId: String = "",
+    val accountName: String = "",
+    /** 客户端标识（`agent` / `agentName`）：codex、claude 等。 */
+    val agent: String = "",
+    /** 会话标识。桌面详情会展示它；只读展示，不落盘。 */
+    val session: String = "",
+    val stream: Boolean = false,
+    val ttftMs: Long = 0L,
+    val cacheRead: Long = 0L,
+    val cacheWrite: Long = 0L,
+    val reasoningTokens: Long = 0L,
+    /** 是否命中价格表（`priced`）；false 时费用显示「未计价」。 */
+    val priced: Boolean = false,
+    val pricingModel: String = "",
+    /** 上游/网关给的错误正文（`err`）。只在详情页原文展示，绝不进列表摘要。 */
+    val errorMessage: String = "",
+    val tries: Int = 0,
+    val handedOn: Boolean = false,
+    val retried: Boolean = false,
+    val routeId: Long = 0L,
+    val fastPath: Boolean = false,
+    val items: Int = 0,
+    val previousId: Boolean = false,
+    val autoContinued: Boolean = false,
+    val trimmedItems: Int = 0,
+    /** 上游静默截断：模型只看到末尾碎片。 */
+    val upstreamTruncated: Boolean = false,
+    val estimatedTokens: Long = 0L,
+    val purpose: String = "",
 ) {
     val ok: Boolean get() = status in 200..299
 }
 
+/** `/api/usage/requests` 的一页 + 该周期的服务端汇总（汇总不受本地筛选影响，与桌面一致）。 */
 data class RequestsPage(
     val rows: List<RequestRow>,
     val offset: Int,
@@ -32,29 +75,47 @@ data class RequestsPage(
     val calls: Long,
     val errors: Long,
     val cost: Double,
+    val inputTokens: Long = 0L,
+    val outputTokens: Long = 0L,
+    val cacheRead: Long = 0L,
+    val cacheWrite: Long = 0L,
+    val reasoningTokens: Long = 0L,
+    val unpriced: Long = 0L,
 )
 
+/** 账本允许的周期白名单：与 `ledgerRange` 一致，其余一律回落 today。 */
+private val REQUESTS_PERIODS = setOf("today", "7d", "30d", "all")
+
+/** 不传 period 时的旧行为：只看今天。 */
+internal const val REQUESTS_DEFAULT_PERIOD = "today"
+
+/** 服务端 `ledgerPageMax`。桌面 logs.js 一次取 500 行再做本地筛选，这里对齐。 */
+internal const val REQUESTS_LIMIT_MAX = 500
+
 /**
- * Read-only request ledger. Only safe columns are mapped: no request/response
- * bodies, session IDs or caller keys ever enter this model.
+ * 只读请求账本。只映射安全列：请求/回复正文、会话正文与 caller key 永不进入本模型。
  */
 class RequestsApiClient(
     private val connectTimeoutMs: Int = 5_000,
     private val readTimeoutMs: Int = 8_000,
 ) {
+    /**
+     * @param period `today` / `7d` / `30d` / `all`；非法值按 `today` 处理（与旧行为一致）。
+     * @param query  服务端关键词过滤（`q=`）；空串表示不过滤。
+     */
     fun fetchRequests(
         status: GatewayStatus,
         offset: Int,
         limit: Int,
         failedOnly: Boolean,
+        period: String = REQUESTS_DEFAULT_PERIOD,
+        query: String = "",
     ): RequestsPage {
         if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
             throw ManagementApiException("gateway_not_running", "网关未启动")
         }
-        val url = "http://${status.addr}/api/usage/requests" +
-            "?period=today&offset=${offset.coerceAtLeast(0)}&limit=${limit.coerceIn(1, 100)}" +
-            if (failedOnly) "&failed=1" else ""
-        val connection = (URL(url).openConnection() as HttpURLConnection)
+        val path = buildRequestsPath(offset, limit, failedOnly, period, query)
+        val connection = (URL("http://${status.addr}$path").openConnection() as HttpURLConnection)
         connection.connectTimeout = connectTimeoutMs
         connection.readTimeout = readTimeoutMs
         connection.requestMethod = "GET"
@@ -96,6 +157,34 @@ class RequestsApiClient(
     }
 }
 
+/**
+ * 拼 `/api/usage/requests` 的路径与查询串。
+ *
+ * 参数顺序固定为 period → offset → limit → failed → q：不传新参数时逐字节等于旧实现，
+ * 避免动到既有调用方的行为。
+ */
+internal fun buildRequestsPath(
+    offset: Int,
+    limit: Int,
+    failedOnly: Boolean,
+    period: String = REQUESTS_DEFAULT_PERIOD,
+    query: String = "",
+): String {
+    val safePeriod = period.trim().lowercase(Locale.US).takeIf { it in REQUESTS_PERIODS } ?: REQUESTS_DEFAULT_PERIOD
+    val out = StringBuilder("/api/usage/requests")
+    out.append("?period=").append(safePeriod)
+    out.append("&offset=").append(offset.coerceAtLeast(0))
+    out.append("&limit=").append(limit.coerceIn(1, REQUESTS_LIMIT_MAX))
+    if (failedOnly) {
+        out.append("&failed=1")
+    }
+    val keyword = query.trim()
+    if (keyword.isNotEmpty()) {
+        out.append("&q=").append(URLEncoder.encode(keyword, "UTF-8"))
+    }
+    return out.toString()
+}
+
 internal fun parseRequests(body: String): RequestsPage {
     val root = try {
         JSONObject(body.trim())
@@ -121,6 +210,33 @@ internal fun parseRequests(body: String): RequestsPage {
             outputTokens = item.optLong("out", 0L).coerceAtLeast(0L),
             ms = item.optLong("ms", 0L).coerceAtLeast(0L),
             cost = item.optDouble("cost", 0.0).coerceAtLeast(0.0),
+            kind = item.optString("kind").trim(),
+            requestedModel = item.optString("req").trim(),
+            providerId = item.optString("providerId").trim(),
+            accountId = item.optString("accountId").trim(),
+            accountName = item.optString("accountName").trim(),
+            agent = item.optString("agentName").trim().ifBlank { item.optString("agent").trim() },
+            session = item.optString("session").trim(),
+            stream = item.optBoolean("stream", false),
+            ttftMs = item.optLong("ttft_ms", 0L).coerceAtLeast(0L),
+            cacheRead = item.optLong("cache_read", 0L).coerceAtLeast(0L),
+            cacheWrite = item.optLong("cache_write", 0L).coerceAtLeast(0L),
+            reasoningTokens = item.optLong("reasoning", 0L).coerceAtLeast(0L),
+            priced = item.optBoolean("priced", false),
+            pricingModel = item.optString("pricing_model").trim(),
+            errorMessage = item.optString("err").trim(),
+            tries = item.optInt("tries", 0).coerceAtLeast(0),
+            handedOn = item.optBoolean("handed_on", false),
+            retried = item.optBoolean("retried", false),
+            routeId = item.optLong("route_id", 0L).coerceAtLeast(0L),
+            fastPath = item.optBoolean("fast_path", false),
+            items = item.optInt("items", 0).coerceAtLeast(0),
+            previousId = item.optBoolean("previous_id", false),
+            autoContinued = item.optBoolean("auto_continued", false),
+            trimmedItems = item.optInt("trimmed_items", 0).coerceAtLeast(0),
+            upstreamTruncated = item.optBoolean("upstream_truncated", false),
+            estimatedTokens = item.optLong("est_tokens", 0L).coerceAtLeast(0L),
+            purpose = item.optString("purpose").trim(),
         )
     }
     return RequestsPage(
@@ -133,5 +249,11 @@ internal fun parseRequests(body: String): RequestsPage {
         calls = root.optLong("calls", 0L).coerceAtLeast(0L),
         errors = root.optLong("errors", 0L).coerceAtLeast(0L),
         cost = root.optDouble("cost", 0.0).coerceAtLeast(0.0),
+        inputTokens = root.optLong("input", 0L).coerceAtLeast(0L),
+        outputTokens = root.optLong("output", 0L).coerceAtLeast(0L),
+        cacheRead = root.optLong("cache_read", 0L).coerceAtLeast(0L),
+        cacheWrite = root.optLong("cache_write", 0L).coerceAtLeast(0L),
+        reasoningTokens = root.optLong("reasoning", 0L).coerceAtLeast(0L),
+        unpriced = root.optLong("unpriced", 0L).coerceAtLeast(0L),
     )
 }

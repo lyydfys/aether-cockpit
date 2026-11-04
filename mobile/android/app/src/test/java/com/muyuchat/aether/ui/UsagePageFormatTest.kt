@@ -7,9 +7,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 用量页的排版纯逻辑：周期口径、成功率/缓存命中率、注解行、空态与错误文案。
+ * 用量页的排版纯逻辑（对标桌面 `usage.js`）：
+ * 周期口径、成功率/缓存命中率、注解行、分类行、趋势刻度、币种口径、空态与错误文案。
  *
- * 断言口径与概览页一致：Token = 输入 + 输出（不含缓存）；没有请求时写 "—"，不写 0%。
+ * 口径与概览页一致：Token = 输入 + 输出 + 缓存读 + 缓存写（桌面 `usage.js:90-91`）。
  */
 class UsagePageFormatTest {
 
@@ -21,6 +22,10 @@ class UsagePageFormatTest {
         cacheRead: Long = 0,
         cacheWrite: Long = 0,
         cost: Double = 0.0,
+        unpriced: Long = 0,
+        providers: List<com.muyuchat.aether.runtime.UsageProviderRow> = emptyList(),
+        models: List<com.muyuchat.aether.runtime.UsageModelRow> = emptyList(),
+        agents: List<com.muyuchat.aether.runtime.UsageBreakdownRow> = emptyList(),
     ) = UsageSummary(
         period = "today",
         calls = calls,
@@ -30,14 +35,19 @@ class UsagePageFormatTest {
         cacheReadTokens = cacheRead,
         cacheWriteTokens = cacheWrite,
         cost = cost,
-        models = emptyList(),
+        models = models,
         series = emptyList(),
+        providers = providers,
+        unpriced = unpriced,
+        agents = agents,
     )
 
     @Test
-    fun periodScopeLabelMatchesTheSelector() {
+    fun periodScopeLabelCoversAllThreeDesktopSegments() {
         assertEquals("今日", usagePeriodScopeLabel(UsagePeriod.TODAY))
         assertEquals("近 7 天", usagePeriodScopeLabel(UsagePeriod.WEEK))
+        assertEquals("近 30 天", usagePeriodScopeLabel(UsagePeriod.MONTH))
+        assertEquals(listOf("今日", "近 7 天", "近 30 天"), UsagePeriod.entries.map { it.label })
     }
 
     @Test
@@ -59,6 +69,12 @@ class UsagePageFormatTest {
     }
 
     @Test
+    fun tokenTotalIncludesCacheLikeDesktop() {
+        // 桌面 usage.js:90-91：input + cache_read + cache_write + output
+        assertEquals(2_000L, summary(input = 1_000, output = 500, cacheRead = 400, cacheWrite = 100).totalTokens)
+    }
+
+    @Test
     fun notesCarryFailureCountAndCacheRate() {
         val requests = usageRequestsNoteText(summary(calls = 10, errors = 2))
         assertTrue(requests, requests.contains("失败 2"))
@@ -67,8 +83,97 @@ class UsagePageFormatTest {
         val tokens = usageTokensNoteText(summary(input = 100, cacheRead = 50))
         assertTrue(tokens, tokens.contains("缓存"))
         assertTrue(tokens, tokens.contains("33.3%"))
-        // Token 注解不许把缓存算进总量口径（这里只声明缓存与命中率）。
         assertFalse(tokens, tokens.contains("总"))
+    }
+
+    @Test
+    fun costNoteSaysUnpricedOrPriceTable() {
+        assertEquals("按当前价格表", usageCostNoteText(summary(cost = 1.0)))
+        assertEquals("未计价 7 次", usageCostNoteText(summary(cost = 1.0, unpriced = 7)))
+    }
+
+    @Test
+    fun trendTotalAndAxisLabelsFollowDesktop() {
+        assertEquals("总计: 12 次 · \$1.20", usageTrendTotalText(12, 1.2, "USD", 7.2))
+        assertEquals("总计: 12 次 · ¥8.64", usageTrendTotalText(12, 1.2, "CNY", 7.2))
+        // 横轴抽稀：最多 6 个标签
+        assertEquals(1, usageTrendLabelStep(3))
+        assertEquals(1, usageTrendLabelStep(6))
+        assertEquals(2, usageTrendLabelStep(7))
+        assertEquals(5, usageTrendLabelStep(30))
+        // 服务端标签 "Jan 2" → 取日期部分；认不出来原样显示
+        assertEquals("2", trendAxisLabel("Jan 2"))
+        assertEquals("2026-11-05", trendAxisLabel("2026-11-05"))
+        assertEquals("", trendAxisLabel("  "))
+    }
+
+    @Test
+    fun rateLabelDoesNotInventExchangeRate() {
+        assertEquals("汇率未读取", usageRateText(0.0, pricingKnown = false))
+        assertEquals("汇率 1 USD = 7.20 CNY", usageRateText(7.2, pricingKnown = true))
+        assertEquals("汇率未提供", usageRateText(0.0, pricingKnown = true))
+    }
+
+    @Test
+    fun calendarRangeAndBreakdownChipMatchDesktop() {
+        assertEquals("2026-10-07 → 2026-11-05", usageCalendarRangeLabel("2026-10-07", "2026-11-05"))
+        assertEquals("近一年", usageCalendarRangeLabel("", ""))
+        assertEquals("3 类", usageBreakdownChipText(3))
+    }
+
+    @Test
+    fun sharePercentRoundsAndClamps() {
+        assertEquals("100%", sharePctText(100.0))
+        assertEquals("42%", sharePctText(41.6))
+        assertEquals("0%", sharePctText(-5.0))
+        assertEquals("100%", sharePctText(180.0))
+        assertEquals("0%", sharePctText(Double.NaN))
+    }
+
+    @Test
+    fun breakdownRowsFollowTheSelectedDimension() {
+        val summary = summary(
+            providers = listOf(
+                com.muyuchat.aether.runtime.UsageProviderRow(
+                    id = "p1", name = "Claude", calls = 3, errors = 1, cost = 0.5,
+                    inputTokens = 100, outputTokens = 50, cacheReadTokens = 50, cacheWriteTokens = 0,
+                ),
+                com.muyuchat.aether.runtime.UsageProviderRow(
+                    id = "p2", name = "Gemini", calls = 9, errors = 0, cost = 2.0,
+                ),
+            ),
+            models = listOf(
+                com.muyuchat.aether.runtime.UsageModelRow(
+                    id = "m1", name = "gpt-5", calls = 2, inputTokens = 10, outputTokens = 5, cost = 0.1,
+                ),
+            ),
+            agents = listOf(
+                com.muyuchat.aether.runtime.UsageBreakdownRow(
+                    id = "claude_code", name = "Claude Code", calls = 4, errors = 0,
+                    inputTokens = 10, outputTokens = 5, cacheReadTokens = 0, cacheWriteTokens = 0, cost = 1.0,
+                ),
+            ),
+        )
+        val providers = usageBreakdownRows(summary, UsageBreakdown.PROVIDER)
+        assertEquals(2, providers.size)
+        // 成本降序（桌面 usage.js:215）
+        assertEquals("Gemini", providers[0].name)
+        assertEquals("Claude", providers[1].name)
+        assertEquals(200L, providers[1].totalTokens)
+
+        assertEquals("gpt-5", usageBreakdownRows(summary, UsageBreakdown.MODEL).single().name)
+        assertEquals("Claude Code", usageBreakdownRows(summary, UsageBreakdown.AGENT).single().name)
+        // 缓存率 = 50 / (100 + 50 + 0) = 33.3%
+        assertEquals("33.3%", usageBreakdownCacheRateText(providers[1]))
+        assertEquals("—", usageBreakdownCacheRateText(providers[0]))
+    }
+
+    @Test
+    fun breakdownIsEmptyWhenTheDimensionHasNoRows() {
+        assertTrue(usageBreakdownRows(summary(), UsageBreakdown.PROVIDER).isEmpty())
+        assertEquals("渠道", UsageBreakdown.PROVIDER.label)
+        assertEquals("模型", UsageBreakdown.MODEL.label)
+        assertEquals("调用方", UsageBreakdown.AGENT.label)
     }
 
     @Test
@@ -85,12 +190,11 @@ class UsagePageFormatTest {
 
     @Test
     fun sectionEmptyHintsSayWhatNext() {
-        val models = usageModelsEmptyHint()
-        val series = usageSeriesEmptyHint()
-        assertTrue(models, models.contains("下一步"))
-        assertTrue(series, series.contains("下一步"))
-        assertFalse(models, models.contains("暂无数据"))
-        assertFalse(series, series.contains("暂无数据"))
+        for (hint in listOf(usageModelsEmptyHint(), usageSeriesEmptyHint(), usageBreakdownEmptyDetail())) {
+            assertTrue(hint, hint.contains("下一步"))
+            assertFalse(hint, hint.contains("暂无数据"))
+        }
+        assertEquals("还没有用量数据", usageBreakdownEmptyHeadline())
     }
 
     @Test

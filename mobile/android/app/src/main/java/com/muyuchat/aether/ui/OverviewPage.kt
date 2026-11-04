@@ -4,20 +4,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,8 +32,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayState
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.aether.runtime.OverviewExtras
+import com.muyuchat.aether.runtime.OverviewHealthRow
 import com.muyuchat.aether.runtime.OverviewLinksState
 import com.muyuchat.aether.runtime.OverviewProviderLink
+import com.muyuchat.aether.runtime.OverviewQuotaRow
 import com.muyuchat.aether.runtime.OverviewStats
 import com.muyuchat.aether.runtime.formatUsageCost
 import com.muyuchat.aether.runtime.formatUsageCount
@@ -49,22 +49,26 @@ import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaShape
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
-// 间距节奏（UI_REFRESH_SPEC 第 1 节）：区块之间 24 / 卡片内与行之间 12 / 紧邻元素 8。
-// 页面左右 20dp 是页框（MobileHeader 与所有页面共用），不随本页改动。
-private val BlockGap = 24.dp
-private val CardPadding = 16.dp
-private val RowGap = 12.dp
 private val TightGap = 8.dp
 private val StatusDotSize = 8.dp
 
 /**
- * 概览页。
+ * 概览页（对标桌面 `internal/web/ui2/js/views/overview.js`）。
  *
- * 排版规则（与用量页同一套）：每张卡自带一个 `titleMedium+Bold` 标题，卡与卡之间 24dp，
- * 卡内 16dp 内边距、行间 12dp；关键数字 `headlineSmall+Bold`，单位与注解降级。
- * 字段全部来自 [OverviewStats] / [GatewayStatus] / [OverviewLinksState]，没有后端出处的数字一律不画。
+ * 桌面区块顺序（`overview.js:166-172` 的注释与 append 顺序）：
+ * KPI 四格 → 三步接入（仅账号库为空时）→ 聚合链路 → 额度余量 + 渠道健康 → 接入卡。
+ * 手机端按同一顺序落位，两处差异都有理由：
+ *  1. 页首保留「网关运行卡」：桌面网关是常驻服务、概览没有启停按钮；手机端必须能启停，
+ *     这是手机端唯一必需的额外卡片（入口地址与复制也在它里面，对应桌面接入卡的入口行）。
+ *  2. 桌面接入卡右侧的「调用方密钥 / 客户端」两列，在手机上分别由设置页与客户端页承担，
+ *     这里不重复第三个入口。
+ *
+ * 桌面没有的两块已删除：「最近一次请求」与「入口协议」（端点行本来就在聚合链路里）。
  */
 @Composable
 internal fun OverviewPage(
@@ -75,20 +79,22 @@ internal fun OverviewPage(
     onCopy: () -> Unit,
     onSearch: () -> Unit,
     stats: OverviewStats? = null,
+    // 桌面概览没有「最近一次请求」卡；参数保留只为不改 GatewayHome 的调用点（写集外）。
     latestRequest: String? = null,
     modifier: Modifier = Modifier,
     viewModel: OverviewViewModel = viewModel(),
 ) {
-    // 与 GatewayHome 共用同一个 ViewModelStoreOwner，因此拿到的是同一个 OverviewViewModel；
-    // 这样不必改 GatewayHome 的调用点，也能消费新增的 links 状态。
+    // 与 GatewayHome 共用同一个 ViewModelStoreOwner，因此这里拿到的是同一个 OverviewViewModel。
     val links by viewModel.links.collectAsStateWithLifecycle()
+    val extras by viewModel.extras.collectAsStateWithLifecycle()
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(BlockGap),
+        contentPadding = bubbleSafeContentPadding(),
+        verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(RowGap)) {
+            Column(verticalArrangement = Arrangement.spacedBy(TightGap)) {
                 MobileHeader(state.status, onSearch = onSearch)
                 OverviewTitle(state.status)
             }
@@ -103,23 +109,27 @@ internal fun OverviewPage(
                 onCopy = onCopy,
             )
         }
-        item { TodayCard(stats) }
-        // latestRequest == null 表示网关未启动：这一块此时没有真实内容，就不画空壳。
-        if (latestRequest != null) {
-            item { LatestRequestCard(latestRequest) }
+        // ① KPI 四格（桌面 overview.js:157-164）
+        item { KpiCard(stats) }
+        // ② 三步接入：桌面只在账号库为空时出现（overview.js:167）
+        if (links?.providersLoaded == true && links?.totalAccounts == 0) {
+            item { OnboardingCard(status = state.status, links = links) }
         }
-        item { ProtocolsCard(state.status) }
-        // 桌面端概览的两块（overview.js:181 三步接入 / :225 聚合链路），放在现有卡片之后。
-        // 两张卡之间 12dp；与上方卡片、下方说明之间由 LazyColumn 的 24dp 区块间距控制。
+        // ③ 聚合链路（桌面 overview.js:169/225）
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OnboardingCard(status = state.status, links = links)
-                AggregationCard(status = state.status, links = links)
-            }
+            AggregationCard(
+                status = state.status,
+                links = links,
+                updatedAtMs = stats?.updatedAtMs ?: 0L,
+            )
         }
+        // ④ 额度余量 + 渠道健康（桌面 overview.js:172 的 ov-grid；手机纵向堆叠）
+        item { QuotaCard(extras) }
+        item { HealthCard(extras) }
         item {
             Text(
-                text = "前台服务可能被系统或电池策略停止；此页状态即真实状态。",
+                text = "前台服务可能被系统或电池策略停止；此页状态即真实状态。" +
+                    "调用方密钥在「设置」里管理，桌面客户端接线见「客户端」页。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -167,35 +177,6 @@ private fun StatusPill(status: GatewayStatus) {
     }
 }
 
-/** 唯一的一层卡片：Sheet + hairline + 16dp 内边距，卡内不再套卡片。 */
-@Composable
-private fun OverviewCard(content: @Composable () -> Unit) {
-    Surface(
-        shape = McaShape.Sheet,
-        color = MaterialTheme.colorScheme.surface,
-        border = McaHairline.stroke(),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(CardPadding),
-            verticalArrangement = Arrangement.spacedBy(RowGap),
-        ) {
-            content()
-        }
-    }
-}
-
-@Composable
-private fun CardTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onSurface,
-    )
-}
-
 @Composable
 private fun RowHairline() {
     Box(
@@ -217,10 +198,10 @@ private fun GatewayCard(
 ) {
     val headline = gatewayStateHeadline(status)
     val accent = statusAccent(status)
-    OverviewCard {
+    DeepCard {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(RowGap),
+            horizontalArrangement = Arrangement.spacedBy(DeepCardGap),
         ) {
             Column(
                 modifier = Modifier.weight(1f),
@@ -314,35 +295,36 @@ private fun GatewayCard(
     }
 }
 
+/** KPI 四格：可用账号 / 今日请求 / 今日 Token / 会话（桌面 `overview.js:157-164`）。 */
 @Composable
-private fun TodayCard(stats: OverviewStats?) {
-    OverviewCard {
-        CardTitle("今日")
-        Row(horizontalArrangement = Arrangement.spacedBy(CardPadding)) {
+private fun KpiCard(stats: OverviewStats?) {
+    DeepCard {
+        DeepCardTitle("今日")
+        Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
             StatCell(
-                label = "请求",
-                value = stats?.calls ?: "—",
+                label = "可用账号",
+                value = stats?.accounts ?: "—",
                 note = statNoteOrBlank(stats?.captions?.getOrNull(0)),
                 modifier = Modifier.weight(1f),
             )
             StatCell(
-                label = "可用账号",
-                value = stats?.accounts ?: "—",
-                note = statNoteOrBlank(stats?.captions?.getOrNull(3)),
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(CardPadding)) {
-            StatCell(
-                label = "Token",
-                value = stats?.tokens ?: "—",
+                label = "今日请求",
+                value = stats?.calls ?: "—",
                 note = statNoteOrBlank(stats?.captions?.getOrNull(1)),
                 modifier = Modifier.weight(1f),
             )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
             StatCell(
-                label = "成本",
-                value = stats?.cost ?: "—",
+                label = "今日 Token",
+                value = stats?.tokens ?: "—",
                 note = statNoteOrBlank(stats?.captions?.getOrNull(2)),
+                modifier = Modifier.weight(1f),
+            )
+            StatCell(
+                label = "会话",
+                value = stats?.sessions ?: "—",
+                note = statNoteOrBlank(stats?.captions?.getOrNull(3)),
                 modifier = Modifier.weight(1f),
             )
         }
@@ -392,81 +374,24 @@ private fun StatCell(label: String, value: String, note: String, modifier: Modif
             Text(
                 text = note,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
+                color = if (note.contains("读不到")) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
         }
-    }
-}
-
-@Composable
-private fun LatestRequestCard(latestRequest: String) {
-    OverviewCard {
-        CardTitle("最近一次请求")
-        Text(
-            text = latestRequestBody(latestRequest),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-    }
-}
-
-@Composable
-private fun ProtocolsCard(status: GatewayStatus) {
-    val port = if (status.running && status.addr.isNotBlank()) {
-        status.addr.substringAfterLast(':')
-    } else {
-        "未启动"
-    }
-    OverviewCard {
-        CardTitle("入口协议")
-        ProtocolRow("OpenAI Chat / Responses", "/v1/chat/completions · /v1/responses", port)
-        RowHairline()
-        ProtocolRow("Anthropic Messages", "/v1/messages", port)
-        RowHairline()
-        ProtocolRow("Gemini API", "/v1beta", port)
-    }
-}
-
-@Composable
-private fun ProtocolRow(name: String, path: String, port: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(RowGap),
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = name,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = path,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Text(
-            text = port,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.labelMedium,
-            color = if (port == "未启动") {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            textAlign = TextAlign.End,
-            maxLines = 1,
-        )
     }
 }
 
 /**
- * 三步接入（桌面 `overview.js:181-186` 的标题/说明原样）：
+ * 三步接入（桌面 `overview.js:176-188` 的标题/说明原样）。
+ *
  * 每步的完成状态都来自真实状态——网关运行、渠道账号数、今日请求数。
+ * 桌面只在账号库为空时显示（`overview.js:167`），这里由调用方按同一条件决定是否渲染。
+ * 桌面每步带一个跳转按钮；手机的导航回调在 `GatewayHome`（写集外），因此这里只留状态词。
  */
 @Composable
 private fun OnboardingCard(status: GatewayStatus, links: OverviewLinksState?) {
@@ -494,7 +419,7 @@ private fun OnboardingCard(status: GatewayStatus, links: OverviewLinksState?) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(TightGap),
             ) {
                 Text(
                     text = "${index + 1}",
@@ -536,11 +461,11 @@ private fun OnboardingCard(status: GatewayStatus, links: OverviewLinksState?) {
 }
 
 /**
- * 聚合链路（桌面 `overview.js:225`）：入站 3 个端点 → 本机网关 → 上游渠道。
+ * 聚合链路（桌面 `overview.js:212-456`）：入站 3 个端点 → 本机网关 → 上游渠道。
  * 渠道行只展示 `/api/providers` 与 `/api/usage` 已核实字段；读不到时明说，不补 0 冒充。
  */
 @Composable
-private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?) {
+private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?, updatedAtMs: Long) {
     val baseUrl = if (status.running && status.addr.isNotBlank()) {
         "http://${status.addr}"
     } else {
@@ -550,13 +475,27 @@ private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             DeepCardTitle("聚合链路")
             Spacer(Modifier.weight(1f))
-            if (links?.providersLoaded == true) {
+            val trailing = if (status.running && links?.providersLoaded == true) {
+                "${links.providers.size} 个渠道 → 3 个端点"
+            } else {
+                null
+            }
+            if (trailing != null) {
                 Text(
-                    text = "${links.providers.size} 个渠道 → 3 个端点",
+                    text = trailing,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        // 桌面把「更新于 HH:MM」并进这张卡的头部（overview.js:168-171）
+        val updated = formatOverviewUpdatedAt(updatedAtMs)
+        if (updated.isNotEmpty()) {
+            Text(
+                text = updated,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Spacer(Modifier.height(12.dp))
         if (!status.running) {
@@ -580,12 +519,12 @@ private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(8.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(Modifier.height(TightGap))
+        Column(verticalArrangement = Arrangement.spacedBy(TightGap)) {
             overviewEndpoints(baseUrl).forEach { endpoint ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(TightGap),
                 ) {
                     Text(
                         text = endpoint.label,
@@ -613,7 +552,7 @@ private fun AggregationCard(status: GatewayStatus, links: OverviewLinksState?) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(TightGap))
         when {
             !links.providersLoaded -> Text(
                 text = "读不到渠道列表：重新进入概览会再试一次。",
@@ -661,7 +600,7 @@ private fun ProviderLinkRow(provider: OverviewProviderLink, usageLoaded: Boolean
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(TightGap),
     ) {
         Column(
             modifier = Modifier.weight(1f),
@@ -691,6 +630,184 @@ private fun ProviderLinkRow(provider: OverviewProviderLink, usageLoaded: Boolean
             style = MaterialTheme.typography.labelSmall,
             color = stateColor,
         )
+    }
+}
+
+/** 额度余量（桌面 `overview.js:563-609`）：最紧的排最前，前 6 条。 */
+@Composable
+private fun QuotaCard(extras: OverviewExtras?) {
+    DeepCard {
+        DeepCardTitle("额度余量")
+        val rows = extras?.quotas
+        val error = extras?.quotaError
+        when {
+            error != null -> Text(
+                text = "读不到额度窗口：$error",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            rows == null -> Text(
+                text = "正在读取额度…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            rows.isEmpty() -> {
+                // 桌面同一句（overview.js:588）
+                Text(
+                    text = "暂无可读的额度窗口",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "额度读数还没回来，稍后自动重试。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            else -> rows.forEach { row -> QuotaRowView(row) }
+        }
+    }
+}
+
+@Composable
+private fun QuotaRowView(row: OverviewQuotaRow) {
+    val tone = when {
+        row.remainingPct <= 10.0 -> MaterialTheme.colorScheme.error
+        row.remainingPct <= 40.0 -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(TightGap),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = row.name,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = row.resetNote,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = quotaRemainingText(row.remainingPct),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = tone,
+            textAlign = TextAlign.End,
+        )
+    }
+}
+
+/** 渠道健康（桌面 `overview.js:546-561`）：最近一次探测，前 8 条。 */
+@Composable
+private fun HealthCard(extras: OverviewExtras?) {
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("渠道健康")
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = healthCheckedLabel(extras?.healthCheckedAt ?: 0L),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        val rows = extras?.health
+        val error = extras?.healthError
+        when {
+            error != null -> Text(
+                text = "读不到探测结果：$error",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            rows == null -> Text(
+                text = "正在读取探测结果…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            rows.isEmpty() -> {
+                // 桌面同一句（overview.js:550）：说明 + 去哪里探测
+                Text(
+                    text = "还没有探测结果",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "在「网关探针」页发起一次探测后，这里会显示每个渠道的最近一次结果。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            else -> rows.forEach { row -> HealthRowView(row) }
+        }
+    }
+}
+
+@Composable
+private fun HealthRowView(row: OverviewHealthRow) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(TightGap),
+    ) {
+        Text(
+            text = row.name,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = row.statusLabel,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (row.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+        )
+        if (row.detail.isNotBlank()) {
+            Text(
+                text = row.detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/* ------------------------------- 纯函数 ------------------------------- */
+
+/** 「更新于 HH:MM」；时间戳为 0 时返回空串（不编一个时间）。 */
+internal fun formatOverviewUpdatedAt(updatedAtMs: Long): String {
+    if (updatedAtMs <= 0L) {
+        return ""
+    }
+    val formatter = DateTimeFormatter.ofPattern("HH:mm", Locale.US)
+    val text = Instant.ofEpochMilli(updatedAtMs).atZone(ZoneId.systemDefault()).format(formatter)
+    return "更新于 $text"
+}
+
+/** 探测时间标签：0 = 未探测（桌面 `overview.js:548` 的「刚测 / 未探测」）。 */
+internal fun healthCheckedLabel(checkedAtMs: Long): String =
+    if (checkedAtMs <= 0L) "未探测" else "刚测"
+
+/** 剩余百分比文案：整数时不留小数点，其余保留一位。 */
+internal fun quotaRemainingText(remainingPct: Double): String {
+    val safe = if (remainingPct.isFinite()) remainingPct else 0.0
+    val rounded = kotlin.math.round(safe * 10.0) / 10.0
+    return if (rounded % 1.0 == 0.0) {
+        "${rounded.toInt()}%"
+    } else {
+        String.format(Locale.US, "%.1f%%", rounded)
     }
 }
 
@@ -759,5 +876,11 @@ internal fun statNoteOrBlank(caption: String?): String {
     return if (text.contains("读不到")) text else ""
 }
 
-/** `latestRequestLine()` 自带"最近一次："前缀；卡片标题已经说了同一件事，这里只去前缀。 */
+/**
+ * `latestRequestLine()` 自带"最近一次："前缀。
+ *
+ * 概览页已不再渲染「最近一次请求」卡（桌面 `overview.js` 没有这一块），
+ * 这里保留格式化函数是因为 `GatewayHome` 仍在消费 `viewModel.latest`；
+ * 恢复卡片时直接复用即可。
+ */
 internal fun latestRequestBody(line: String): String = line.removePrefix("最近一次：")

@@ -42,6 +42,7 @@ import com.muyuchat.aether.runtime.agentCliSummaryLine
 import com.muyuchat.aether.runtime.agentCliUnsupportedDetail
 import com.muyuchat.aether.runtime.agentModelLine
 import com.muyuchat.aether.runtime.agentModelsEmptyDetail
+import com.muyuchat.aether.runtime.agentPresenceLine
 import com.muyuchat.aether.runtime.agentStatusLabel
 import com.muyuchat.aether.runtime.agentsEmptyDetail
 import com.muyuchat.aether.runtime.agentsHiddenCount
@@ -365,6 +366,13 @@ private fun AgentRow(agent: AgentSummary, onClick: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // 桌面清单的两个布尔字段（detected / wired）逐项写出来，不合并成一句模糊状态。
+            Text(
+                text = agentPresenceLine(agent),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
             Text(
                 text = agentModelLine(agent),
                 style = MaterialTheme.typography.bodySmall,
@@ -374,7 +382,7 @@ private fun AgentRow(agent: AgentSummary, onClick: () -> Unit) {
             )
             if (agent.path.isNotBlank()) {
                 Text(
-                    text = agent.path,
+                    text = "配置文件 ${agent.path}",
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
