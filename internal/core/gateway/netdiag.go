@@ -49,7 +49,9 @@ var dohEndpoints = []struct {
 
 // netDiagIPResult 是单个 IP 的探测结果。
 type netDiagIPResult struct {
-	IP         string `json:"ip"`
+	IP   string `json:"ip"`
+	OK   bool   `json:"ok"`
+	Colo string `json:"colo,omitempty"`
 	TCPMS      int64  `json:"tcp_ms"`
 	TCPError   string `json:"tcp_error,omitempty"`
 	TLSMS      int64  `json:"tls_ms,omitempty"`
@@ -282,30 +284,36 @@ func probeIP(ctx context.Context, host, port, ip string) netDiagIPResult {
 	res.ALPN = tlsConn.ConnectionState().NegotiatedProtocol
 
 	// 3. 一个真实 HTTPS 请求的首字节（不带凭据，只看链路）。
+	//
+	// 打 /cdn-cgi/trace 而不是 /：它不回源站，测出来的是"到边缘"的真实延迟，
+	// 而且响应里带 colo（机房代码），能直接看出 DNS 把你分到了哪里。
 	t2 := time.Now()
 	tlsConn.SetDeadline(time.Now().Add(6 * time.Second))
-	req := "HEAD / HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\nUser-Agent: aether-diag\r\n\r\n"
+	req := "GET /cdn-cgi/trace HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\nUser-Agent: aether-diag\r\n\r\n"
 	if _, err := tlsConn.Write([]byte(req)); err != nil {
 		res.TTFBMS = time.Since(t2).Milliseconds()
 		res.HTTPError = err.Error()
 		res.Verdict = "TLS 通但写请求失败：链路不稳"
 		return res
 	}
-	buf := make([]byte, 64)
-	n, err := tlsConn.Read(buf)
+	raw, err := io.ReadAll(io.LimitReader(tlsConn, 16<<10))
 	res.TTFBMS = time.Since(t2).Milliseconds()
-	if err != nil {
+	if err != nil && len(raw) == 0 {
 		res.HTTPError = err.Error()
 		res.Verdict = "TLS 通但收不到响应：链路被无响应丢弃"
 		return res
 	}
-	head := string(buf[:n])
-	if strings.HasPrefix(head, "HTTP/") {
+	body := string(raw)
+	if i := strings.Index(body, "\r\n\r\n"); i >= 0 {
+		res.Colo = parseTraceColo(body[i+4:])
+	}
+	if strings.HasPrefix(body, "HTTP/") {
 		var code int
-		if _, perr := fmtSscanf(head, &code); perr == nil {
+		if _, perr := fmtSscanf(body, &code); perr == nil {
 			res.HTTPStatus = code
 		}
 	}
+	res.OK = true
 	res.Verdict = "可用"
 	return res
 }

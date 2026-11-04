@@ -75,6 +75,7 @@ var vendors = []Vendor{
 	},
 	{
 		ID: "open-design", DisplayName: "Open Design", Family: "opendesign", RegionTag: "CN", BrandColor: "#6D5EF8",
+		Icon:        "open-design",
 		Description: "Open Design 聚合中转（OpenAI 兼容）：一个 Key 覆盖 Claude / GPT / DeepSeek / GLM / Kimi / MiMo / MiniMax 多家模型。",
 		BaseURL:     "https://amr-link.open-design.ai/v1",
 		Kind:        "relay",

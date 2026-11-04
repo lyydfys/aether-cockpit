@@ -5,6 +5,7 @@ import * as api from '../api.js';
 import { icon } from '../icons.js';
 import { chip, btn, iconBtn, card, meter, drawer, empty, errorBox, skeleton, toast, copyText, confirmDialog, promptDialog, input, select, field, toggle, menu, fmtTokens, fmtDate, fmtReset } from '../components.js';
 import { openProvider } from './onboard.js';
+import { channelNetFields } from './channelnet.js';
 import { brandIcon } from '../brandicons.js';
 import { accountRefreshMode } from '../capabilities.js';
 import { openInBrowser } from '../links.js';
@@ -901,7 +902,7 @@ export default {
             h('div', { class: 'inline', style: 'gap:8px' },
               btn('接入账号', { onClick: () => { dr.close(); openProvider(p, load); } }),
               btn('保存修改', { primary: true, onClick: saveEditor }))),
-          h('div', { class: 'tabs' }, [['basic', '基础'], ['models', '模型'], ['limits', '限流'], ['advanced', '高级'], ['headers', '请求头 / UA']].map(([id, label]) =>
+          h('div', { class: 'tabs' }, [['basic', '基础'], ['models', '模型'], ['limits', '限流'], ['net', '网络'], ['advanced', '高级'], ['headers', '请求头 / UA']].map(([id, label]) =>
             h('button', { class: 'tab' + (local.tab === id ? ' on' : ''), type: 'button', onclick: () => { local.tab = id; draw(); } }, label))),
           buildFields());
       }
@@ -1027,6 +1028,10 @@ export default {
                 btn('清空', { ghost: true, class: 'sm', onClick: () => { for (const st of modelState.values()) st.on = false; modelsDirty = true; drawList(); } }),
                 h('span', { class: 'meta' }, '右侧为该模型的积分消耗倍率（留空=未配置）')))));
           fields.append(h('div', { class: 'meta', style: 'padding:6px 0' }, '只有勾选的模型会出现在 /v1/models；未接入账号的渠道整体不出现。'));
+        } else if (local.tab === 'net') {
+          // 连接预热 / 在途上限 / 边缘优选：这些是"这个上游地址"的属性，
+          // 所以放在渠道详情里，而不是塞进全局设置。
+          fields.append(channelNetFields(p.id, d.chat));
         } else if (local.tab === 'limits') {
           text('计费倍率', 'priceRate', '1');
           text('渠道并发上限', 'maxConcurrency', '跟随全局');

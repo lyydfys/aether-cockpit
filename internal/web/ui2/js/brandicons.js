@@ -65,6 +65,7 @@ const ICONS = {
   'siliconflow': 'siliconflow.svg',
   'stepfun': 'stepfun.svg',
   'devin': 'devin.svg',
+  'open-design': 'open-design.svg',
 };
 
 /* 单色品牌标（纯黑/currentColor）在暗色下会整块消失，需要反相；
