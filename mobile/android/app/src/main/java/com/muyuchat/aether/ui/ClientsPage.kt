@@ -245,7 +245,7 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
                 title = "客户端",
-                subtitle = "复制即用的接入片段 · 不会改动你的配置",
+                subtitle = "接入片段 · 只读",
             )
         }
         McaIconButton(
