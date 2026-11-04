@@ -1,8 +1,9 @@
-package com.muyuchat.aether.ui
+﻿package com.muyuchat.aether.ui
 
 import android.app.Application
 import android.content.ContentResolver
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.muyuchat.aether.runtime.ACCOUNT_BUNDLE_MAX_BYTES
@@ -610,6 +611,10 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             return
         }
         accountAction.value = AccountActionUiState.Busy(accountId, AccountActionKind.QUOTA)
+        // 一次性诊断日志：真机点过按钮却既没"最近读数"也没"读取失败"时，
+        // 只能靠这三行判断「请求到底有没有发出去 / 回包到没到」。日志不加任何新行为。
+        Log.i(QUOTA_READ_LOG_TAG, quotaReadLogLine(QuotaReadLog.Start(accountId)))
+        val startedAtMs = System.currentTimeMillis()
         viewModelScope.launch {
             try {
                 val read = withContext(Dispatchers.IO) { accountsClient.readQuota(status, accountId) }
@@ -619,6 +624,16 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                     // 没有可比对的行（列表还没到）：让它去重拉，别丢掉读到的结果。
                     refetchAccounts()
                 }
+                Log.i(
+                    QUOTA_READ_LOG_TAG,
+                    quotaReadLogLine(
+                        QuotaReadLog.Ok(
+                            accountId = accountId,
+                            elapsedMs = System.currentTimeMillis() - startedAtMs,
+                            hasReadAt = read.quotaRead,
+                        ),
+                    ),
+                )
                 val failure = quotaReadFailure(read)
                 accountAction.value = if (failure == null) {
                     AccountActionUiState.Idle
@@ -628,8 +643,31 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
+                Log.i(
+                    QUOTA_READ_LOG_TAG,
+                    quotaReadLogLine(
+                        QuotaReadLog.Fail(
+                            accountId = accountId,
+                            code = e.code,
+                            elapsedMs = System.currentTimeMillis() - startedAtMs,
+                            errorType = null,
+                        ),
+                    ),
+                )
                 accountAction.value = AccountActionUiState.Failed(accountId, e.code, e.message, AccountActionKind.QUOTA)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.i(
+                    QUOTA_READ_LOG_TAG,
+                    quotaReadLogLine(
+                        QuotaReadLog.Fail(
+                            accountId = accountId,
+                            code = "unknown",
+                            elapsedMs = System.currentTimeMillis() - startedAtMs,
+                            // 只记类型名：异常 message 里可能带 URL / 主机名。
+                            errorType = e::class.simpleName.orEmpty(),
+                        ),
+                    ),
+                )
                 accountAction.value = AccountActionUiState.Failed(
                     accountId,
                     "unknown",
@@ -942,5 +980,101 @@ internal fun filterProviders(providers: List<ProviderSummary>, query: String): L
                 account.id.contains(needle, ignoreCase = true) ||
                     account.label.contains(needle, ignoreCase = true)
             }
+    }
+}
+
+// ——— 「读取额度」的一次性诊断日志 ———
+//
+// 背景：真机上点过「读取额度」后按钮确实进过「读取中…」，但既没出现「最近读数 刚刚」，
+// 也没出现「读取失败：…」。网关日志不记 HTTP，外部无法取证，所以这里补三行日志，
+// 只为回答一个问题：**请求发出去了吗、回包到了吗**。
+//
+// 红线：日志里只允许出现脱敏后的账号前缀、耗时、错误码与异常**类型名**。
+// 不记完整账号 id、不记 URL、不记任何凭据/token、不记响应体。
+
+/** logcat 标签：`adb logcat -s AetherQuotaRead` 只看这一条链路。 */
+internal const val QUOTA_READ_LOG_TAG = "AetherQuotaRead"
+
+/** 一次读取的日志事件（字段都已经是"可以进日志"的形态）。 */
+internal sealed interface QuotaReadLog {
+    val accountId: String
+
+    /** 发起请求。 */
+    data class Start(override val accountId: String) : QuotaReadLog
+
+    /** 回包到了；[hasReadAt] 表示这次是否真的读到了额度（服务端 `quota_read`）。 */
+    data class Ok(
+        override val accountId: String,
+        val elapsedMs: Long,
+        val hasReadAt: Boolean,
+    ) : QuotaReadLog
+
+    /** 没拿到回包或回包不可用；[errorType] 只放异常类型名（message 可能带 URL/主机名）。 */
+    data class Fail(
+        override val accountId: String,
+        val code: String,
+        val elapsedMs: Long,
+        val errorType: String?,
+    ) : QuotaReadLog
+}
+
+/**
+ * 账号 id 脱敏：只留前 6 位 + `…`。
+ *
+ * 完整账号 id 是账号池主键，日志里不出现；连前缀也再过一道 [scrubLogText]，
+ * 免得 id 本身带 "token" 之类的字样把日志变成"像凭据"的文本。
+ */
+internal fun maskAccountId(accountId: String): String {
+    val trimmed = accountId.trim()
+    if (trimmed.isEmpty()) {
+        return "…"
+    }
+    return scrubLogText(trimmed.take(6)) + "…"
+}
+
+/**
+ * 错误码的日志形态。
+ *
+ * `ManagementApiException.code` 里有 `http_<status>`，直接打会把字样 "http" 带进日志，
+ * 所以状态码统一写作 `status_<status>`：信息不丢，字样不带。
+ */
+internal fun logSafeCode(code: String): String {
+    val trimmed = code.trim()
+    val normalized = if (trimmed.startsWith("http_", ignoreCase = true)) {
+        "status_" + trimmed.substring("http_".length)
+    } else {
+        trimmed
+    }
+    return scrubLogText(normalized).take(40)
+}
+
+/** 兜底脱敏：任何字段只要长得像凭据/URL 就把那一段抹掉。 */
+private fun scrubLogText(value: String): String = value
+    .replace("https", "***", ignoreCase = true)
+    .replace("http", "***", ignoreCase = true)
+    .replace("bearer", "***", ignoreCase = true)
+    .replace("token", "***", ignoreCase = true)
+    .replace("sk-", "***", ignoreCase = true)
+
+/**
+ * 拼一行日志。
+ *
+ * - `start account=3f9a2b…`
+ * - `ok account=3f9a2b… ms=1234 readAt=有`
+ * - `fail account=3f9a2b… kind=QUOTA code=network_error ms=90000 type=SocketTimeoutException`
+ */
+internal fun quotaReadLogLine(log: QuotaReadLog): String {
+    val account = "account=" + maskAccountId(log.accountId)
+    return when (log) {
+        is QuotaReadLog.Start -> "start $account"
+        is QuotaReadLog.Ok -> "ok $account ms=${log.elapsedMs} readAt=${if (log.hasReadAt) "有" else "无"}"
+        is QuotaReadLog.Fail -> buildString {
+            append("fail ").append(account)
+            append(" kind=QUOTA code=").append(logSafeCode(log.code))
+            append(" ms=").append(log.elapsedMs)
+            if (!log.errorType.isNullOrBlank()) {
+                append(" type=").append(scrubLogText(log.errorType).take(40))
+            }
+        }
     }
 }
