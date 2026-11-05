@@ -42,6 +42,7 @@ import (
 	"aether-cockpit/internal/core/pipeline"
 	"aether-cockpit/internal/core/pool"
 	"aether-cockpit/internal/core/redact"
+	"aether-cockpit/internal/core/rtstats"
 	"aether-cockpit/internal/core/scheduler"
 	"aether-cockpit/internal/core/spec"
 	"aether-cockpit/internal/core/state"
@@ -583,6 +584,9 @@ func New(cfg Config) *Gateway {
 			g.accountStoreErr = err
 			log.Printf("[WARN] 账号文件加载失败: %v", err)
 		}
+		// 响应 id 族统计与账号同目录：重启后官转率曲线不中断。
+		// 读失败只影响历史曲线，不影响网关启动（见 rtstats.SetPath）。
+		rtstats.SetPath(filepath.Join(filepath.Dir(cfg.AccountStorePath), "rtstats.json"))
 	}
 	// 账号恢复后把渠道级自定义请求头套上（保存时已套过的账号会幂等重套）。
 	g.applyProviderTransportAll()
@@ -834,6 +838,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/pricing/save", g.handlePricingSave)
 	// 请求预设：可复用的 Body/Headers，挂在渠道或路由组上。
 	m.HandleFunc("GET /api/presets", g.handlePresets)
+	// 官转率：按响应 id 前缀统计各渠道的后端族群分布（口径见 rtstats 包注释）。
+	m.HandleFunc("GET /api/routing-stats", g.handleRoutingStats)
 	m.HandleFunc("POST /api/presets/save", g.handlePresetSave)
 	m.HandleFunc("POST /api/presets/delete", g.handlePresetDelete)
 	m.HandleFunc("POST /api/presets/attach", g.handlePresetAttach)

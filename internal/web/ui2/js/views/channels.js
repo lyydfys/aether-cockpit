@@ -45,6 +45,8 @@ export default {
         state.usage = u || {};
         state.settings = s || {};
         state.presets = pr || { presets: [], provider_presets: {}, route_presets: {} };
+        // 官转率（按响应 id 前缀推定）单独取，失败不影响渠道页。
+        state.routing = await api.get('routing-stats').catch(() => ({ providers: {} }));
         render();
         try {
           if (sessionStorage.getItem('aether.addProvider') === '1') { sessionStorage.removeItem('aether.addProvider'); addProviderDialog(); }
@@ -64,6 +66,8 @@ export default {
     const providerOf = (id) => state.providers.find((p) => p.id === id);
     const usageOf = (id) => (state.usage.accounts || []).find((x) => x.id === id);
     const isActive = (pid) => (providerOf(pid)?.agents || []).some((a) => a.current);
+    // 官转率统计：{ providers: { <provider_id>: {total, official, relay, unknown, share} } }
+    const routingOf = (pid) => ((state.routing && state.routing.providers) || {})[pid];
 
     function remaining(w) { return 100 - usedPct(w); }
     // 可用积分：优先 total/balance 原始数值；只有窗口时按 limit×(1-used%) 折算。
@@ -230,6 +234,17 @@ export default {
       if (a.disabled) head.append(chip('已停用', 'plain'));
       if (a.duplicate_of) head.append(h('span', { title: '与「' + a.duplicate_of + '」凭证相同' }, chip('重复', 'amber')));
       for (const t of a.tags || []) head.append(chip(t, 'plain'));
+      // 官转率：按响应 id 前缀推定的后端族群占比（点开有口径说明）。
+      // 样本太少不显示，避免 1 次请求就宣布"100% 官方"。
+      const rs = routingOf(a.provider_id);
+      if (rs && rs.total >= 10 && typeof rs.share === 'number') {
+        const pct = Math.round(rs.share * 100);
+        head.append(h('span', {
+          title: '官转率（推定）' + pct + '%\n官方 ' + rs.official + ' · 中转 ' + rs.relay +
+            ' · 未知 ' + rs.unknown + '（共 ' + rs.total + ' 次）\n' +
+            '口径：按上游响应 id 前缀推定，chatcmpl-/纯数字=官方，gw-=中转；仅作趋势参考',
+        }, chip('官转 ' + pct + '%', pct >= 90 ? 'green' : pct >= 60 ? 'amber' : 'plain')));
+      }
       head.append(h('span', { class: 'grow' }));
       head.append(btn(a.note ? '备注' : '加备注', { ghost: true, class: 'sm acct-note-btn', icon: 'edit', title: a.note || '给这个账号加一条备注', onClick: () => noteDialog(a) }));
       el.append(head);

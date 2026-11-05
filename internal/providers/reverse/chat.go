@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"aether-cockpit/internal/core/ir"
+	"aether-cockpit/internal/core/rtstats"
 	"aether-cockpit/internal/core/spec"
 	"aether-cockpit/internal/core/transport/wirecodec"
 	"aether-cockpit/internal/provider"
@@ -129,6 +130,11 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		ae := mapStatusCode(resp.StatusCode, msg, resp.Header).WithProvider(p.profile.ID)
 		return nil, ae
 	}
+
+	// 统计"后端族群"分布（官方/中转/未知），供界面展示官转率。
+	// 放在 HTTP body 层统一嗅探：流式与非流式、SSE 与 JSON 都能覆盖，
+	// 且不改变调用方读到的字节（见 rtstats.Sniff 的测试）。
+	resp.Body = rtstats.Sniff(resp.Body, p.profile.ID)
 
 	format := strings.ToLower(strings.TrimSpace(cfg.Response.Format))
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
