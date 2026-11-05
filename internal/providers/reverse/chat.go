@@ -76,9 +76,14 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	if err := applyAuth(httpReq, env, cfg.Auth); err != nil {
 		return nil, err.WithProvider(p.profile.ID)
 	}
-	if sp != nil && sp.ClientVersion != "" {
-		httpReq.Header.Set("User-Agent", "aether-cockpit/"+sp.ClientVersion)
-	}
+	// UA 不是装饰：OpenCode 这类"官方/自部署混合池"会把 UA 计入路由决策
+	// （实测官方命中率 Claude UA 13/16、Codex 10/16、通用 8/16）。我们至少
+	// 不能自称 Go-http-client——那是最像爬虫的 UA，最容易被打到自部署 cell。
+	//
+	// 优先级：账号凭证里的 user_agent（用户显式指定，原样发送）
+	//       > spec 里的 client_version（对应客户端的真实版本号）
+	//       > 产品名 + 版本兜底。
+	applyUserAgent(httpReq, env, sp)
 	if len(p.profile.Headers) > 0 {
 		applyHeaders(httpReq, env, p.profile.Headers)
 	}
@@ -212,6 +217,32 @@ func pickCredential(env *provider.AccountEnv, preferred string) (key, value stri
 }
 
 // applyHeaders 应用 spec 头模板，额外支持 {{.Credentials.xxx}} 占位符。
+// applyUserAgent 设置上游 User-Agent。
+//
+// 为什么值得单独一个函数：同一份代码要覆盖三种来源，而且 UA 会实际影响
+// "官方/自部署混合池"的路由决策（见调用处注释）。
+//
+//   - 账号凭证 user_agent：用户显式指定，原样发送，不做任何拼接；
+//   - spec.client_version：对应客户端的真实版本，拼成 "<产品>/<版本>"；
+//   - 都没有：产品名 + 版本兜底，绝不留 Go 默认的 Go-http-client。
+func applyUserAgent(r *http.Request, env *provider.AccountEnv, sp *spec.Spec) {
+	if env != nil {
+		if ua := strings.TrimSpace(env.GetCredential("user_agent")); ua != "" {
+			r.Header.Set("User-Agent", ua)
+			return
+		}
+	}
+	if sp != nil && sp.ClientVersion != "" {
+		r.Header.Set("User-Agent", "aether-cockpit/"+sp.ClientVersion)
+		return
+	}
+	r.Header.Set("User-Agent", "aether-cockpit/"+reverseClientVersion)
+}
+
+// reverseClientVersion 是没有 spec/client_version 时的兜底版本号。
+// 只是让 UA 可读、可辨识；不参与任何协议语义。
+const reverseClientVersion = "1.0"
+
 func applyHeaders(r *http.Request, env *provider.AccountEnv, tmpl map[string]string) {
 	for k, t := range tmpl {
 		v := expandTemplate(t, env)
