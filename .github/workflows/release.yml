@@ -77,7 +77,8 @@ jobs:
           $version = (Get-Content VERSION -Raw).Trim()
           $buildTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
           $ldflags = "-s -w -X aether-cockpit/internal/core/gateway.BuildVersion=$version -X aether-cockpit/internal/core/gateway.BuildTime=$buildTime"
-          $packageName = "aether-cockpit-$version-windows-amd64"
+          # 与 Android 产物保持同一命名风格：AetherCockpit-<ver>-<platform>.<ext>
+          $packageName = "AetherCockpit-$version-windows-amd64"
           $packageRoot = Join-Path $env:RUNNER_TEMP $packageName
           $artifactRoot = Join-Path $env:RUNNER_TEMP "release-assets"
           New-Item -ItemType Directory -Force -Path $packageRoot, $artifactRoot | Out-Null
