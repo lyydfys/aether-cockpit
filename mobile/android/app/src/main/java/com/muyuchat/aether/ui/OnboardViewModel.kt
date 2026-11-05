@@ -3,6 +3,7 @@ package com.muyuchat.aether.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.muyuchat.aether.runtime.CachedProviders
 import com.muyuchat.aether.runtime.CustomProviderDraft
 import com.muyuchat.aether.runtime.CustomProviderProtocol
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
@@ -11,6 +12,7 @@ import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.OnboardAuthApiClient
 import com.muyuchat.aether.runtime.OnboardAuthSession
 import com.muyuchat.aether.runtime.OnboardDeviceSession
+import com.muyuchat.aether.runtime.OnboardProviderCache
 import com.muyuchat.aether.runtime.ProviderFormField
 import com.muyuchat.aether.runtime.ProviderSaveApiClient
 import com.muyuchat.aether.runtime.ProviderSummary
@@ -76,6 +78,42 @@ class OnboardViewModel(application: Application) : AndroidViewModel(application)
     /** 保存成功的回执，由页面展示一次后清掉。 */
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
+
+    /* ---------------- 渠道清单的离线缓存 ---------------- */
+
+    private val providerCache = OnboardProviderCache(application)
+
+    /**
+     * 上次成功拉到的渠道清单（离线时用它渲染）。
+     *
+     * 初始值同步读 SharedPreferences：**首帧就有内容**，不需要等网络失败再回填，
+     * 也就不会出现"先闪一下空态再出现清单"的跳动。
+     */
+    private val _cachedProviders = MutableStateFlow(providerCache.load())
+    internal val cachedProviders: StateFlow<CachedProviders> = _cachedProviders.asStateFlow()
+
+    /**
+     * 把一次成功的清单写进缓存（页面在 `providers` 非空时调用）。
+     *
+     * 只在内容真的变了才落盘：`OnboardPage` 每次重组/刷新都会调到这里，
+     * 无脑写盘会让 SharedPreferences 在滚动时也被反复触碰。
+     */
+    fun rememberProviders(providers: List<ProviderSummary>) {
+        if (providers.isEmpty()) {
+            return
+        }
+        val current = _cachedProviders.value
+        val sameShape = current.providers.size == providers.size &&
+            current.providers.map { it.id } == providers.map { it.id }
+        if (sameShape && current.providers == providers) {
+            return
+        }
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            withContext(Dispatchers.IO) { providerCache.save(providers, now) }
+            _cachedProviders.value = CachedProviders(providers = providers, savedAtMs = now)
+        }
+    }
 
     /**
      * 每个渠道的接入向导（浏览器授权 / 设备码 / Token·JSON / 手动凭据）。

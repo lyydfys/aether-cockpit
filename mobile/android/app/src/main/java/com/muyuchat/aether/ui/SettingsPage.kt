@@ -2,10 +2,15 @@ package com.muyuchat.aether.ui
 
 import android.content.Intent
 import android.app.Application
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.items
@@ -36,6 +41,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.muyuchat.aether.R
+import com.muyuchat.core.designsystem.McaIconPlate
 import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.CallerKeySummary
@@ -88,6 +95,11 @@ import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import com.muyuchat.core.designsystem.McaPlateSize
 import com.muyuchat.core.designsystem.McaShape
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -148,16 +160,53 @@ internal fun SettingsPage(
     preferredPortError: String? = null,
     preferredPortNotice: String? = null,
     onSavePreferredPort: (String) -> Unit = {},
+    /**
+     * 二级页层级变化上报：`true` = 正在看某个分组（如「01 常规」），`false` = 在看设置首页导航列表。
+     *
+     * 只用来让 `GatewayHome` 知道"返回手势的上一页是不是设置首页"——本页布局与导航逻辑不变。
+     */
+    onLevelChange: (Boolean) -> Unit = {},
+    /** 外部统一分发返回时用：自增一次即把二级页弹回设置首页。 */
+    popSignal: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(Unit) { onLoadCallerKeys() }
     var redactCustomFirst by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    // 聚焦某个分组时滚到顶部：LazyColumn 用 scrollToItem(0)（不是 ScrollState.animateScrollTo）。
+    // 外部 initialGroup 是"直达某组"；内部 activeGroup 是导航页进入的二级页。
+    var activeGroup by rememberSaveable { mutableStateOf(initialGroup) }
     LaunchedEffect(initialGroup) {
-        if (initialGroup != null) {
+        activeGroup = initialGroup
+    }
+    // 上报层级：返回手势据此决定底层渲染"设置首页"还是 tab 层。
+    LaunchedEffect(activeGroup) {
+        onLevelChange(activeGroup != null)
+    }
+    // 外部统一分发返回时，把二级页弹回设置首页（不触碰布局）。
+    // **只在信号自增时弹**：首次组合时 popSignal 可能已带着历史累计值（例如本次
+    // 进程内按过几次返回），按"非零就弹"会把「更多 → 关于」的直达组瞬间弹回首页。
+    var handledPopSignal by remember { mutableStateOf(popSignal) }
+    LaunchedEffect(popSignal) {
+        if (popSignal > handledPopSignal) {
+            handledPopSignal = popSignal
+            if (activeGroup != null) {
+                activeGroup = null
+            }
+        }
+    }
+    LaunchedEffect(activeGroup) {
+        if (activeGroup != null) {
             listState.scrollToItem(0)
         }
+    }
+    // 只接管内部二级页的系统返回；外部初始组仍交回调用方 onBack，避免改 GatewayHome。
+    BackHandler(enabled = activeGroup != null && initialGroup == null) {
+        activeGroup = null
+    }
+    // 设置首页（导航列表）也要接管返回：先退回来源 tab（更多），而不是退出 App。
+    // 与上一条互斥（activeGroup 只能有一个值），不会和 PredictiveBackHost 重复注册同一层。
+    BackHandler(enabled = activeGroup == null && initialGroup == null) {
+        onBack()
     }
     LazyColumn(
         state = listState,
@@ -165,36 +214,85 @@ internal fun SettingsPage(
         contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
-        // ——— 聚焦模式：只渲染目标分组，顶部「‹ 返回 + 组标题」 ———
-        if (initialGroup != null) {
-            item {
+        // ——— 二级页：只渲染目标分组，顶部「‹ 返回 + 组标题」 ———
+        // 「10 关于」例外：它自己输出「设置中心 / 关于 + ✕」面包屑（1:1 复刻 MCA），
+        // 这里不再叠一层返回页头，避免两层标题。
+        if (activeGroup != null) {
+            // 「10 关于」只跳过这层页头（它自带面包屑），**内容仍要走下面同一套
+            // settingsBlocksFor/state 渲染**——之前把整个块都排除掉，导致直达「10」
+            // 只有页头被跳过、正文回落到设置首页（真机验收第 2 条）。
+            if (activeGroup != "10") item {
                 FocusedSettingsHeader(
-                    title = settingsGroupTitle(initialGroup) ?: "设置",
-                    onBack = onBack,
+                    title = settingsGroupTitle(activeGroup) ?: "设置",
+                    onBack = {
+                        if (initialGroup == null) activeGroup = null else onBack()
+                    },
                 )
             }
+            // 分区里被合并的其它分组：从首页网格只能点到第一组，这里补一条入口，保证 8 组都可达。
+            val siblings = settingsPartitionSiblings(activeGroup.orEmpty())
+            if (siblings.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        siblings.forEach { group ->
+                            McaButton(
+                                onClick = { activeGroup = group.index },
+                                style = McaButtonStyle.Outlined,
+                            ) { Text("${group.index}  ${group.title}") }
+                        }
+                    }
+                }
+            }
             when (state) {
-                SettingsUiState.Idle -> item {
-                    SettingsStateCard(
-                        title = "网关未启动",
-                        detail = "启动本地网关后可读取本机设置。",
-                        actionLabel = "前往概览",
-                        onAction = onOpenOverview,
-                    )
+                SettingsUiState.Idle -> {
+                    // 用户要求：**本机设置不因网关未启动被拦**。
+                    // 这里只给一行非阻断提示（不再是占满整页的"请启动网关"卡片），
+                    // 下面的分组内容照常渲染——各分区内部对实时状态字段自己做降级。
+                    item {
+                        Text(
+                            text = "网关未启动：本机设置仍可查看与修改；与实时状态相关的项会显示为不可用。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    val localBlocks = settingsBlocksFor(activeGroup)
+                    localBlocks.forEach { block ->
+                        item {
+                            if (block.id == "10") {
+                                // 关于页不依赖网关运行态：Hero/更新卡/四宫格/Star 卡/版本信息卡
+                                // 全部照常渲染（只有"网关版本"这类实时行取不到时不显示）。
+                                SettingsAboutSection(
+                                    status = status,
+                                    onClose = {
+                                        if (initialGroup == null) activeGroup = null else onBack()
+                                    },
+                                )
+                            } else {
+                                OfflineSettingsBlock(block.id, status)
+                            }
+                        }
+                    }
                 }
                 SettingsUiState.Loading -> item { SettingsLoadingCard() }
                 is SettingsUiState.Failed -> item {
                     SettingsErrorCard(state.code, state.message, onRefresh)
                 }
                 is SettingsUiState.Ready -> {
-                    val blocks = settingsBlocksFor(initialGroup)
+                    val blocks = settingsBlocksFor(activeGroup)
                     if (blocks.isEmpty()) {
                         item {
                             SettingsStateCard(
                                 title = "找不到设置分组",
-                                detail = "分组「$initialGroup」不是设置页里的分区（01–08 与 10 关于）。",
+                                detail = "分组「$activeGroup」不是设置页里的分区（01–08 与 10 关于）。",
                                 actionLabel = "返回",
-                                onAction = onBack,
+                                onAction = {
+                                    if (initialGroup == null) activeGroup = null else onBack()
+                                },
                             )
                         }
                     } else {
@@ -264,9 +362,23 @@ internal fun SettingsPage(
                                     "05" -> SettingsPricingSection(status = status)
                                     "06" -> SettingsModelsSection(status = status)
                                     "07" -> SettingsPrivacySection(status = status)
-                                    "08" -> SettingsObservabilitySection(status = status)
+                                    "08" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        SettingsObservabilitySection(status = status)
+                                        HealthReportSection(
+                                            status = status,
+                                            settings = state.settings,
+                                            onShare = onShareReport,
+                                        )
+                                    }
                                     "10" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        SettingsAboutSection(status = status)
+                                        // 关于页自带面包屑与 ✕：关掉它就是"退出二级页"，
+                                        // 与页头返回同一语义（外部直达时交回 onBack）。
+                                        SettingsAboutSection(
+                                            status = status,
+                                            onClose = {
+                                                if (initialGroup == null) activeGroup = null else onBack()
+                                            },
+                                        )
                                         SettingsProfilesSection(status = status)
                                     }
                                 }
@@ -278,152 +390,83 @@ internal fun SettingsPage(
             return@LazyColumn
         }
         item { MobileHeader(status) }
+        // ——— 顶栏：小标签行 + 大标题 + 副标题 + 关闭 ———
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AetherHeaderIconButton(
-                    iconRes = R.drawable.ic_back,
-                    contentDescription = "返回",
-                    onClick = onBack,
-                    tint = MaterialTheme.colorScheme.onBackground,
-                )
-                Spacer(Modifier.width(8.dp))
+            Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "●  AETHER COCKPIT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(6.dp))
                     DeepPageTitle(
                         title = "设置",
-                        subtitle = "本机配置 · 只读",
+                        subtitle = "本机网关 · 渠道 · 模型与数据边界",
                     )
                 }
+                Spacer(Modifier.width(8.dp))
                 AetherHeaderIconButton(
-                    iconRes = R.drawable.ic_refresh,
-                    contentDescription = "刷新设置",
-                    onClick = onRefresh,
-                    enabled = state is SettingsUiState.Ready || state is SettingsUiState.Failed,
+                    iconRes = R.drawable.ic_close,
+                    contentDescription = "关闭设置",
+                    onClick = onBack,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-        // 首选端口是**本机运行配置**，不是网关状态：必须始终可编辑。
-        // 否则首选端口被占用 → 启动失败 → 设置页因「网关未启动」拒绝渲染 → 用户再也改不回来那个端口。
-        // 标题用「本机监听」：桌面把端口放在启动参数里（settings.js:216 的「监听地址」只读），
-        // 手机端必须能在页内改，所以单列一节并注明这是手机端才有的。
+        // ——— 深色 Hero 卡 ———
+        item { SettingsHeroCard(status = status) }
+        // ——— 配置中心标题 ———
         item {
-            SettingsSection("本机监听") {
-                Text(
-                    text = "手机端特有：桌面版的端口由启动参数决定（设置里只读），手机端必须在页内改，" +
-                        "否则端口被占用后没有入口改回来。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                PreferredPortRow(
-                    preferredPort = preferredPort,
-                    saving = preferredPortSaving,
-                    error = preferredPortError,
-                    notice = preferredPortNotice,
-                    onSave = onSavePreferredPort,
-                )
-            }
-        }
-        item {
-            HealthReportSection(
-                status = status,
-                settings = (state as? SettingsUiState.Ready)?.settings,
-                onShare = onShareReport,
+            DeepSectionTitle(
+                text = "配置中心",
+                trailing = "${settingsPartitions().size} 个分区",
             )
         }
-        when (state) {
-            SettingsUiState.Idle -> item {
-                SettingsStateCard(
-                    title = "网关未启动",
-                    detail = "启动本地网关后可读取本机设置。",
-                    actionLabel = "前往概览",
-                    onAction = onOpenOverview,
-                )
-            }
-            SettingsUiState.Loading -> item { SettingsLoadingCard() }
-            is SettingsUiState.Failed -> item {
-                SettingsErrorCard(state.code, state.message, onRefresh)
-            }
-            is SettingsUiState.Ready -> {
-                item {
-                    SettingsSections(
-                        settings = state.settings,
-                        status = status,
-                        saveState = saveState,
-                        onToggleRedact = onToggleRedact,
-                        personalSaving = personalSaving,
-                        personalError = personalError,
-                        onToggleRedactPersonal = onToggleRedactPersonal,
-                        onOpenRedactDetail = {
-                            redactCustomFirst = false
-                            onOpenRedactDetail()
-                        },
-                        onOpenRedactRules = {
-                            redactCustomFirst = true
-                            onOpenRedactDetail()
-                        },
-                        lanSaving = lanSaving,
-                        lanError = lanError,
-                        onToggleLan = onToggleLan,
-                        proxySaving = proxySaving,
-                        proxyError = proxyError,
-                        onSaveProxy = onSaveProxy,
-                        corsSaving = corsSaving,
-                        corsError = corsError,
-                        onSaveCors = onSaveCors,
-                        ipsSaving = ipsSaving,
-                        ipsError = ipsError,
-                        onSaveAllowIPs = onSaveAllowIPs,
-                    )
-                }
-                item {
-                    CallerKeysSection(
-                        status = status,
-                        state = callerKeys,
-                        error = keysError,
-                        onCreate = onCreateCallerKey,
-                        onToggle = onToggleCallerKey,
-                        onRemove = onRemoveCallerKey,
-                        onReload = onLoadCallerKeys,
-                    )
-                }
-                // 块表驱动（顺序 = 现在屏幕上的顺序）：
-                // 常规 → 定价 → 隐私 → 工具服务 → 预设 → 模型目录 → 可观测。
-                settingsBlocksFor(initialGroup = null).forEach { block ->
-                    item {
-                        when (block.id) {
-                            "01" -> SettingsGeneralSection(status = status)
-                            "05" -> SettingsPricingSection(status = status)
-                            "07" -> SettingsPrivacySection(status = status)
-                            "03" -> SettingsToolsSection(status = status)
-                            "04" -> SettingsPresetsSection(status = status)
-                            "06" -> SettingsModelsSection(status = status)
-                            "08" -> SettingsObservabilitySection(status = status)
-                            "10" -> SettingsAboutSection(status = status)
+        // ——— 2×2 配置卡网格（1.3× 或窄屏退成一列） ———
+        item {
+            BoxWithConstraints {
+                val columns = if (maxWidth < 340.dp) 1 else 2
+                val rows = settingsPartitions().chunked(columns)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    rows.forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            row.forEach { partition ->
+                                Box(Modifier.weight(1f)) {
+                                    SettingsPartitionCard(
+                                        partition = partition,
+                                        running = status.running,
+                                        onClick = {
+                                            val first = partition.groupIds.firstOrNull()
+                                            if (first == null) {
+                                                onOpenBackup()
+                                            } else if (first == "09") {
+                                                onOpenBackup()
+                                            } else {
+                                                activeGroup = first
+                                            }
+                                        },
+                                    )
+                                }
+                            }
+                            repeat(columns - row.size) {
+                                Spacer(Modifier.weight(1f))
+                            }
                         }
                     }
                 }
             }
         }
-        // 桌面设置的第 9 个 tab「同步与备份」（settings.js:45 TABS）。
-        // 手机端只做导出与导入（备份页）；云同步要 WebDAV 口令，桌面端才有。
-        item {
-            SettingsSection("同步与备份") {
-                SettingsRow("配置备份", "口令密封导出与导入；不含账号凭证")
-                McaButton(onClick = onOpenBackup, style = McaButtonStyle.Outlined) {
-                    Text("打开备份…")
-                }
-                Text(
-                    text = "云同步（WebDAV）只在桌面端提供：手机端没有填写远端地址与口令的入口，" +
-                        "也不把口令存进本机设置。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        // ——— 底部脚注 ———
         item {
             Text(
-                text = "脱敏引擎开关经 /api/settings/redact-actions 仅合并 enabled；个人信息开关经 /api/settings 按 key 合并 redactPersonal；动作覆盖按 kind 整表回写；密钥、OTLP Headers、WebDAV 密码与远程额度密文不在本页展示。",
-                style = MaterialTheme.typography.bodySmall,
+                text = "🛡 配置即时生效，敏感数据留在本机。",
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
             )
         }
     }
@@ -442,6 +485,201 @@ internal fun SettingsPage(
             onAdd = onAddRedactRule,
             onEdit = onEditRedactRule,
             onDelete = onDeleteRedactRule,
+        )
+    }
+}
+
+/**
+ * 设置首页的分区 = **一组一卡**（不合并）。
+ *
+ * 用户口径：8 组各自一张卡，标题与副标题直接用分组自己的（不另起命名）；
+ * 04 预设、10 关于仍在「更多」页，不进设置首页。
+ */
+internal data class SettingsPartition(
+    val id: String,
+    val title: String,
+    val description: String,
+    val iconRes: Int,
+    val groupIds: List<String>,
+    /** 该分区是否有可读的实时状态（目前只有「01 常规」能读到网关卡运行状态）。 */
+    val hasLiveStatus: Boolean = false,
+)
+
+internal fun settingsPartitions(): List<SettingsPartition> = settingsGroups()
+    .filter { it.index != "04" && it.index != "10" }
+    .map { group ->
+        SettingsPartition(
+            id = group.index,
+            title = group.title,
+            description = group.subtitle,
+            iconRes = settingsPartitionIcon(group.index),
+            groupIds = listOf(group.index),
+            hasLiveStatus = group.index == "01",
+        )
+    }
+
+/** 每张卡一个语义图标；缺省用齿轮，不共用同一个图标。 */
+internal fun settingsPartitionIcon(index: String): Int = when (index) {
+    "01" -> R.drawable.ic_tune
+    "02" -> R.drawable.ic_ws_overview
+    "03" -> R.drawable.ic_gateway
+    "05" -> R.drawable.ic_bolt
+    "06" -> R.drawable.ic_ws_channels
+    "07" -> R.drawable.ic_shield
+    "08" -> R.drawable.ic_ws_logs
+    "09" -> R.drawable.ic_ws_settings
+    else -> R.drawable.ic_ws_settings
+}
+
+/** 只有能读到真实状态的分区才给胶囊文案；其余返回空串，卡片据此**不渲染胶囊**。 */
+internal fun settingsPartitionStatus(partition: SettingsPartition, running: Boolean): String =
+    if (partition.hasLiveStatus) (if (running) "运行中" else "待机") else ""
+
+/** 只有「运行中」用强调色，其余中性——不拿颜色假装状态。 */
+internal fun settingsPartitionAccent(partition: SettingsPartition, running: Boolean): Boolean =
+    partition.hasLiveStatus && running
+
+/** 一组一卡后不再需要「同区其它分组」入口，这里保留空实现只为兼容旧调用点。 */
+internal fun settingsPartitionSiblings(id: String): List<SettingsGroup> = emptyList()
+
+/** 深色 Hero 卡：深蓝近黑底 + 文字层 + 三个状态胶囊。 */
+@Composable
+private fun SettingsHeroCard(status: GatewayStatus) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp))
+            .background(androidx.compose.ui.graphics.Color(0xFF0C1422))
+            .padding(DeepCardPadding),
+    ) {
+        Column {
+            // 不照抄外部项目：这句是我们自己的定位，且不带任何外部产品名。
+            Text(
+                text = "AETHER COCKPIT",
+                style = MaterialTheme.typography.labelSmall,
+                color = androidx.compose.ui.graphics.Color(0xFF7F8DA6),
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "此处即边界",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = androidx.compose.ui.graphics.Color(0xFFF2F5FA),
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "渠道、模型与脱敏规则在此落地生根，一寸都不外流。",
+                style = MaterialTheme.typography.bodySmall,
+                color = androidx.compose.ui.graphics.Color(0xB3FFFFFF),
+                maxLines = 3,
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // 只保留能读到真实数据的胶囊：「模型」「检索」没有可读来源，
+                // 写死「未加载 / 已停用」会被读成"功能被关掉"，因此不渲染（有数据时再加回）。
+                HeroPill("状态", if (status.running) "运行中" else "待机")
+            }
+        }
+    }
+}
+
+/** Hero 里的半透明描边胶囊：小圆点 + 「标签 · 值」。 */
+@Composable
+private fun HeroPill(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
+            .background(androidx.compose.ui.graphics.Color(0x33FFFFFF))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(androidx.compose.ui.graphics.Color(0xFF8FB6FF)),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = "$label · $value",
+            style = MaterialTheme.typography.labelSmall,
+            color = androidx.compose.ui.graphics.Color(0xFFE6ECF5),
+            maxLines = 1,
+            softWrap = false,
+        )
+    }
+}
+
+/** 一张配置卡：图标底盘 + 状态胶囊 / 标题 / 两行说明 / 「进入 ›」。 */
+@Composable
+private fun SettingsPartitionCard(
+    partition: SettingsPartition,
+    running: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .aetherPressable(scaleDown = 0.985f, onClick = onClick)
+            .padding(DeepCardPadding),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            McaIconPlate(size = McaPlateSize.Medium, shape = McaShape.Badge) {
+                Icon(
+                    painter = painterResource(partition.iconRes),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(McaIconSize.M),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            // 只有读得到真实状态的分区才挂胶囊；其余不显示（8 张卡每张都写「暂无」更吵）。
+            val statusText = settingsPartitionStatus(partition, running)
+            if (statusText.isNotBlank()) {
+                AetherStatusChip(
+                    text = statusText,
+                    kind = if (settingsPartitionAccent(partition, running)) {
+                        AetherChipKind.ACCENT
+                    } else {
+                        AetherChipKind.NEUTRAL
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = partition.title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = partition.description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "进入 ›",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
         )
     }
 }
@@ -2253,20 +2491,45 @@ internal val SETTINGS_PARTITION_BLOCKS: List<SettingsBlockSpec> = listOf(
     SettingsBlockSpec("10", "关于"),
 )
 
-/** 整页渲染顺序（= 改造前 261-267 行的顺序，保持现状不变；「10 关于」追加在最后）。 */
-private val SETTINGS_FULL_PAGE_ORDER = listOf("01", "05", "07", "03", "04", "06", "08", "10")
-
 /**
- * 块表过滤：null → 整页 7 个区块（原顺序）；非空 → 只保留该分组。
+ * 分区块表过滤：null → 全部 9 个分区（id 顺序）；非空 → 只保留该分组。
  * 未知 id 返回空表（调用方渲染"找不到分组"，不崩）。
  */
 internal fun settingsBlocksFor(initialGroup: String?): List<SettingsBlockSpec> {
     if (initialGroup == null) {
-        return SETTINGS_FULL_PAGE_ORDER.mapNotNull { id ->
-            SETTINGS_PARTITION_BLOCKS.firstOrNull { it.id == id }
-        }
+        return SETTINGS_PARTITION_BLOCKS
     }
     return SETTINGS_PARTITION_BLOCKS.filter { it.id == initialGroup }
+}
+
+/**
+ * 网关未启动时的分区内容：只渲染**本机可得**的设置块。
+ *
+ * 为什么要有这个：以前 Idle 直接顶一张「启动本地网关后可读取本机设置」的大卡片，
+ * 用户看到的是"整个设置页都进不去"。实际上外观/语言/通知/隐私开关/端口偏好这些都在本地，
+ * 与网关运行态无关。
+ *
+ * 取舍：实时状态字段（端口占用、运行中的敏感预览等）在离线时**整行不显示**，
+ * 而不是把整块换成"请启动网关"——用户至少能看到并修改本机项。
+ */
+@Composable
+private fun OfflineSettingsBlock(blockId: String, status: GatewayStatus) {
+    // 01/03/05/06/07 这些是纯本机偏好（外观、隐私、通知、语言…），离线照常渲染。
+    // 04/08/09 依赖运行态（脱敏预览、端口占用、实时诊断），离线只留一行说明。
+    when (blockId) {
+        "01", "03", "05", "06", "07" -> SettingsSection("本机设置") {
+            Text(
+                text = "以下设置保存在本机，网关未启动也可以修改。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        else -> Text(
+            text = "「${settingsGroupTitle(blockId) ?: blockId}」里的实时项需要网关运行；启动后可查看。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 /** 组标题：用 `settingsGroups()` 的标题，未知 id 返回 null。 */

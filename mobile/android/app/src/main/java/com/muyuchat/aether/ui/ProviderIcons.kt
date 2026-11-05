@@ -59,6 +59,9 @@ internal fun providerIcon(providerId: String?): ProviderIcon {
         "xai" -> brand("xai")
         "google", "gemini-compat" -> brand("gemini")
         "vertex" -> brand("googlecloud")
+        "azure", "azure-openai" -> brand("azure")
+        "antigravity", "antigravity-ide", "antigravityide" -> brand("antigravity")
+        "workbuddy", "workbuddy-cn", "workbuddy-intl" -> brand("workbuddy")
         "deepseek" -> brand("deepseek")
         "moonshot", "moonshot-cn", "kimi-code" -> brand("kimi")
         "mistral" -> brand("mistral")
@@ -106,6 +109,9 @@ private fun drawableForBrand(name: String): Int = when (name) {
     "xai" -> R.drawable.ic_brand_xai
     "gemini" -> R.drawable.ic_brand_gemini
     "googlecloud" -> R.drawable.ic_brand_googlecloud
+    "azure" -> R.drawable.ic_brand_azure
+    "antigravity" -> R.drawable.ic_brand_antigravity
+    "workbuddy" -> R.drawable.ic_brand_workbuddy
     "deepseek" -> R.drawable.ic_brand_deepseek
     "kimi" -> R.drawable.ic_brand_kimi
     "mistral" -> R.drawable.ic_brand_mistral
@@ -177,11 +183,21 @@ internal val BRANDED_PROVIDER_IDS: Set<String> = setOf(
     "stepfun",
     "devin",
     "open-design",
+    // 曾经跳过、现已补图的两族：antigravity / azure 走 vector，workbuddy 走 PNG 位图。
+    "antigravity", "antigravity-ide",
+    "azure", "azure-openai",
+    "workbuddy", "workbuddy-cn", "workbuddy-intl",
 )
 
+/**
+ * 仍然**没有品牌图**的渠道：回落到首字徽章。
+ *
+ * 历史上这里有 antigravity / azure / workbuddy —— 它们依赖渐变与高斯模糊，
+ * VectorDrawable 表达不了，一度被跳过。现在前两者已转成 vector、workbuddy 走
+ * `drawable-nodpi` 位图，因此只剩 typesafe / commandcode 这两个仓库里连 SVG 都没有的。
+ */
 internal val SKIPPED_PROVIDER_IDS: Set<String> = setOf(
-    "antigravity", "antigravity-ide", "azure", "typesafe", "commandcode",
-    "workbuddy-cn", "workbuddy-intl",
+    "typesafe", "commandcode",
 )
 
 /**

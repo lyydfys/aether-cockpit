@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,11 +27,13 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
+import com.muyuchat.core.designsystem.McaIconSize
 
 /*
  * 「更多」目录页。
@@ -50,11 +53,19 @@ internal fun MorePage(
     onQueryChange: (String) -> Unit,
     onWorkspace: (WorkspaceEntry) -> Unit,
     onSettings: (SettingsGroup) -> Unit,
+    /** 「设置」行的落点：优先进**设置首页导航列表**（initialGroup = null）；
+     *  为空时保持旧行为（落到第一个分组）。 */
+    onOpenSettingsHome: (() -> Unit)? = null,
+    /** 「关于」行的落点：直达设置里的「10 关于」页。为空时才回落到按分组路由。 */
+    onOpenAbout: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val searching = query.isNotBlank()
-    val workspaces = filterWorkspaces(query)
-    val settings = filterSettings(query)
+    val groups = settingsGroups()
+    val presetGroup = groups.firstOrNull { it.title == "预设" }
+    // 按**分区号**取「10 关于」，不按标题匹配（标题一改就失配，会静默落到设置首页）。
+    val aboutGroup = groups.firstOrNull { it.index == SETTINGS_ABOUT_GROUP_ID }
+    // 条目「设置」「脱敏」都走 WorkspaceAction.Settings，与下面的「设置」行重复，不再重复列。
+    val workspaces = workspaceEntries().filter { it.action != WorkspaceAction.Settings }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = bubbleSafeContentPadding(),
@@ -66,86 +77,104 @@ internal fun MorePage(
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     DeepPageTitle(
                         title = "更多",
-                        subtitle = "全部工作区与设置入口",
+                        subtitle = "预设 / 设置 / 关于",
                     )
                 }
-                SearchField(query, onQueryChange)
             }
         }
-        if (searching) {
-            if (workspaces.isEmpty() && settings.isEmpty()) {
-                item(key = "more_empty") {
-                    Column {
-                        DeepSectionTitle(text = "搜索结果", trailing = "0 项")
-                        Spacer(Modifier.height(TitleToRows))
-                        DeepStateCard(
-                            title = "没有匹配的功能",
-                            detail = moreSearchEmptyDetail(query),
-                            actionLabel = "清除搜索",
-                            onAction = { onQueryChange("") },
-                        )
-                    }
-                }
-            } else {
-                item(key = "more_search_results") {
-                    Column {
-                        DeepSectionTitle(
-                            text = "搜索结果",
-                            trailing = "${workspaces.size + settings.size} 项",
-                        )
-                        Spacer(Modifier.height(TitleToRows))
-                        DeepCard(contentPadding = DeepListCardPadding) {
-                            if (settings.isNotEmpty()) {
-                                SettingsRows(
-                                    groups = settings,
-                                    onSettings = onSettings,
-                                    showBottomDividerOnLast = workspaces.isNotEmpty(),
-                                )
-                            }
-                            if (workspaces.isNotEmpty()) {
-                                WorkspaceRows(workspaces, onWorkspace)
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            item(key = "more_workspaces_group") {
-                Column {
-                    DeepSectionTitle(
-                        text = "全部工作区",
-                        trailing = "${workspaceEntries().size} 个",
-                    )
-                    Spacer(Modifier.height(TitleToRows))
-                    DeepCard(contentPadding = DeepListCardPadding) {
-                        WorkspaceRows(workspaceEntries(), onWorkspace)
-                    }
-                }
-            }
-            item(key = "more_settings_group") {
-                Column {
-                    DeepSectionTitle(
-                        text = "设置分组",
-                        trailing = "${settingsGroups().size} 组",
-                    )
-                    Spacer(Modifier.height(TitleToRows))
-                    DeepCard(contentPadding = DeepListCardPadding) {
-                        SettingsRows(settingsGroups(), onSettings)
-                    }
-                }
+        // 用户指令：预设 / 设置 / 关于 移到列表**最底部**（工作区之后），并与工作区条目
+        // 完全同一套行构件：同一个 DirectoryRow、同样的 identity 徽标、同样 trailing + chevron、同样 16dp 行高。
+        item(key = "more_unified_list") {
+            DeepCard(contentPadding = DeepListCardPadding) {
+                WorkspaceRows(workspaces, onWorkspace)
+                SettingsJumpRow(
+                    title = "预设",
+                    subtitle = "客户端、模型与请求参数模板",
+                    trailing = "已接入",
+                    group = presetGroup,
+                    onSettings = onSettings,
+                    showDivider = true,
+                    iconRes = R.drawable.ic_tune,
+                )
+                SettingsJumpRow(
+                    title = "设置",
+                    subtitle = MORE_SETTINGS_ENTRY_SUBTITLE,
+                    trailing = "已接入",
+                    group = groups.firstOrNull(),
+                    onSettings = onSettings,
+                    onClickOverride = onOpenSettingsHome,
+                    showDivider = true,
+                    iconRes = R.drawable.ic_ws_settings,
+                )
+                SettingsJumpRow(
+                    title = "关于",
+                    subtitle = "版本、更新通道、许可与诊断包",
+                    trailing = "已接入",
+                    group = aboutGroup,
+                    onSettings = onSettings,
+                    // 直达「10 关于」：不依赖 group 是否匹配上，也不会落到设置首页；
+                    // 连 group 都取不到时**禁用**该行（宁可点不动，也不把人送错页）。
+                    onClickOverride = if (aboutGroup != null) onOpenAbout else null,
+                    showDivider = false,
+                    iconRes = R.drawable.ic_info,
+                )
             }
         }
         item(key = "more_capability_note") { CapabilityNote() }
     }
 }
 
-internal fun moreSearchEmptyDetail(query: String): String {
-    val needle = query.trim()
-    val hitScope = "${settingsGroups().size} 个设置分组与 ${workspaceEntries().size} 个工作区"
-    if (needle.isEmpty()) {
-        return "目录里共 $hitScope；输入关键词可以按名称或说明过滤。"
-    }
-    return "「$needle」没有命中 $hitScope 的标题或说明。换个更短的关键词，或清除搜索回到完整目录。"
+/** 「设置」入口的副标题：只说清里面有什么，不再逐个列分组（分组在设置页里）。 */
+internal const val MORE_SETTINGS_ENTRY_SUBTITLE: String =
+    "工具服务 / 模型目录 / 预设 / 计价 / 可观测 / 关于"
+
+/**
+ * 更多页主入口的固定顺序（用户指令：只保留预设 / 设置 / 关于）。
+ * 纯函数供单测断言顺序，页面渲染也从这里取，避免两处各写一份。
+ */
+internal fun morePrimaryEntryTitles(): List<String> = listOf("预设", "设置", "关于")
+
+/**
+ * 一行「跳设置某分组」的入口。
+ *
+ * **与工作区条目共用同一套行构件**：`DirectoryRow` + identity 徽标 + `trailing` 状态胶囊 + chevron，
+ * 行高同为 `DeepRowVertical`——这三项不是"另一种控件"，只是列表末尾的普通条目。
+ * [group] 为 null 时不跳（数据异常时保持安静，而不是崩），徽标退回与其它行同色的普通图标。
+ */
+@Composable
+private fun SettingsJumpRow(
+    title: String,
+    subtitle: String,
+    trailing: String,
+    group: SettingsGroup?,
+    onSettings: (SettingsGroup) -> Unit,
+    showDivider: Boolean,
+    /** 每行各自的图标：三项不能共用一个齿轮（用户反馈"图标全一样"）。 */
+    @DrawableRes iconRes: Int = R.drawable.ic_ws_settings,
+    /** 非空时优先用它（「设置」行要进首页列表，不落到第一个分组）。 */
+    onClickOverride: (() -> Unit)? = null,
+) {
+    val tone = group?.identityTone()
+    DirectoryRow(
+        title = title,
+        subtitle = subtitle,
+        trailing = trailing,
+        trailingAccent = false,
+        showDivider = showDivider,
+        onClick = { (onClickOverride ?: { group?.let(onSettings) })() },
+        badge = {
+            if (tone != null) {
+                AetherIdentityDisc(iconRes = iconRes, tone = tone)
+            } else {
+                Icon(
+                    painter = painterResource(iconRes),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(McaIconSize.M),
+                )
+            }
+        },
+    )
 }
 
 internal fun settingsRowTrailing(group: SettingsGroup): String =
@@ -163,59 +192,6 @@ internal fun workspaceRowTrailing(entry: WorkspaceEntry): String {
         WorkspaceAction.Wake, WorkspaceAction.Library, WorkspaceAction.Plugins,
         WorkspaceAction.Onboard,
         -> "已接入"
-    }
-}
-
-@Composable
-private fun SettingsRows(
-    groups: List<SettingsGroup>,
-    onSettings: (SettingsGroup) -> Unit,
-    showBottomDividerOnLast: Boolean = false,
-) {
-    groups.forEachIndexed { index, group ->
-        val tone = group.identityTone()
-        val pair = AetherColors.identityPair(tone)
-        DirectoryRow(
-            trailing = settingsRowTrailing(group),
-            trailingAccent = group.available,
-            onClick = { onSettings(group) },
-            showDivider = index < groups.lastIndex || showBottomDividerOnLast,
-            badge = {
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(pair.container, RoundedCornerShape(10.dp))
-                        .drawWithCache {
-                            val strokePx = 0.6.dp.toPx()
-                            val r = 10.dp.toPx()
-                            onDrawWithContent {
-                                drawContent()
-                                drawRoundRect(
-                                    color = pair.border.copy(alpha = 0.55f),
-                                    topLeft = Offset(strokePx * 0.5f, strokePx * 0.5f),
-                                    size = size.copy(
-                                        width = (size.width - strokePx).coerceAtLeast(0f),
-                                        height = (size.height - strokePx).coerceAtLeast(0f),
-                                    ),
-                                    cornerRadius = CornerRadius(r, r),
-                                    style = Stroke(width = strokePx),
-                                )
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = group.index,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = pair.content,
-                    )
-                }
-            },
-            title = group.title,
-            subtitle = group.subtitle,
-        )
     }
 }
 

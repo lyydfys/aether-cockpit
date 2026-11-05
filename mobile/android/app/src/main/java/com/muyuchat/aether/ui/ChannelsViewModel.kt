@@ -27,6 +27,7 @@ import com.muyuchat.aether.runtime.GatewayRuntimeRepository
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ManagementApiClient
 import com.muyuchat.aether.runtime.ManagementApiException
+import com.muyuchat.aether.runtime.OnboardProviderCache
 import com.muyuchat.aether.runtime.ProviderModels
 import com.muyuchat.aether.runtime.ProviderModelsApiClient
 import com.muyuchat.aether.runtime.PresetsView
@@ -330,6 +331,9 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
 
     /** 账号与额度：`GET /api/accounts`，与渠道列表同一次刷新里取。 */
     private val accountsClient = AccountQuotaApiClient()
+
+    /** 渠道清单的离线缓存（与 OnboardPage 共用同一个 store）。 */
+    private val providerCache = OnboardProviderCache(application)
     private val accountsOverride = MutableStateFlow<List<AccountQuotaRow>?>(null)
     private val accountAction = MutableStateFlow<AccountActionUiState>(AccountActionUiState.Idle)
 
@@ -429,6 +433,11 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                     val (providers, accounts) = withContext(Dispatchers.IO) {
                         val p = cachedProviders ?: client.fetchProviders(input.status)
                         val a = cachedAccounts ?: accountsClient.fetchAccounts(input.status)
+                        // 渠道清单的离线缓存由**数据层**写：网关只要跑起来拉到过清单，磁盘上就有，
+                        // 与"用户有没有点进接入渠道页"解耦（OnboardPage 只负责读缓存）。
+                        if (cachedProviders == null && p.isNotEmpty()) {
+                            runCatching { providerCache.save(p) }
+                        }
                         p to a
                     }
                     emit(

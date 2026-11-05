@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 internal/web/ui2/assets/icons/azure.svg 转换（品牌图标）。
+     原 SVG 用了 4 个渐变填充：#114a8b→#0669bc、#0078d4、黑色半透明阴影叠加、#3ccbf4→#2892df。
+     Android VectorDrawable 不支持 gradient，这里做**同色系扁平化**：
+       path1 → #114a8b（深蓝，原渐变起点）
+       path2 → #0078d4（原就是纯色，Azure 品牌主蓝）
+       path4 → #2892df（浅蓝，原渐变终点；用终点而非起点，避免整图糊成一片深蓝）
+     path3 是同一剪影上的半透明黑色阴影层（url(#b)，stop-color 缺省=黑），纯装饰，直接丢弃。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="256"
+    android:viewportHeight="242">
+    <path
+        android:fillColor="#FF114A8B"
+        android:pathData="M85.3 0h75.8L82.5 233a12 12 0 0 1-11.5 8.2H12A12 12 0 0 1 .7 225.3L74 8.3A12 12 0 0 1 85.3 0" />
+    <path
+        android:fillColor="#FF2892DF"
+        android:pathData="M182.1 8.2A12 12 0 0 0 170.7 0H86.2a12 12 0 0 1 11.5 8.2l73.2 217.1a12 12 0 0 1-11.4 16H244a12 12 0 0 0 11.5-16z" />
+    <path
+        android:fillColor="#FF0078D4"
+        android:pathData="M195.4 156.3H75.3a5.6 5.6 0 0 0-3.8 9.6l77.2 72a12 12 0 0 0 8.3 3.3h68z" />
+</vector>

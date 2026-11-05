@@ -153,8 +153,6 @@ internal fun ChannelsPage(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(AccountFilter.ALL) }
-    // 桌面 channels.js:183 的「列表 / 网格」：网格 2 列，1.3× 字号下自动退回单列。
-    var layout by rememberSaveable { mutableStateOf(AccountsLayout.GRID) }
     var selecting by rememberSaveable { mutableStateOf(false) }
     // 选中项存成 List（Bundle 可保存）；N 很小，查表用 contains 足够。
     var selectedIds by rememberSaveable { mutableStateOf(listOf<String>()) }
@@ -182,11 +180,6 @@ internal fun ChannelsPage(
     val visibleSelected = visibleSelection(selectedIds, filtered)
     val checkinTargets = batchCheckinTargets(filtered, visibleSelected)
     val allSelected = allVisibleSelected(visibleSelected, filtered)
-    val fontScale = LocalDensity.current.fontScale
-    val columns = accountGridColumns(layout, fontScale)
-    // 桌面 channels.js:186：网格布局且账号少于 3 个时补一张虚线卡（列表布局没有）。
-    val showAddCard = showAddChannelCard(layout, fontScale, filtered.size)
-    val cardRows = filtered.chunked(columns)
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -296,21 +289,6 @@ internal fun ChannelsPage(
                     item {
                         SearchField(query = query, onQueryChange = { query = it }, placeholder = "搜索账号或渠道")
                     }
-                    // 工具条：视图切换（桌面 channels.js:183 的 list/grid）；接入/自定义入口在上方。
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            AetherSegmentedPill(
-                                options = AccountsLayout.entries,
-                                selected = layout,
-                                onSelect = { layout = it },
-                                label = { accountLayoutLabel(it) },
-                            )
-                        }
-                    }
                     if (selecting) {
                         item {
                             BatchActionRow(
@@ -344,50 +322,36 @@ internal fun ChannelsPage(
                             )
                         }
                     } else {
+                        // 单列列表：按用户要求去掉网格（不再有 2 列与「列表/网格」切换）。
                         items(
-                            count = cardRows.size,
-                            key = { rowIndex -> cardRows[rowIndex].joinToString("|") { it.accountId } },
-                        ) { rowIndex ->
-                            val pair = cardRows[rowIndex]
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                pair.forEach { row ->
-                                    Column(Modifier.weight(1f)) {
-                                        AccountCard(
-                                            row = row,
-                                            providers = state.providers,
-                                            state = state,
-                                            probes = probes,
-                                            probing = probing,
-                                            toggling = toggling,
-                                            models = models,
-                                            baseUrl = gatewayBaseUrl,
-                                            selecting = selecting,
-                                            visibleSelected = visibleSelected,
-                                            selectedIds = selectedIds,
-                                            onAction = onAction,
-                                            onLoadModels = onLoadModels,
-                                            onToggleProvider = onToggleProvider,
-                                            onTestProvider = onTestProvider,
-                                            onSelect = { selectedIds = toggleSelection(selectedIds, row.accountId) },
-                                            onLongPress = {
-                                                selecting = true
-                                                if (row.accountId !in selectedIds) {
-                                                    selectedIds = (selectedIds + row.accountId).distinct()
-                                                }
-                                            },
-                                        )
+                            count = filtered.size,
+                            key = { index -> filtered[index].accountId },
+                        ) { index ->
+                            val row = filtered[index]
+                            AccountCard(
+                                row = row,
+                                providers = state.providers,
+                                state = state,
+                                probes = probes,
+                                probing = probing,
+                                toggling = toggling,
+                                models = models,
+                                baseUrl = gatewayBaseUrl,
+                                selecting = selecting,
+                                visibleSelected = visibleSelected,
+                                selectedIds = selectedIds,
+                                onAction = onAction,
+                                onLoadModels = onLoadModels,
+                                onToggleProvider = onToggleProvider,
+                                onTestProvider = onTestProvider,
+                                onSelect = { selectedIds = toggleSelection(selectedIds, row.accountId) },
+                                onLongPress = {
+                                    selecting = true
+                                    if (row.accountId !in selectedIds) {
+                                        selectedIds = (selectedIds + row.accountId).distinct()
                                     }
-                                }
-                                if (pair.size < columns) {
-                                    Spacer(Modifier.weight(1f))
-                                }
-                            }
-                        }
-                        if (showAddCard && onOpenOnboard != null) {
-                            item { AddChannelCard(onClick = onOpenOnboard) }
+                                },
+                            )
                         }
                     }
                 }
@@ -447,34 +411,15 @@ internal fun ChannelsPage(
 }
 
 /**
- * 账号区布局（桌面 `channels.js:183`：`filter.layout === 'list'` 时单列，否则 `acct-grid` 两列）。
+ * 账号区布局**固定单列**。
+ *
+ * 桌面 `channels.js:183` 有「列表 / 网格」两档（网格 2 列），但手机端视野更窄、卡片信息
+ * 更密（额度条 + 状态行 + 操作行），两列会把每张卡压到几乎不可读；用户也明确要求不要
+ * 网格列表。因此这里删掉了 `AccountsLayout` / `accountGridColumns` / 网格虚线卡，
+ * 只保留单列。
  */
-internal enum class AccountsLayout {
-    LIST,
-    GRID,
-}
 
-internal fun accountLayoutLabel(layout: AccountsLayout): String = when (layout) {
-    AccountsLayout.LIST -> "列表"
-    AccountsLayout.GRID -> "网格"
-}
-
-/**
- * 实际列数：网格在 1.3× 以上字号时退回单列（桌面靠 auto-fill 自适应，Android 130% 字号下
- * 两列会把额度条和按钮挤成一列，所以直接单列）。
- */
-internal fun accountGridColumns(layout: AccountsLayout, fontScale: Float): Int =
-    if (layout == AccountsLayout.GRID && fontScale < 1.3f) 2 else 1
-
-/**
- * 「接入新渠道」虚线卡是否出现（桌面 `channels.js:186`）：
- * **只在网格布局**、且筛选后账号数 1–2 个时补位（0 个走空态、≥3 个网格已填满）。
- * 1.3× 字号退成单列时不出现（桌面此时是 list 布局，也没有虚线卡）。
- */
-internal fun showAddChannelCard(layout: AccountsLayout, fontScale: Float, count: Int): Boolean =
-    accountGridColumns(layout, fontScale) > 1 && count in 1..2
-
-/** 账号卡的统一入口：网格/列表两种布局共用同一份参数装配。 */
+/** 账号卡的统一入口。 */
 @Composable
 private fun AccountCard(
     row: AccountQuotaRow,
@@ -521,48 +466,6 @@ private fun AccountCard(
     )
 }
 
-/** 桌面 `channels.js:187-189` 的虚线「接入新渠道」卡：网格里账号少于 3 个时补位。 */
-@Composable
-private fun AddChannelCard(onClick: () -> Unit) {
-    val outline = MaterialTheme.colorScheme.outline
-    val gap = MaterialTheme.colorScheme.outlineVariant
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 132.dp)
-            .clip(McaShape.Sheet)
-            .drawBehind {
-                val width = 1.dp.toPx()
-                val dash = 6.dp.toPx()
-                drawRoundRect(
-                    color = gap,
-                    style = Stroke(
-                        width = width,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(dash, dash), 0f),
-                    ),
-                )
-            }
-            .clickable(onClick = onClick)
-            .padding(16.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            // 仓库里没有「+」图标资源（本页写集不含 res/），用字形画，避免新增资源
-            Text(
-                text = "+",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = outline,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "接入新渠道",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
 @Composable
 private fun SelectionBar(
     selectedCount: Int,

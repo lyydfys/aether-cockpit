@@ -58,6 +58,7 @@ import com.muyuchat.aether.runtime.CustomProviderProtocol
 import com.muyuchat.aether.runtime.GatewayStatus
 import com.muyuchat.aether.runtime.ProviderSummary
 import com.muyuchat.aether.runtime.onboardDeviceKind
+import com.muyuchat.aether.runtime.onboardOfflineBanner
 import com.muyuchat.aether.runtime.onboardMethodBlockedBy
 import com.muyuchat.aether.runtime.onboardMethodLabel
 import com.muyuchat.aether.runtime.onboardMethods
@@ -116,6 +117,15 @@ internal fun OnboardPage(
     val listState = rememberLazyListState()
     // 侧边字母索引拖动时，屏幕中央浮出的大字母。
     var indexBubble by remember { mutableStateOf<String?>(null) }
+    // 兜底：气泡本该在手指抬起时清掉，但只要有一次手势被系统打断（例如侧滑返回、
+    // 来电、页面切换），`release()` 可能收不到，气泡就会永远停在屏幕中央。
+    // 这里给它一个与人眼可辨时间匹配的上限，超时自动消失。
+    LaunchedEffect(indexBubble) {
+        if (indexBubble != null) {
+            kotlinx.coroutines.delay(1500)
+            indexBubble = null
+        }
+    }
     // 字母跳转请求走 **conflated channel**：拖动一次会连续经过 20+ 个字母，
     // 但消费者按顺序逐个执行、队列只留最新一条——既串行又不会积压，
     // 也就不会出现「多次动画互相打断、最后停在哪不确定」。
@@ -133,7 +143,12 @@ internal fun OnboardPage(
         }
     }
 
-    val filtered = applyOnboardQuery(providers, accounts, query, filters)
+    // 渠道清单的离线缓存：网关没运行、列表为空时用上次成功拉到的清单兜底。
+    val cachedProviders by viewModel.cachedProviders.collectAsStateWithLifecycle()
+    LaunchedEffect(providers) { viewModel.rememberProviders(providers) }
+    val offlineCache = !status.running && providers.isEmpty() && cachedProviders.providers.isNotEmpty()
+    val shownProviders = if (offlineCache) cachedProviders.providers else providers
+    val filtered = applyOnboardQuery(shownProviders, accounts, query, filters)
     // 名称排序按字母分组（目录顺序）；筛选/排序入口已按用户要求移除，默认即此形态。
     val grouped = filters.sort == OnboardSort.NAME
     val groups = if (grouped) groupOnboardProviders(filtered) else emptyList()
@@ -160,11 +175,10 @@ internal fun OnboardPage(
         state = listState,
         modifier = Modifier.fillMaxSize(),
         // 底部必须留够悬浮球安全区（BubbleSafeBottom=88dp），否则最后几张卡会被球压住；
-        // 右侧 28dp 是给字母索引条让位，不能丢。
+        // 右侧是索引条让位（22dp 可视 + 24dp 避让系统侧滑区 + 2dp 余量），不能丢。
         contentPadding = PaddingValues(
             start = 20.dp,
-            // 右侧要让出索引条（44dp）+ 避开系统侧滑区的 24dp 留白。
-            end = OnboardIndexWidth + OnboardIndexEndGap + 4.dp,
+            end = OnboardIndexWidth + OnboardIndexEndGap + 2.dp,
             top = 8.dp,
             bottom = BubbleSafeBottom,
         ),
@@ -215,12 +229,23 @@ internal fun OnboardPage(
                 text = "按渠道接入",
                 trailing = onboardCountLabel(
                     visible = filtered.size,
-                    total = providers.size,
+                    total = shownProviders.size,
                     searching = query.isNotBlank() || filters.filterCount > 0,
                 ),
             )
         }
-        if (providers.isEmpty()) {
+        // 离线兜底横幅（用户点名的问题）：数据来自上次缓存，必须说明白，
+        // 否则用户会以为看到的是实时清单、以为接入能用。
+        if (offlineCache) {
+            item {
+                Text(
+                    text = onboardOfflineBanner(cachedProviders.savedAtMs, shownProviders.size),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (shownProviders.isEmpty()) {
             item {
                 DeepStateCard(
                     title = "还没有可接入的渠道",
@@ -255,6 +280,8 @@ internal fun OnboardPage(
                     is OnboardListRow.Provider -> OnboardProviderCard(
                         provider = row.provider,
                         accountCount = accounts.count { it.providerId == row.provider.id },
+                        // 用户口径：接入按钮**无条件**走 open()——不按网关状态分流、不弹"先启动网关"。
+                        // 离线清单仍照常展示（缓存 + 横幅），只是点接入后由网关请求本身报错。
                         onConnect = { viewModel.connect.open(row.provider) },
                     )
                 }
@@ -384,7 +411,7 @@ internal fun OnboardPage(
             onDismiss = viewModel::dismissForm,
             onSave = {
                 viewModel.save(
-                    existingIds = providers.map { it.id }.toSet(),
+                    existingIds = shownProviders.map { it.id }.toSet(),
                     onSaved = onRefresh,
                 )
             },
@@ -508,9 +535,11 @@ internal data class OnboardScrollRequest(val index: Int, val animate: Boolean)
  *   1.3× 字号下只压缩行高，不换行、不出现单字竖排。
  */
 private val OnboardIndexCellHeight = 16.dp
-/** 索引条宽度：24dp 的字母格太窄、手指很难精确落上去（真机上「拖动不灵」的主因之一），
- *  这里把**可触摸宽度**放宽到 44dp，字母仍靠右绘制。 */
-private val OnboardIndexWidth = 44.dp
+/** 索引条可视宽度。用户反馈「占太多视觉空间」，因此从 44dp 收到 22dp：
+ *  字母仍居中，但只保留必要的点击/拖动热区。
+ *  注意：热区宽度不能低于 ~20dp，否则真机上按不准（这是当初放大到 44dp 的原因），
+ *  所以取 22dp 作为「够用且不显眼」的折中。 */
+private val OnboardIndexWidth = 22.dp
 /** 索引条距屏幕右缘的留白。
  *  **必须 ≥ 24dp**：Android 手势导航把屏幕两侧约 24dp 划为系统侧滑返回区，
  *  落在该区域内的按下/拖动会被系统截走，Compose 完全收不到——真机上表现为
@@ -529,23 +558,30 @@ private fun OnboardLetterIndex(
     var current by remember { mutableStateOf<String?>(null) }
 
     // 按 y 比例换算成字母下标：不依赖每格的实际像素高度，1.3× 下也准。
-    fun letterAt(y: Float): String {
-        if (barHeightPx <= 0f) return letters.first()
+    // 还没测量出高度时返回 null——此时按下去算不出合法字母，绝不能猜一个，
+    // 否则会在屏幕中央留下一个莫名其妙的气泡（真机上见过「A」和「#」）。
+    fun letterAt(y: Float): String? {
+        if (barHeightPx <= 0f) return null
         val ratio = (y / barHeightPx).coerceIn(0f, 0.9999f)
         return letters[(ratio * letters.size).toInt().coerceIn(0, letters.lastIndex)]
     }
 
     // 指针进入新字母：更新气泡；有数据就跳转。同一字母不重复触发。
     // animate：按下那一刻（tap 或拖动起点）给动画，进入滑动后关掉——跟手必须瞬时。
-    fun follow(letter: String, animate: Boolean) {
-        if (current == letter) return
+    fun follow(letter: String?, animate: Boolean) {
+        if (letter == null || current == letter) return
         current = letter
         onBubbleChange(letter)
         if (letter in available) onJump(letter, animate)
     }
 
     fun release() {
-        if (current == null) return
+        // 无论 current 是否为空都通知一次清空：手势在 awaitFirstDown 之前被取消、
+        // 或测量尚未完成时，也要确保中央气泡不残留。
+        if (current == null) {
+            onBubbleChange(null)
+            return
+        }
         current = null
         onBubbleChange(null)
     }
