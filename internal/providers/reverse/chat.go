@@ -109,15 +109,29 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		}
 	}
 
+	client := env.Client()
+
 	// OpenCode Go 要求会话标识：缺了会被上游 400 MissingSessionID 拒绝。
 	// req.SessionKey 由网关按会话指纹算好，跨轮稳定；spec 显式设了同名头则尊重 spec。
+	//
+	// 会话 ID 还决定路由（见 sessionprobe.go）：同一个 ID 稳定落同一类后端。
+	// 声明了 OfficialSessionProbe 的渠道会先用一次免费小探针挑"官方桶"。
 	if p.profile.SessionHeader != "" {
 		if v := strings.TrimSpace(req.SessionKey); v != "" && httpReq.Header.Get(p.profile.SessionHeader) == "" {
+			if p.profile.OfficialSessionProbe {
+				v = p.officialSession(client, endpoint, upstreamModel, func(sess string) map[string]string {
+					h := map[string]string{}
+					for _, name := range []string{"Authorization", "x-api-key", "User-Agent"} {
+						if got := httpReq.Header.Get(name); got != "" {
+							h[name] = got
+						}
+					}
+					return h
+				}, v)
+			}
 			httpReq.Header.Set(p.profile.SessionHeader, v)
 		}
 	}
-
-	client := env.Client()
 
 	resp, err := client.Do(httpReq)
 	if err != nil {

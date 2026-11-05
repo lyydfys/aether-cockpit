@@ -185,6 +185,10 @@ func profiles() []Profile {
 			// 模型列表是 200）。这是头名问题，不是凭证问题。
 			// 注意：chat 用 Authorization: Bearer（实测 x-api-key 会 401
 			// "Go requires a credential"）；只有模型列表端点是 x-api-key。
+			// 会话选号（sessionprobe.go）实测**不可靠**：同一会话同一载荷在几分钟内
+			// 会从中转桶漂到官方桶，探针结论无法预测紧接着的真实请求（2026-11-05
+			// 18:36 观测）。默认关闭，避免为每次新会话白花一次探针与 8s 延迟。
+			OfficialSessionProbe:  false,
 			ModelListAuthHeader:   "x-api-key",
 			ModelListAuthNoPrefix: true,
 			// Go 订阅本身就是官方端点；同样允许用户把它指到自部署上，

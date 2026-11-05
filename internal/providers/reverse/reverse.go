@@ -62,6 +62,10 @@ type Profile struct {
 	// 的 x-opencode-session）。值取网关已算好的 req.SessionKey，跨轮稳定。
 	SessionHeader string
 
+	// OfficialSessionProbe 开启"会话选号"：新会话先用一次免费小探针
+	// 判断这个会话 ID 落官方还是中转，挑中官方再发真实请求（见 sessionprobe.go）。
+	OfficialSessionProbe bool
+
 	// ModelListAuthHeader 只覆盖"模型列表"请求的鉴权头名。
 	//
 	// 有些渠道的 Key 只认特定头：OpenCode Go 用 x-api-key，
