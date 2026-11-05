@@ -517,7 +517,9 @@ func TestOpenCodeGoProfile(t *testing.T) {
 		t.Fatal("opencode-go 未注册")
 	}
 	prof := p.(*Provider).Profile()
-	if prof.DefaultBaseURL != "https://opencode.ai/zen/go/v1" || prof.DefaultChatPath != "/chat/completions" {
+	// canonical 端点：官方命中率与鉴权头都比旧的 /zen/go 更合适（见
+	// opencode_endpoint_test.go 的说明）。
+	if prof.DefaultBaseURL != "https://opencode.ai/inference/go/openai/v1" || prof.DefaultChatPath != "/chat/completions" {
 		t.Fatalf("opencode-go 端点 = %q %q", prof.DefaultBaseURL, prof.DefaultChatPath)
 	}
 	if prof.SessionHeader != "x-opencode-session" || prof.QuotaKind != "opencode_go" {

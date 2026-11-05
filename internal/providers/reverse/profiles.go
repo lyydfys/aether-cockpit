@@ -160,14 +160,24 @@ func profiles() []Profile {
 			Family:        "opencode",
 			RegionTag:     "MIXED",
 			BrandColor:    "#10B981",
-			Description:   "OpenCode Go 订阅渠道。走 OpenCode Go 专用端点（/zen/go/v1），需要 x-opencode-session；支持从 ~/.local/share/opencode/auth.json 的 opencode-go 条目导入 Go API Key；额度按滚动 / 每周 / 每月三个窗口计。",
+			Description:   "OpenCode Go 订阅渠道。默认走 canonical 端点（/inference/go/openai/v1），需要 x-opencode-session；支持从 ~/.local/share/opencode/auth.json 的 opencode-go 条目导入 Go API Key；额度按滚动 / 每周 / 每月三个窗口计。",
 			NetworkPolicy: provider.NetPolicySystem,
 			Auths: []provider.AuthMethod{
 				provider.AuthLocalImport,
 				provider.AuthManualInput,
 			},
-			Middlewares:     []string{"stateful_session"},
-			DefaultBaseURL:  "https://opencode.ai/zen/go/v1",
+			Middlewares: []string{"stateful_session"},
+			// canonical 路径，不是旧的 /zen/go/v1。
+			//
+			// 依据实测（2026-11-05，25 次/路径的行为探针）：OpenCode Go 背后是
+			// "原生官转透传 + 翻译层官转 + 自部署 cell" 的动态混合池，
+			// canonical /inference/go/openai/v1 的官方命中率约 80%，而
+			// /zen/go/v1 只有 6/8、短路径 /inference/go/v1 更差（3/8）。
+			//
+			// 另有一条硬约束：旧 /zen/go 路径要 x-api-key，而本引擎默认发
+			// Authorization: Bearer；canonical OpenAI 路径接受 Bearer。
+			// 换句话说，走 canonical 既更"官方"，也更不容易鉴权失败。
+			DefaultBaseURL:  "https://opencode.ai/inference/go/openai/v1",
 			DefaultChatPath: "/chat/completions",
 			SessionHeader:   "x-opencode-session",
 			// Go 订阅本身就是官方端点；同样允许用户把它指到自部署上，
