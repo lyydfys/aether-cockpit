@@ -258,8 +258,17 @@ func (g *Gateway) mergeGitHubUpdate(ctx context.Context, client *http.Client, re
 	asset := pickGitHubAsset(rel.Assets, runtime.GOOS)
 	if asset == nil {
 		payload["downloadable"] = false
-		if runtime.GOOS == "darwin" {
-			payload["reason"] = "当前 Release 没有 macOS 安装包"
+		// 每个平台都要给出「为什么不能直接下」的原文（旧版只有 darwin 有，
+		// 桌面端其它平台会拿到 downloadable=false 却没有任何解释）。
+		switch runtime.GOOS {
+		case "darwin":
+			payload["reason"] = "当前 Release 没有 macOS 安装包（.zip/.dmg）"
+		case "windows":
+			payload["reason"] = "当前 Release 没有 Windows 安装包（.zip/.exe）"
+		case "linux":
+			payload["reason"] = "当前 Release 没有 Linux 安装包（.zip）"
+		default:
+			payload["reason"] = "当前 Release 没有本平台安装包"
 		}
 		return
 	}
