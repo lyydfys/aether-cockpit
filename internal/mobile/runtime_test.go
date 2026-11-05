@@ -330,13 +330,15 @@ func TestStartGeneratesRandomSessionKeys(t *testing.T) {
 	}
 }
 
+// 只有回环与 0.0.0.0（局域网共享）两种 host 被接受；其余一律拒绝。
+// 0.0.0.0 的用例见 lan_share_test.go（TestLanSharingBindsAllIPv4AndReportsURLs）。
 func TestStartRejectsNonLoopback(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.ListenHost = "0.0.0.0"
+	cfg.ListenHost = "192.168.1.5"
 	_, err := Start(context.Background(), cfg)
 	var se *StartError
-	if !errors.As(err, &se) || se.Code != "listen_host_must_be_loopback" {
-		t.Fatalf("err = %v, want listen_host_must_be_loopback", err)
+	if !errors.As(err, &se) || se.Code != "listen_host_not_allowed" {
+		t.Fatalf("err = %v, want listen_host_not_allowed", err)
 	}
 }
 

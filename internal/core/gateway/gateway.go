@@ -843,6 +843,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/presets/save", g.handlePresetSave)
 	m.HandleFunc("POST /api/presets/delete", g.handlePresetDelete)
 	m.HandleFunc("POST /api/presets/attach", g.handlePresetAttach)
+	// 酒馆预设导入预览：纯解析、只读；写入仍走 /api/presets/save（见 preset_import.go）。
+	m.HandleFunc("POST /api/presets/import/preview", g.handlePresetImportPreview)
 	// 供应商编辑器的保存 / 显钥 / 模型清单 / 连通性测试（见 provider_api.go）。
 	m.HandleFunc("POST /api/provider/save", g.handleProviderSave)
 	m.HandleFunc("POST /api/provider/windsurf/login", g.handleWindsurfLogin)

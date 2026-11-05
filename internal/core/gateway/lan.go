@@ -65,6 +65,12 @@ func (g *Gateway) lanListenAddr() string {
 	return fmt.Sprintf("0.0.0.0:%d", port+1)
 }
 
+// LANURLsFor 枚举本机非回环 IPv4 地址，拼成访问地址（`http://ip:port`）。
+//
+// 供移动运行时在**主监听绑 0.0.0.0** 时展示"别的设备该填什么地址"；
+// 与桌面侧 `lanURLsFor` 同一套枚举口径，避免两处给出不同答案。
+func LANURLsFor(listenAddr string) []string { return lanURLsFor(listenAddr) }
+
 // lanURLsFor 枚举本机非回环 IPv4 地址，拼成访问地址。
 func lanURLsFor(listenAddr string) []string {
 	port := lanPort(listenAddr)
