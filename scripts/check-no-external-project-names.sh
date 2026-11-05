@@ -71,6 +71,11 @@ run_scan() {
   fi
 
   # 2. Check file contents across all text files
+  #
+  # 署名文件豁免：NOTICE / LICENSE / README / CHANGELOG 必须能承载上游项目的版权与
+  # 许可声明（MIT、LGPL-3.0 都要求保留归属）。硬锁要的是**产品代码、脚本、配置**
+  # 零外部项目名，而不是抹掉法律要求的致谢——所以这些文件只做路径检查、不做内容检查。
+  # 反过来：任何 .go/.kt/.js/.css/.yml… 里出现禁词仍然会失败，不受影响。
   local content_hits
   content_hits="$(grep -R -I -n -E -i \
     --exclude-dir=.git \
@@ -80,9 +85,19 @@ run_scan() {
     --exclude-dir=bin \
     "$PATTERN" "$target_dir" || true)"
 
-  if [[ -n "$content_hits" ]]; then
+  local filtered_hits="" line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    case "$line" in
+      */NOTICE:* | */NOTICE.md:* | */LICENSE:* | */LICENSE.md:* | \
+        */CHANGELOG.md:* | */README.md:* | */README.en.md:*) continue ;;
+    esac
+    filtered_hits+="$line"$'\n'
+  done <<< "$content_hits"
+
+  if [[ -n "${filtered_hits//[$'\n']/}" ]]; then
     echo "FAIL [no-external-project-names]: forbidden project name found in file contents:" >&2
-    echo "$content_hits" >&2
+    printf '%s' "$filtered_hits" >&2
     failed=1
   fi
 
@@ -92,12 +107,30 @@ run_scan() {
 if [[ "${1:-}" == "--self-test" ]]; then
   TMP_DIR="$(mktemp -d)"
   trap 'rm -rf "$TMP_DIR"' EXIT
+
+  # (a) 产品代码里出现禁词必须被拒
   echo "// reference to ${T_DSH1}" > "$TMP_DIR/sample.kt"
   if run_scan "$TMP_DIR" >/dev/null 2>&1; then
     echo "FAIL: --self-test expected scanner to reject forbidden project token" >&2
     exit 1
   fi
-  echo "[self-test] PASS: scanner caught injected forbidden project token"
+
+  # (b) 署名文件里出现同样的禁词必须被放行（否则无法保留 MIT / LGPL 要求的致谢）
+  rm -f "$TMP_DIR/sample.kt"
+  echo "reference to ${T_DSH1}" > "$TMP_DIR/NOTICE"
+  if ! run_scan "$TMP_DIR" >/dev/null 2>&1; then
+    echo "FAIL: --self-test expected attribution files (NOTICE) to be exempt" >&2
+    exit 1
+  fi
+
+  # (c) 豁免只针对署名文件，README 旁边的普通源码不受豁免
+  echo "// ${T_DSH1}" > "$TMP_DIR/sample.go"
+  if run_scan "$TMP_DIR" >/dev/null 2>&1; then
+    echo "FAIL: --self-test expected non-attribution source next to NOTICE to be rejected" >&2
+    exit 1
+  fi
+
+  echo "[self-test] PASS: rejects source hits, exempts attribution files"
   exit 0
 fi
 

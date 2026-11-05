@@ -155,6 +155,10 @@ Aether Cockpit 是本机网关，不是托管代理服务。默认只绑定回�
 
 其他支持方式见[赞助支持](docs/DONATE.md)。
 
+## 设计参考与致谢
+
+渠道目录、路由策略与用量视图的设计参考了 [aether](https://github.com/aether/aether)（MIT）与 [relay-panel](https://github.com/Aether/relay-panel)（LGPL-3.0）。感谢两个项目的作者与贡献者。这些项目的代码未被复制或链接进本仓库，署名与许可信息见 [NOTICE](NOTICE)。
+
 ## 许可证
 
 本项目使用 [Apache License 2.0](LICENSE)。第三方组件的归属信息见 [NOTICE](NOTICE)。

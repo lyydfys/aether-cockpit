@@ -119,6 +119,10 @@ Follow the terms of each provider you connect. The project does not supply accou
 
 Bug reports, focused feature requests, and pull requests are welcome. Please read the [contribution guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) first. For general questions, see [SUPPORT.md](SUPPORT.md).
 
+## Design references and credits
+
+The channel catalog, routing strategies, and usage views were informed by [aether](https://github.com/aether/aether) (MIT) and [relay-panel](https://github.com/Aether/relay-panel) (LGPL-3.0). Thanks to their authors and contributors. No code from those projects is copied into or linked against this repository; attribution and license details are listed in [NOTICE](NOTICE).
+
 ## License
 
 Apache License 2.0. Third-party attributions are listed in [NOTICE](NOTICE).

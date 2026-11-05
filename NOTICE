@@ -145,3 +145,11 @@ Aether Cockpit
 字体
   Noto Sans SC — SIL Open Font License 1.1（internal/web/ui2/assets/fonts/OFL-NotoSansSC.txt）
   Inter — SIL Open Font License 1.1（internal/web/ui2/assets/fonts/OFL.txt）
+
+参考项目（设计参考，非打包依赖）
+  本项目的部分产品设计（渠道目录、路由策略、用量视图的信息组织方式）参考了下列
+  开源项目。这些项目的代码未被复制或链接进本仓库，此处按 MIT / LGPL-3.0 的署名
+  要求保留其版权与出处：
+
+  aether — MIT — https://github.com/aether/aether
+  relay-panel — LGPL-3.0 — https://github.com/Aether/relay-panel

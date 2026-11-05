@@ -82,6 +82,21 @@ func TestNoExternalProjectNamesHardLock(t *testing.T) {
 		".gitattributes": true, ".editorconfig": true,
 	}
 
+	// 署名文件豁免：NOTICE / LICENSE / README / CHANGELOG 必须能承载上游项目的
+	// 版权与许可声明（MIT、LGPL-3.0 均要求保留归属）。硬锁的目标是产品代码、
+	// 脚本与配置零外部项目名，而不是抹掉法律要求的致谢。
+	// 注意：这三处实现（本 Go 测试 / scripts/check-no-external-project-names.sh /
+	// Android 的 NoExternalProjectNamesContractTest）必须保持同一份豁免名单。
+	attributionFiles := map[string]bool{
+		"NOTICE":       true,
+		"NOTICE.md":    true,
+		"LICENSE":      true,
+		"LICENSE.md":   true,
+		"CHANGELOG.md": true,
+		"README.md":    true,
+		"README.en.md": true,
+	}
+
 	var violations []string
 
 	err = filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, walkErr error) error {
@@ -104,6 +119,11 @@ func TestNoExternalProjectNamesHardLock(t *testing.T) {
 
 		if m := re.FindString(relSlash); m != "" {
 			violations = append(violations, "PATH "+relSlash+" matched "+m)
+		}
+
+		// 署名文件只查路径、不查内容（见上方 attributionFiles 说明）。
+		if attributionFiles[relSlash] {
+			return nil
 		}
 
 		ext := strings.ToLower(filepath.Ext(name))

@@ -71,6 +71,16 @@ class NoExternalProjectNamesContractTest {
             ".gitignore", ".gitattributes", ".editorconfig"
         )
 
+        // 署名文件豁免：NOTICE / LICENSE / README / CHANGELOG 必须能承载上游项目的
+        // 版权与许可声明（MIT、LGPL-3.0 均要求保留归属）。硬锁要的是产品代码、脚本、
+        // 配置零外部项目名，而不是抹掉法律要求的致谢。
+        // 与 scripts/check-no-external-project-names.sh、internal/core/gateway 的
+        // Go 契约测试保持同一份名单。
+        val attributionFiles = setOf(
+            "NOTICE", "NOTICE.md", "LICENSE", "LICENSE.md",
+            "CHANGELOG.md", "README.md", "README.en.md"
+        )
+
         val violations = mutableListOf<String>()
 
         fun scanDir(dir: File) {
@@ -93,6 +103,8 @@ class NoExternalProjectNamesContractTest {
                     }
                     val ext = child.extension.lowercase()
                     if (ext !in textExts && name !in textNames) continue
+                    // 署名文件只查路径、不查内容（见上方 attributionFiles 说明）。
+                    if (relFile in attributionFiles) continue
                     val text = runCatching { child.readText(Charsets.UTF_8) }.getOrNull() ?: continue
                     text.lineSequence().forEachIndexed { idx, line ->
                         if (violations.size < 50) {
