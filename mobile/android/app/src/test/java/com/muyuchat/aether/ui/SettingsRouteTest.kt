@@ -8,7 +8,7 @@ import org.junit.Test
 /**
  * 设置分组分发的纯数据契约：
  *  - 10 组都有 route（01–08 Partition、09 Backup、10 About）且都可用；
- *  - 块表过滤：`initialGroup="05"` 只出定价；null 保持整页原顺序；未知 id 不崩。
+ *  - 块表过滤：`initialGroup="05"` 只出定价；null 返回全部 9 个分区块；未知 id 不崩。
  */
 class SettingsRouteTest {
 
@@ -43,11 +43,25 @@ class SettingsRouteTest {
     }
 
     @Test
-    fun fullPageKeepsExistingOrder() {
-        // null = 整页；顺序与原 261-267 行一致（常规 → 定价 → 隐私 → 工具 → 预设 → 模型目录 → 可观测），
-        // 「10 关于」追加在最后：它也要在整页里出现，否则「更多」进得去、整页却找不到。
+    fun settingsHomeHasTenNavigableEntriesWithDescriptions() {
+        val groups = settingsGroups()
+        assertEquals(10, groups.size)
+        assertEquals((1..10).map { it.toString().padStart(2, '0') }, groups.map { it.index })
+        groups.forEach { group ->
+            assertTrue("${group.index} 标题不能空", group.title.isNotBlank())
+            assertTrue("${group.index} 导航说明不能空", group.subtitle.isNotBlank())
+            assertTrue("${group.index} 应 available", group.available)
+        }
+        // 首页只有 10 个入口；09 走备份页，10 走关于，其余 8 个是设置分区二级页。
+        assertEquals(8, settingsGroups().count { it.route is SettingsRoute.Partition })
+        assertEquals(SettingsRoute.Backup, groups.first { it.index == "09" }.route)
+        assertEquals(SettingsRoute.About, groups.first { it.index == "10" }.route)
+    }
+
+    @Test
+    fun nullFilterReturnsAllNinePartitionBlocksInIdOrder() {
         assertEquals(
-            listOf("01", "05", "07", "03", "04", "06", "08", "10"),
+            (1..8).map { it.toString().padStart(2, '0') } + "10",
             settingsBlocksFor(null).map { it.id },
         )
         assertEquals(9, SETTINGS_PARTITION_BLOCKS.size)

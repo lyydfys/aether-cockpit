@@ -43,14 +43,17 @@ class ProviderIconsTest {
     }
 
     @Test
-    fun skippedBrandsFallBackInsteadOfFakingAnIcon() {
-        // antigravity(遮罩+滤镜)、azure/工作助手(渐变)、typesafe/commandcode(位图)
+    fun genuinelyUnbrandedChannelsStillFallBack() {
+        // 只剩真正没有品牌图的两个：typesafe / commandcode（仓库里没有它们的 SVG，
+        // 又不可能凭空画一个，宁可用字母贴片也不给错图）。
         for (id in SKIPPED_PROVIDER_IDS) {
             assertEquals("$id 必须回落", FALLBACK_PROVIDER_ICON.res, providerIcon(id).res)
         }
-        assertEquals(FALLBACK_PROVIDER_ICON.res, providerIcon("antigravity").res)
-        assertEquals(FALLBACK_PROVIDER_ICON.res, providerIcon("azure").res)
-        assertEquals(FALLBACK_PROVIDER_ICON.res, providerIcon("workbuddy-cn").res)
+        // antigravity / azure / workbuddy 已补齐（前两者用 vector、后者用 PNG 位图），
+        // 这里改成显式断言它们**不再**回退，防止以后被误删接线。
+        assertTrue(providerIcon("antigravity").res != FALLBACK_PROVIDER_ICON.res)
+        assertTrue(providerIcon("azure").res != FALLBACK_PROVIDER_ICON.res)
+        assertTrue(providerIcon("workbuddy-cn").res != FALLBACK_PROVIDER_ICON.res)
     }
 
     @Test
@@ -99,6 +102,8 @@ class ProviderIconsTest {
             "tencent-cloud", "bedrock", "azure", "antigravity", "antigravity-ide", "qoder-cn",
             "qoder-intl", "kiro", "workbuddy-cn", "workbuddy-intl", "siliconflow", "stepfun",
             "devin", "open-design",
+            // 手机侧额外认的别名（桌面用 workbuddy-cn/-intl，这里两种写法都收）
+            "workbuddy", "azure-openai",
         )
         val missing = desktopKeys - union
         val extra = union - desktopKeys

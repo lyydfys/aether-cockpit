@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,6 +69,7 @@ import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaShape
+import com.muyuchat.core.designsystem.McaSwitch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -93,6 +95,11 @@ internal fun OverviewPage(
     onGotoSettings: () -> Unit = {},
     onGotoOnboard: () -> Unit = {},
     onGotoProbe: () -> Unit = {},
+    /** 局域网共享开关（另一位同事接网络层；这里只放位置与回调）。 */
+    lanSharing: Boolean = false,
+    onToggleLanSharing: ((Boolean) -> Unit)? = null,
+    /** 局域网切换失败原因（由 repository 提供；成功时自动清空）。 */
+    lanError: String? = null,
     modifier: Modifier = Modifier,
     viewModel: OverviewViewModel = viewModel(),
 ) {
@@ -111,6 +118,10 @@ internal fun OverviewPage(
             }
         }
         item(key = "ov_gateway") {
+            // 观测：确认网关卡是否真的进了组合（只打日志，不改渲染）。
+            LaunchedEffect(state.status.state) {
+                android.util.Log.d("AetherOverview", "gateway card rendered, state=${state.status.state}")
+            }
             GatewayCard(
                 status = state.status,
                 url = url,
@@ -118,6 +129,9 @@ internal fun OverviewPage(
                 notice = state.notice,
                 onPrimaryAction = onPrimaryAction,
                 onCopy = onCopy,
+                lanSharing = lanSharing,
+                onToggleLanSharing = onToggleLanSharing,
+                lanError = lanError,
             )
         }
         item(key = "ov_kpi") { KpiCard(stats) }
@@ -196,13 +210,16 @@ private fun GatewayCard(
     notice: String,
     onPrimaryAction: () -> Unit,
     onCopy: () -> Unit,
+    lanSharing: Boolean = false,
+    onToggleLanSharing: ((Boolean) -> Unit)? = null,
+    lanError: String? = null,
 ) {
     val headline = gatewayStateHeadline(status)
     val accent = statusAccent(status)
     DeepCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             AetherIdentityDisc(
                 iconRes = R.drawable.ic_ws_probe,
@@ -236,25 +253,33 @@ private fun GatewayCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
+            Spacer(Modifier.width(8.dp))
+            // 主按钮上移到状态行右侧：运行中是次要样式「停止网关」，未启动是主样式「启动网关」。
             McaButton(
                 onClick = onPrimaryAction,
-                style = McaButtonStyle.Primary,
+                style = if (status.running) McaButtonStyle.Outlined else McaButtonStyle.Primary,
                 size = McaButtonSize.CardAction,
                 enabled = !status.busy,
-            ) { Text(gatewayActionLabel(status)) }
+            ) { Text(gatewayActionLabel(status), maxLines = 1) }
         }
-        Spacer(Modifier.height(14.dp))
-        // 同心内嵌终端地址舱（替代原本两条裸分割线夹文字）
+        Spacer(Modifier.height(6.dp))
+        // 地址舱：局域网开启时主位换成本机 IP 的 /v1，回环地址降到下面一行小字。
+        val lanAddress = status.lanV1Urls.firstOrNull().orEmpty()
+        val primaryUrl = if (status.lanEnabled) lanAddress else url
+        val pendingLanAddress = status.lanEnabled && lanAddress.isEmpty()
+        val secondaryUrl = if (status.lanEnabled && url.isNotEmpty()) url else ""
+        // 局域网开启时 `status.addr` 会变成 `0.0.0.0:<port>` —— 那不是能给用户用的地址。
+        // 次要行固定写回环、端口从 addr 里取；取不到就不显示（宁可少一行，也不显示 0.0.0.0）。
+        val loopbackUrl = if (secondaryUrl.isNotEmpty()) {
+            val port = secondaryUrl.substringAfterLast(':', "").takeWhile { it.isDigit() }
+            if (port.isNotEmpty()) "http://127.0.0.1:$port/v1" else ""
+        } else {
+            ""
+        }
         AetherSubSurface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -262,11 +287,15 @@ private fun GatewayCard(
             ) {
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "OpenAI-compatible · 仅本机",
+                            text = if (status.lanEnabled) {
+                                "OpenAI-compatible · 局域网"
+                            } else {
+                                "OpenAI-compatible · 仅本机"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = AetherColors.textTertiary(),
                         )
@@ -278,16 +307,18 @@ private fun GatewayCard(
                             )
                         }
                     }
+                    // 注意：这里**不是**"正在获取"——`lanUrls` 是网关启动后一次性算出来的，拿不到就说明没连 Wi-Fi/热点（`status.lanEnabled && lanAddress.isEmpty()`），继续写"正在获取"会让用户一直等下去。
+        val placeholder = if (pendingLanAddress) "未获取到局域网地址（请确认手机已连上 Wi-Fi 或热点）" else "启动后显示本机地址"
                     Text(
-                        text = url.ifEmpty { "启动后显示本机地址" },
-                        style = if (url.isEmpty()) {
+                        text = primaryUrl.ifEmpty { placeholder },
+                        style = if (primaryUrl.isEmpty()) {
                             MaterialTheme.typography.bodySmall
                         } else {
                             MaterialTheme.typography.titleSmall
                         },
-                        fontWeight = if (url.isEmpty()) FontWeight.Normal else FontWeight.Bold,
-                        fontFamily = if (url.isEmpty()) FontFamily.Default else FontFamily.Monospace,
-                        color = if (url.isEmpty()) {
+                        fontWeight = if (primaryUrl.isEmpty()) FontWeight.Normal else FontWeight.Bold,
+                        fontFamily = if (primaryUrl.isEmpty()) FontFamily.Default else FontFamily.Monospace,
+                        color = if (primaryUrl.isEmpty()) {
                             AetherColors.textTertiary()
                         } else {
                             MaterialTheme.colorScheme.onSurface
@@ -295,26 +326,107 @@ private fun GatewayCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (loopbackUrl.isNotEmpty()) {
+                        Text(
+                            text = loopbackUrl,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = AetherColors.textTertiary(),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 Spacer(Modifier.width(8.dp))
                 AetherHeaderIconButton(
                     iconRes = R.drawable.ic_copy,
                     contentDescription = "复制本机地址",
                     onClick = onCopy,
-                    enabled = url.isNotEmpty(),
+                    enabled = primaryUrl.isNotEmpty(),
                     active = copied,
                 )
             }
         }
         if (notice.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = notice,
                 style = MaterialTheme.typography.bodySmall,
                 color = AetherColors.danger(),
             )
         }
-        Spacer(Modifier.height(12.dp))
+        if (!lanError.isNullOrBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "局域网切换失败：$lanError",
+                style = MaterialTheme.typography.labelSmall,
+                color = AetherColors.danger(),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        // 局域网共享：开关切换的是**主监听绑定**（127.0.0.1 ↔ 0.0.0.0）。
+        // 开启后对话接口(/v1)与管理接口(/api)同时对同网络设备开放，
+        // 管理接口仍然要求 App 内生成的会话凭据（Authorization 头），所以要先二次确认。
+        var confirmLan by remember { mutableStateOf(false) }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "局域网共享",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "局域网内设备可访问对话接口（/v1）与管理接口；管理接口仍需本机 App 内的会话凭据",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AetherColors.textTertiary(),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            McaSwitch(
+                checked = lanSharing,
+                onCheckedChange = { next ->
+                    // 只有"打开"需要确认；关闭随时可以。
+                    if (next) confirmLan = true else onToggleLanSharing?.invoke(false)
+                },
+                enabled = onToggleLanSharing != null && !status.busy,
+                contentDescription = "局域网共享",
+            )
+        }
+        if (confirmLan) {
+            McaDialog(
+                onDismissRequest = { confirmLan = false },
+                title = {
+                    Text("开启局域网共享？", fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    Text(
+                        "开启后，同一网络内的设备可以访问对话接口（/v1）与管理接口（/api）。" +
+                            "管理接口仍然需要本机 App 内的会话凭据，但攻击面确实变大了。" +
+                            "\n\n请确认当前网络可信（公共 Wi-Fi、咖啡厅网络不要开启）。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                },
+                confirmButton = {
+                    McaButton(
+                        onClick = {
+                            confirmLan = false
+                            onToggleLanSharing?.invoke(true)
+                        },
+                        style = McaButtonStyle.Primary,
+                    ) { Text("确认开启") }
+                },
+                dismissButton = {
+                    McaButton(
+                        onClick = { confirmLan = false },
+                        style = McaButtonStyle.Outlined,
+                    ) { Text("取消") }
+                },
+            )
+        }
+        Spacer(Modifier.height(6.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(TightGap),
@@ -325,12 +437,32 @@ private fun GatewayCard(
                 tint = accent,
                 modifier = Modifier.size(16.dp),
             )
-            Text(
-                text = "只接受此手机上的本地连接。局域网共享默认关闭。",
-                style = MaterialTheme.typography.labelSmall,
-                color = AetherColors.textTertiary(),
-                modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = if (lanSharing) {
+                        // 打开时不再说"默认关闭"，否则自相矛盾。
+                        "已开启：同网络设备可访问对话接口与管理接口（管理接口需会话凭据）。"
+                    } else {
+                        "只接受此手机上的本地连接。局域网共享默认关闭。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AetherColors.textTertiary(),
+                )
+                if (lanSharing) {
+                    val v1 = status.lanV1Urls.firstOrNull()
+                    val base = status.lanUrls.firstOrNull()
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = if (v1 != null) {
+                            "局域网地址：$v1" + if (base != null) "（管理接口：$base）" else ""
+                        } else {
+                            "未获取到局域网地址（请确认手机已连上 Wi-Fi 或热点）"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                    )
+                }
+            }
         }
     }
 }
@@ -622,13 +754,13 @@ private fun AggregationCard(
             fontWeight = FontWeight.SemiBold,
             color = AetherColors.textTertiary(),
         )
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         AetherSubSurface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 overviewEndpoints(baseUrl).forEach { endpoint ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -637,10 +769,13 @@ private fun AggregationCard(
                     ) {
                         Text(
                             text = endpoint.label,
-                            modifier = Modifier.width(108.dp),
+                            modifier = Modifier.width(104.dp),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
+                            // 1.3× 下标签只允许占一行（省略号），绝不折成竖排
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             text = endpoint.url.ifEmpty { "启动后显示" },
@@ -655,14 +790,14 @@ private fun AggregationCard(
                 }
             }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(10.dp))
         Text(
             text = "上游渠道",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = AetherColors.textTertiary(),
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
         when {
             !links.providersLoaded -> Text(
                 text = "读不到渠道列表：重新进入概览会再试一次。",
@@ -674,7 +809,7 @@ private fun AggregationCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            else -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 links.providers.forEachIndexed { idx, provider ->
                     ProviderLinkRow(
                         provider = provider,
@@ -687,7 +822,7 @@ private fun AggregationCard(
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             text = "端点随监听端口自动适配 · 客户端只需一个 base_url",
             style = MaterialTheme.typography.labelSmall,
@@ -1026,10 +1161,12 @@ internal fun gatewayStateHeadline(status: GatewayStatus): String = when {
 }
 
 internal fun gatewayStateDetail(status: GatewayStatus): String = when {
+    status.running && status.lanEnabled ->
+        "本机与同网络设备都可接入；管理接口需要 App 内会话凭据"
     status.running -> "本机应用可通过回环地址接入"
     status.state == GatewayState.FAILED ->
         "错误码：${status.errorCode.ifBlank { "unknown" }}（可在设置里改首选端口，或改回系统分配后重试）"
-    else -> "启动后仅监听 127.0.0.1，不暴露局域网"
+    else -> "启动后按「局域网共享」设置决定监听地址"
 }
 
 internal fun gatewayActionLabel(status: GatewayStatus): String =

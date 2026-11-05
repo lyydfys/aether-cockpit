@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -225,6 +226,20 @@ class OverviewViewModel(application: Application) : AndroidViewModel(application
     /** 手动重拉（下拉/点刷新时用；不做轮询）。 */
     fun refreshStats() {
         statsTrigger.value++
+    }
+
+    /**
+     * 局域网共享的**用户意图**（持久化值）。真正生效的值看 `status.lanEnabled`：
+     * 网关重启后才会真正改监听地址，所以开关位置以意图为准、地址以状态为准。
+     */
+    val lanSharing: StateFlow<Boolean> = repository.lanSharing
+
+    /** 局域网切换失败原因（重启超时 / 未按预期绑定）；成功后自动清空。 */
+    val lanError: StateFlow<String?> = repository.lanError
+
+    /** 切换局域网共享：内部会重启网关并按真实绑定结果回写 [lanSharing]。 */
+    fun setLanSharing(enabled: Boolean) {
+        viewModelScope.launch { repository.setLanSharing(enabled) }
     }
 
     fun onAction(action: OverviewAction) {

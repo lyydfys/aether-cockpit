@@ -59,22 +59,9 @@ class MorePageLayoutTest {
     }
 
     @Test
-    fun searchEmptyStateSaysWhyAndWhatNext() {
-        val detail = moreSearchEmptyDetail("路由")
-        assertTrue("要点出被搜索的关键词", detail.contains("「路由」"))
-        assertTrue("要用真实计数，不写死", detail.contains("10 个设置分组"))
-        assertTrue("要用真实计数，不写死", detail.contains("12 个工作区"))
-        assertTrue("要给出下一步", detail.contains("清除搜索"))
-        // 匹配是「标题或说明」，文案不能夸大成「全文搜索」。
-        assertTrue(detail.contains("标题或说明"))
-    }
-
-    @Test
-    fun searchEmptyStateDegradesForBlankQuery() {
-        // 纯函数不留未定义分支：空查询也要有一句能显示的话。
-        val detail = moreSearchEmptyDetail("   ")
-        assertTrue(detail.isNotBlank())
-        assertTrue(detail.contains("10 个设置分组"))
+    fun morePageKeepsExactlyThreePrimaryEntriesInOrder() {
+        // 用户指令：更多页只保留「预设 / 设置 / 关于」三行；设置分组列表与搜索框都已移除。
+        assertEquals(listOf("预设", "设置", "关于"), morePrimaryEntryTitles())
     }
 
     @Test

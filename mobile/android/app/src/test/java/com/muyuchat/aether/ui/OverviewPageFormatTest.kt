@@ -67,7 +67,8 @@ class OverviewPageFormatTest {
         val running = gatewayStateDetail(GatewayStatus(state = GatewayState.RUNNING))
         assertTrue(running, running.contains("回环"))
         val stopped = gatewayStateDetail(GatewayStatus(state = GatewayState.STOPPED))
-        assertTrue(stopped, stopped.contains("127.0.0.1"))
+        // 新行为：启动后按「局域网共享」设置决定监听地址（不再是固定的 127.0.0.1 文案）。
+        assertTrue(stopped, stopped.contains("局域网共享"))
     }
 
     @Test
