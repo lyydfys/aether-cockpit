@@ -77,6 +77,10 @@ jobs:
           bash scripts/check-no-external-project-names.sh --self-test
           bash scripts/check-no-external-project-names.sh
 
+      - name: Run external project name contract test (Kotlin)
+        working-directory: mobile/android
+        run: ./gradlew :app:testDebugUnitTest --tests "com.muyuchat.aether.NoExternalProjectNamesContractTest" --no-daemon
+
       - name: Run theme contract gate
         run: bash scripts/check-mobile-theme-contract.sh
 
