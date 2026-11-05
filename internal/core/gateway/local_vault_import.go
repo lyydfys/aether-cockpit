@@ -17,6 +17,7 @@ import (
 	"time"
 )
 
+// localVaultEntry 是本机加密凭据库里的一条可导入配置。
 type localVaultEntry struct {
 	ProviderID  string
 	Label       string

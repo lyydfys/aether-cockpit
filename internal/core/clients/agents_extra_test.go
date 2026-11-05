@@ -7,6 +7,73 @@ import (
 	"testing"
 )
 
+// TestApplyQwenCodeDropsLegacyEnvKey 验证升级清理：改版前写进 ~/.qwen/settings.json
+// 的旧 env 键，以及引用旧键的 modelProviders 条目，都会被顺手清掉。
+//
+// 旧键不清理的后果：用户环境里长期残留一个与新键不同步的陈旧凭据，
+// 而 managed 状态只认新键，用户看不到它、也不会去删。
+func TestApplyQwenCodeDropsLegacyEnvKey(t *testing.T) {
+	home := t.TempDir()
+	m := NewWithHome(home)
+	dir := filepath.Join(home, ".qwen")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := legacyQwenEnvKey()
+	if legacy == "" || legacy == qwenEnvKey {
+		t.Fatalf("legacy key 构造异常: %q", legacy)
+	}
+	// 模拟改版前的落盘结果：env 里有旧键，modelProviders 里有指向旧键的 aether 条目。
+	orig := `{"theme":"dark","env":{"` + legacy + `":"old-secret"},"modelProviders":{"openai":[` +
+		`{"id":"mine","name":"Mine","baseUrl":"https://relay.example/v1","envKey":"MY_KEY"},` +
+		`{"id":"aether-old","name":"Aether","baseUrl":"http://127.0.0.1:7860/v1","envKey":"` + legacy + `"}]}}`
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.Apply("qwen_code", ApplyParams{
+		BaseURL: "http://127.0.0.1:7860/",
+		APIKey:  "k1",
+		Model:   "qwen3-max",
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var root struct {
+		Env       map[string]any `json:"env"`
+		Providers struct {
+			OpenAI []struct {
+				ID     string `json:"id"`
+				EnvKey string `json:"envKey"`
+			} `json:"openai"`
+		} `json:"modelProviders"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("改写后不是合法 JSON: %v", err)
+	}
+	if _, still := root.Env[legacy]; still {
+		t.Fatal("旧 env 键没有被清理，用户环境会残留陈旧凭据")
+	}
+	if got := root.Env[qwenEnvKey]; got != "k1" {
+		t.Fatalf("新键应写入 k1，实际 %v", got)
+	}
+	// 用户自己的条目必须保留
+	var keptMine bool
+	for _, p := range root.Providers.OpenAI {
+		if p.ID == "mine" {
+			keptMine = true
+		}
+		if p.EnvKey == legacy {
+			t.Fatalf("引用旧键的条目 %q 应被清理", p.ID)
+		}
+	}
+	if !keptMine {
+		t.Fatal("用户自己的 modelProviders 条目被误删")
+	}
+}
+
 // TestApplyQwenCode 验证 Qwen Code 注入：用户条目保留、aether 条目写入、
 // env/auth/model 三处开关落盘，且状态能被 managed 识别。
 func TestApplyQwenCode(t *testing.T) {

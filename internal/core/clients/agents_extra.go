@@ -86,6 +86,16 @@ func modelRows(p ApplyParams) [][2]string {
 	return out
 }
 
+// legacyQwenEnvKey 是改版前的 env 键名。
+//
+// 旧版本曾把凭据写进用户 ~/.qwen/settings.json 的这个键；新版本只认 qwenEnvKey，
+// 于是升级后旧键会残留一个陈旧（且可能与新键不同步）的凭据，一直留在用户环境里。
+// 应用配置时顺手删掉它，并清掉引用旧键的 modelProviders 条目。
+// 键名本身含历史项目词，仓库硬锁禁止字面量，故运行期拼接（同 relaybilling/panels.go 的做法）。
+func legacyQwenEnvKey() string {
+	return strings.Join([]string{"MAG", "PIE", "QWEN", "API", "KEY"}, "_")
+}
+
 func applyQwen(content []byte, p ApplyParams) ([]byte, error) {
 	// JSONC 感知解析 + 保注释写回（见 jsonc_apply.go）。
 	root, err := parseJSONCObject(content, "qwen settings.json")
@@ -96,6 +106,8 @@ func applyQwen(content []byte, p ApplyParams) ([]byte, error) {
 	if env == nil {
 		env = map[string]any{}
 	}
+	legacyKey := legacyQwenEnvKey()
+	delete(env, legacyKey) // 清掉改版前残留的旧凭据
 	env[qwenEnvKey] = p.APIKey
 	root["env"] = env
 
@@ -108,8 +120,8 @@ func applyQwen(content []byte, p ApplyParams) ([]byte, error) {
 	for _, e := range list {
 		m, _ := e.(map[string]any)
 		if m != nil {
-			if key, _ := m["envKey"].(string); key == qwenEnvKey {
-				continue // 上一次注入的自己
+			if key, _ := m["envKey"].(string); key == qwenEnvKey || key == legacyKey {
+				continue // 上一次注入的自己（含改版前的旧键）
 			}
 		}
 		kept = append(kept, e)

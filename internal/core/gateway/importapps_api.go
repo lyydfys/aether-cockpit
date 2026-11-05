@@ -142,7 +142,7 @@ func (g *Gateway) handleImportApps(w http.ResponseWriter, r *http.Request) {
 	// 本机配置库 的配置是"另一个应用里的账号"，与本机登录态一起列出；
 	// 数据库不存在时静默跳过。
 	ccEntries, _ := readLocalSQLiteEntries()
-	localVaultEntries := g.localVaultEntries()
+	vaultEntries := g.localVaultEntries()
 	sources := make([]map[string]any, 0, 8)
 	for _, m := range provider.AllManifests() {
 		p, ok := provider.Get(m.ID)
@@ -152,7 +152,7 @@ func (g *Gateway) handleImportApps(w http.ResponseWriter, r *http.Request) {
 		_, localOK := p.(provider.LocalImportCapability)
 		drafts := found[m.ID]
 		var platformCockpit []localVaultEntry
-		for _, e := range localVaultEntries {
+		for _, e := range vaultEntries {
 			if e.ProviderID == m.ID {
 				platformCockpit = append(platformCockpit, e)
 			}
@@ -283,7 +283,7 @@ func (g *Gateway) handleImportAppsSubmit(w http.ResponseWriter, r *http.Request)
 	added := make([]string, 0, len(body.Picks))
 	found := g.discoverLocalAll(r.Context())
 	ccEntries, _ := readLocalSQLiteEntries()
-	localVaultEntries := g.localVaultEntries()
+	vaultEntries := g.localVaultEntries()
 	for _, pick := range body.Picks {
 		if strings.HasPrefix(pick.Ref, "localsqlite:") {
 			id := strings.TrimPrefix(pick.Ref, "localsqlite:")
@@ -304,7 +304,7 @@ func (g *Gateway) handleImportAppsSubmit(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 		if strings.HasPrefix(pick.Ref, "localvault:") {
-			for _, e := range localVaultEntries {
+			for _, e := range vaultEntries {
 				if e.Ref != pick.Ref || e.ProviderID != pick.Source {
 					continue
 				}
