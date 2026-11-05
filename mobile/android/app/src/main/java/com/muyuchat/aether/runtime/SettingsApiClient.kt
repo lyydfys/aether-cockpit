@@ -370,6 +370,25 @@ class SettingsApiClient(
     ): SettingsSummary =
         parseSettings(requestJson(status, "/api/settings", "POST", buildToolsJson(draft, savedKeys)))
 
+    /**
+     * 酒馆预设导入预览（`POST /api/presets/import/preview`，纯解析只读）。
+     *
+     * `includeSystemPrompt` 只影响服务端返回的 `system_prompt`；32KB 溢出由
+     * [TavernPresetPreview.promptOverflow] 标记，调用方必须禁止导入提示词。
+     */
+    fun previewTavernPreset(
+        status: GatewayStatus,
+        rawJson: String,
+        includeSystemPrompt: Boolean = true,
+    ): TavernPresetPreview = parseTavernPresetPreview(
+        requestJson(
+            status,
+            "/api/presets/import/preview",
+            "POST",
+            buildTavernPreviewJson(rawJson, includeSystemPrompt),
+        ),
+    )
+
     /** 预设保存（新建 id 传空，服务端按名称生成；编辑传原 id）。 */
     fun savePreset(status: GatewayStatus, draft: PresetDraft): PresetsSnapshot {
         val payload = buildPresetSaveJson(draft)
@@ -1102,6 +1121,88 @@ internal fun buildPresetSaveJson(draft: PresetDraft): String? {
         append(",\"concat_system\":").append(draft.concatSystem)
         append("}")
     }
+}
+
+/* ============================================================================
+ * 酒馆预设导入的预览层（`POST /api/presets/import/preview`，见 Go 侧 preset_import.go）
+ * ========================================================================== */
+
+/** 一条成功映射（目标键 + 来源字段）。 */
+data class TavernPresetMapped(val key: String, val source: String)
+
+/** 一条被丢弃的字段（key + 分组 + 原因）。分组：gateway/upstream/client/unknown。 */
+data class TavernPresetDropped(val key: String, val group: String, val reason: String)
+
+/**
+ * 导入预览。`bodyJson` 是服务端 body 的缩进文本，可直接作为 [PresetDraft.bodyJson]，
+ * 保证"用户看到什么就写什么"（不做字段白名单，也不会漏掉 seed/n 这类透传键）。
+ */
+data class TavernPresetPreview(
+    val format: String = "",
+    val name: String = "",
+    val bodyJson: String = "{}",
+    val systemPrompt: String = "",
+    val promptIncluded: Boolean = false,
+    val promptSegments: Int = 0,
+    val promptChars: Int = 0,
+    val promptBytes: Int = 0,
+    val promptLimit: Int = 32 * 1024,
+    val promptOverflow: Boolean = false,
+    val mapped: List<TavernPresetMapped> = emptyList(),
+    val dropped: List<TavernPresetDropped> = emptyList(),
+) {
+    /** 有提示词且没超限，才允许"导入提示词"。 */
+    val canImportPrompt: Boolean get() = systemPrompt.isNotBlank() && !promptOverflow
+}
+
+/** 预览请求体：`json` 原文按 JSON 字符串转义（预设文件里全是引号/换行/中文）。 */
+internal fun buildTavernPreviewJson(rawJson: String, includeSystemPrompt: Boolean): String =
+    "{\"format\":\"auto\",\"json\":${quoteJson(rawJson)}," +
+        "\"include_system_prompt\":$includeSystemPrompt}"
+
+internal fun parseTavernPresetPreview(body: String): TavernPresetPreview {
+    val root = try {
+        org.json.JSONObject(body.trim())
+    } catch (_: org.json.JSONException) {
+        throw ManagementApiException("invalid_response", "管理接口返回的导入预览格式不正确")
+    }
+    val bodyJson = root.optJSONObject("body")?.toString(2) ?: "{}"
+    val mappedArray = root.optJSONArray("mapped")
+    val mapped = (0 until (mappedArray?.length() ?: 0)).mapNotNull { index ->
+        val item = mappedArray?.optJSONObject(index) ?: return@mapNotNull null
+        val key = item.optString("key").trim()
+        if (key.isEmpty()) {
+            return@mapNotNull null
+        }
+        TavernPresetMapped(key = key, source = item.optString("source").trim().ifBlank { key })
+    }
+    val droppedArray = root.optJSONArray("dropped")
+    val dropped = (0 until (droppedArray?.length() ?: 0)).mapNotNull { index ->
+        val item = droppedArray?.optJSONObject(index) ?: return@mapNotNull null
+        val key = item.optString("key").trim()
+        if (key.isEmpty()) {
+            return@mapNotNull null
+        }
+        TavernPresetDropped(
+            key = key,
+            group = item.optString("group").trim().ifBlank { "unknown" },
+            reason = item.optString("reason").trim(),
+        )
+    }
+    return TavernPresetPreview(
+        format = root.optString("format").trim(),
+        name = root.optString("name").trim(),
+        bodyJson = bodyJson,
+        systemPrompt = root.optString("system_prompt"),
+        promptIncluded = root.optBoolean("prompt_included", false),
+        promptSegments = root.optInt("prompt_segments", 0),
+        promptChars = root.optInt("prompt_chars", 0),
+        promptBytes = root.optInt("prompt_bytes", 0),
+        promptLimit = root.optInt("prompt_limit", 32 * 1024),
+        promptOverflow = root.optBoolean("prompt_overflow", false),
+        mapped = mapped,
+        dropped = dropped,
+    )
 }
 
 /** 从 `GET /api/presets` 原始响应取一条预设用于编辑回填；找不到返回 null。 */

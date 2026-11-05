@@ -20,9 +20,21 @@ data class GatewayStatus(
     val errorCode: String = "",
     val adminSession: String = "",
     val callerKey: String = "",
+    /** 主监听是否绑在 0.0.0.0（局域网共享开启）。管理面同时对该网络开放。 */
+    val lanEnabled: Boolean = false,
+    /** 枚举到的局域网地址（`http://ip:port`）；拿不到时为空。 */
+    val lanUrls: List<String> = emptyList(),
 ) {
     val busy: Boolean get() = state == GatewayState.STARTING || state == GatewayState.STOPPING
     val running: Boolean get() = state == GatewayState.RUNNING
+
+    /** 当前监听是否含非回环地址（0.0.0.0 或具体网卡 IP）。 */
+    val listeningBeyondLoopback: Boolean
+        get() = lanEnabled || (addr.isNotBlank() && !addr.startsWith("127.0.0.1:"))
+
+    /** 局域网内设备该填的对话接口地址（`http://ip:port/v1`）；为空表示没拿到地址。 */
+    val lanV1Urls: List<String>
+        get() = lanUrls.map { it.trimEnd('/') + "/v1" }
 }
 
 /** Notification copy is pure so it can be unit-tested without Android. */

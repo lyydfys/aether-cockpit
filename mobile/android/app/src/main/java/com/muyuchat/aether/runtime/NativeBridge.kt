@@ -37,6 +37,10 @@ data class RuntimeSnapshot(
     val errorCode: String,
     val adminSession: String,
     val callerKey: String,
+    /** 主监听是否绑在 0.0.0.0（局域网共享开启）。 */
+    val lanEnabled: Boolean = false,
+    /** 枚举到的局域网地址（`http://ip:port`）；没有可用地址时为空。 */
+    val lanUrls: List<String> = emptyList(),
 ) {
     val running: Boolean get() = state == "running"
 
@@ -50,7 +54,17 @@ data class RuntimeSnapshot(
                 errorCode = obj.optString("errorCode"),
                 adminSession = obj.optString("adminSession"),
                 callerKey = obj.optString("callerKey"),
+                lanEnabled = obj.optBoolean("lanEnabled", false),
+                lanUrls = parseLanUrls(obj),
             )
+        }
+
+        /** `lanUrls` 是字符串数组；缺失/类型不对一律当空列表，不猜地址。 */
+        internal fun parseLanUrls(obj: JSONObject): List<String> {
+            val array = obj.optJSONArray("lanUrls") ?: return emptyList()
+            return (0 until array.length()).mapNotNull { index ->
+                array.optString(index).trim().ifBlank { null }
+            }
         }
     }
 }
@@ -81,6 +95,7 @@ internal fun buildRuntimeConfig(
     listenHost: String = "127.0.0.1",
     port: Int = 0,
     accountKey: String? = null,
+    lanAddressHint: String = "",
 ): String = buildString {
     append('{')
     append("\"dataDir\":").append(jsonQuote(dataDir)).append(',')
@@ -89,6 +104,11 @@ internal fun buildRuntimeConfig(
     append("\"listenHost\":").append(jsonQuote(listenHost)).append(',')
     append("\"port\":").append(port).append(',')
     append("\"callerKeyRequired\":true,")
+    if (lanAddressHint.isNotBlank()) {
+        // 宿主探测到的局域网 IPv4（逗号分隔）：Android 上 Go 枚举不到网卡，
+        // 靠这个字段才能展示 http://192.168.x.x:<port>。
+        append("\"lanAddressHint\":").append(jsonQuote(lanAddressHint.trim())).append(',')
+    }
     if (!accountKey.isNullOrBlank()) {
         append("\"accountKey\":").append(jsonQuote(accountKey)).append(',')
     }
