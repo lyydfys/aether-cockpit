@@ -70,6 +70,7 @@ import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaIconButton
 import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 /**
@@ -115,20 +116,21 @@ internal fun OnboardPage(
     val listState = rememberLazyListState()
     // 侧边字母索引拖动时，屏幕中央浮出的大字母。
     var indexBubble by remember { mutableStateOf<String?>(null) }
-    // 字母索引跳转请求：**只保留最新目标**。
-    // 拖动一次会连续经过 20+ 个字母，如果每次都 `scope.launch { animateScrollToItem }`，
-    // 多个动画会互相打断，最后停在哪个位置不确定（真机表现为"拖动不灵/不动"）。
-    // 这里用一个状态 + LaunchedEffect 串行化：新请求会取消旧协程，永远只跑最新的那个。
-    var scrollRequest by remember { mutableStateOf<OnboardScrollRequest?>(null) }
-    LaunchedEffect(scrollRequest) {
-        val request = scrollRequest ?: return@LaunchedEffect
-        if (request.animate) {
-            listState.animateScrollToItem(request.index)
-        } else {
-            // 拖动中要跟手：瞬时定位，不要动画堆叠。
-            listState.scrollToItem(request.index)
+    // 字母跳转请求走 **conflated channel**：拖动一次会连续经过 20+ 个字母，
+    // 但消费者按顺序逐个执行、队列只留最新一条——既串行又不会积压，
+    // 也就不会出现「多次动画互相打断、最后停在哪不确定」。
+    // （手势回调处在 AwaitPointerEventScope 的受限挂起作用域里，不能直接调
+    //  scrollToItem，只能把请求投进 channel，由这里的协程消费。）
+    val indexRequests = remember { Channel<OnboardScrollRequest>(Channel.CONFLATED) }
+    LaunchedEffect(Unit) {
+        for (request in indexRequests) {
+            if (request.animate) {
+                listState.animateScrollToItem(request.index)
+            } else {
+                // 拖动跟手：瞬时定位。
+                listState.scrollToItem(request.index)
+            }
         }
-        scrollRequest = null
     }
 
     val filtered = applyOnboardQuery(providers, accounts, query, filters)
@@ -161,7 +163,8 @@ internal fun OnboardPage(
         // 右侧 28dp 是给字母索引条让位，不能丢。
         contentPadding = PaddingValues(
             start = 20.dp,
-            end = 28.dp,
+            // 右侧要让出索引条（44dp）+ 避开系统侧滑区的 24dp 留白。
+            end = OnboardIndexWidth + OnboardIndexEndGap + 4.dp,
             top = 8.dp,
             bottom = BubbleSafeBottom,
         ),
@@ -292,14 +295,14 @@ internal fun OnboardPage(
             available = lettersWithData,
             onJump = { letter, animate ->
                 rowIndexByLetter[letter]?.let { target ->
-                    // 覆盖式赋值：拖动时只有最后一次请求会被真正执行。
-                    scrollRequest = OnboardScrollRequest(target, animate)
+                    // trySend 是非挂起调用，可在受限作用域里安全使用。
+                    indexRequests.trySend(OnboardScrollRequest(target, animate))
                 }
             },
             onBubbleChange = { indexBubble = it },
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 2.dp),
+                .padding(end = OnboardIndexEndGap),
         )
     }
     // 拖动时屏幕中央的大字母气泡。
@@ -491,8 +494,8 @@ internal val OnboardIndexLetters: List<String> = ('A'..'Z').map { it.toString() 
 /**
  * 一次字母跳转请求。
  *
- * [animate] = true 表示点击（值得放动画）；false 表示拖动跟手（必须瞬时定位，
- * 否则连续 20+ 次动画会互相打断）。请求是**覆盖式**的：拖动期间只有最新一条会执行。
+ * [animate] = true 表示点击（值得放动画）；false 表示拖动跟手（必须瞬时定位）。
+ * 请求经 conflated channel 传递：队列里永远只留最新一条，消费端逐个串行执行。
  */
 internal data class OnboardScrollRequest(val index: Int, val animate: Boolean)
 
@@ -506,8 +509,13 @@ internal data class OnboardScrollRequest(val index: Int, val animate: Boolean)
  */
 private val OnboardIndexCellHeight = 16.dp
 /** 索引条宽度：24dp 的字母格太窄、手指很难精确落上去（真机上「拖动不灵」的主因之一），
- *  这里把**可触摸宽度**放宽到 40dp，字母仍贴右缘绘制；列表右侧按 40dp 留空。 */
-private val OnboardIndexWidth = 40.dp
+ *  这里把**可触摸宽度**放宽到 44dp，字母仍靠右绘制。 */
+private val OnboardIndexWidth = 44.dp
+/** 索引条距屏幕右缘的留白。
+ *  **必须 ≥ 24dp**：Android 手势导航把屏幕两侧约 24dp 划为系统侧滑返回区，
+ *  落在该区域内的按下/拖动会被系统截走，Compose 完全收不到——真机上表现为
+ *  「点击偶尔灵、拖动必不灵」。此前只留 2dp，右侧近一半可触摸区是不可用的。 */
+private val OnboardIndexEndGap = 24.dp
 
 @Composable
 private fun OnboardLetterIndex(
