@@ -62,6 +62,14 @@
 
 ![用量趋势与渠道分布](docs/images/screenshots/usage-zh.png)
 
+**手机端**：Android 版把同一套网关搬到手机上，设置首页与本机数据、渠道、脱敏相关的分区都在这里（下图为合成演示数据）。
+
+![手机端设置首页：深色 Hero 卡与 8 个配置分区](docs/images/screenshots/mobile-settings-zh.png)
+
+![手机端关于页：版本、更新通道、许可与诊断信息](docs/images/screenshots/mobile-about-zh.png)
+
+*两张手机截图取自合成演示配置，账号、额度与版本号不代表真实设备状态。*
+
 ## 渠道覆盖
 
 渠道目录包含订阅账号集成，也包含 API 平台与兼容端点。下面是项目支持类型的代表性示例；登录方式、额度信息和模型能力因渠道及账号权限而异，完整清单以应用当前版本显示为准。
@@ -225,7 +233,7 @@ bash scripts/check-no-external-project-names.sh           # 仓库内零外部�
 
 ## 赞助支持
 
-如果这个项目帮到了你，欢迎点一个 Star、分享项目，或通过收款码支持持续开发与维护。赞助完全自愿，不影响任何功能。
+如果这个项目帮到了你，欢迎点一个 Star、分享项目，或通过 [GitHub Sponsors](https://github.com/sponsors/lyydfys) 与收款码支持持续开发与维护。赞助完全自愿，不影响任何功能。
 
 <table>
   <tr>

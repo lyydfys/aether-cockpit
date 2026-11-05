@@ -34,8 +34,10 @@ See [Quick Start](docs/QUICKSTART.md) and [Features](docs/FEATURES.md) for detai
 - [FAQ](#faq)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
+- [Sponsor](#sponsor)
 - [Design references and credits](#design-references-and-credits)
 - [License](#license)
+- [Release signing](#release-signing)
 
 ## One entry point for your AI channels
 
@@ -59,6 +61,14 @@ The screenshots below come from an isolated demo configuration; accounts, quotas
 **Usage**: requests, tokens and cost aggregated by time and channel, computed from local records.
 
 ![Synthetic usage trend and breakdown](docs/images/screenshots/usage-en.png)
+
+**Mobile**: the Android build runs the same gateway on the phone; the settings home groups the local data, channel and redaction sections (screenshots use synthetic demo data).
+
+![Mobile settings home: dark hero card and eight configuration sections](docs/images/screenshots/mobile-settings-zh.png)
+
+![Mobile about page: version, update channel, license and diagnostics](docs/images/screenshots/mobile-about-zh.png)
+
+*Both mobile screenshots come from a synthetic demo profile; account, quota and version figures do not reflect a real device. The Android UI is currently Chinese-only.*
 
 ## Channel Coverage
 
@@ -216,6 +226,19 @@ bash scripts/check-no-external-project-names.sh           # zero external projec
 
 Also run `scripts/gate.sh` when touching native libraries or the release flow. CI repeats the same checks, so running them first saves a round trip.
 
+## Sponsor
+
+If this project helps you, a star, a share, or support through [GitHub Sponsors](https://github.com/sponsors/lyydfys) and the QR codes below keeps development and maintenance going. Sponsorship is entirely voluntary and never affects any feature.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/alipay.jpg" alt="Alipay QR code" width="200" /><br/>Alipay</td>
+    <td align="center"><img src="docs/images/wechat.jpg" alt="WeChat Pay QR code" width="200" /><br/>WeChat Pay</td>
+  </tr>
+</table>
+
+Other ways to support the project are listed in [Sponsorship](docs/DONATE.md).
+
 ## Design references and credits
 
 The channel catalog, routing strategies, and usage views were informed by [magpie](https://github.com/yetone/magpie) (MIT) and [sub2api](https://github.com/Wei-Shaw/sub2api) (LGPL-3.0). Thanks to their authors and contributors. No code from those projects is copied into or linked against this repository; attribution and license details are listed in [NOTICE](NOTICE).
@@ -223,3 +246,13 @@ The channel catalog, routing strategies, and usage views were informed by [magpi
 ## License
 
 Apache License 2.0. Third-party attributions are listed in [NOTICE](NOTICE).
+
+## Release signing
+
+Release APKs are signed with a dedicated release keystore. The build reads it from `mobile/android/signing.properties` (not committed) or from `AETHER_RELEASE_*` environment variables. CI supplies it through these repository secrets:
+
+AETHER_RELEASE_KEYSTORE_BASE64、AETHER_RELEASE_STORE_PASSWORD、AETHER_RELEASE_KEY_ALIAS、AETHER_RELEASE_KEY_PASSWORD
+
+Locally, `scripts/gen-android-keystore.sh` generates a keystore and prints its base64.
+
+> **Back up the generated keystore outside the repository.** If the key is lost, later versions cannot be installed over the existing app, and users must uninstall first (losing data). Keeping it only in CI secrets is not enough — once a secret is deleted it cannot be recovered.
