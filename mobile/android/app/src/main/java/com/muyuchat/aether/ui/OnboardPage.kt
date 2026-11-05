@@ -1,7 +1,8 @@
 package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -269,12 +270,11 @@ internal fun OnboardPage(
         OnboardLetterIndex(
             available = lettersWithData,
             onJump = { letter ->
-                indexBubble = letter
                 rowIndexByLetter[letter]?.let { target ->
                     scope.launch { listState.animateScrollToItem(target) }
                 }
             },
-            onRelease = { indexBubble = null },
+            onBubbleChange = { indexBubble = it },
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .padding(end = 2.dp),
@@ -463,19 +463,20 @@ internal val OnboardIndexLetters: List<String> = ('A'..'Z').map { it.toString() 
  *   1.3× 字号下只压缩行高，不换行、不出现单字竖排。
  */
 private val OnboardIndexCellHeight = 16.dp
-/** 索引条宽度：比字母本身宽一点，方便点按；列表右侧要留出等量的空档，避免压住卡片文字。 */
-private val OnboardIndexWidth = 24.dp
+/** 索引条宽度：24dp 的字母格太窄、手指很难精确落上去（真机上「拖动不灵」的主因之一），
+ *  这里把**可触摸宽度**放宽到 40dp，字母仍贴右缘绘制；列表右侧按 40dp 留空。 */
+private val OnboardIndexWidth = 40.dp
 
 @Composable
 private fun OnboardLetterIndex(
     available: Set<String>,
     onJump: (String) -> Unit,
-    onRelease: () -> Unit,
+    onBubbleChange: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val letters = OnboardIndexLetters
     var barHeightPx by remember { mutableStateOf(0f) }
-    var lastLetter by remember { mutableStateOf<String?>(null) }
+    var current by remember { mutableStateOf<String?>(null) }
 
     // 按 y 比例换算成字母下标：不依赖每格的实际像素高度，1.3× 下也准。
     fun letterAt(y: Float): String {
@@ -484,29 +485,47 @@ private fun OnboardLetterIndex(
         return letters[(ratio * letters.size).toInt().coerceIn(0, letters.lastIndex)]
     }
 
-    fun emit(letter: String, force: Boolean = false) {
-        if (!force && letter == lastLetter) return
-        lastLetter = letter
+    // 指针进入新字母：更新气泡；有数据就跳转。同一字母不重复触发。
+    fun follow(letter: String) {
+        if (current == letter) return
+        current = letter
+        onBubbleChange(letter)
         if (letter in available) onJump(letter)
+    }
+
+    fun release() {
+        if (current == null) return
+        current = null
+        onBubbleChange(null)
     }
 
     Column(
         modifier = modifier
             .width(OnboardIndexWidth)
             .onSizeChanged { barHeightPx = it.height.toFloat() }
+            // 整套手势自己处理（按下即跟随、滑动连续切换、松手收起气泡）。
+            // 单元格上**不再挂 clickable**：子节点的 clickable 会先消费 down 事件，
+            // detectVerticalDragGestures 因此收不到拖动——这正是「拖动不灵 + 气泡不消失」
+            // 的根因（点击路径设置了气泡却没有任何清除入口）。
             .pointerInput(available) {
-                detectVerticalDragGestures(
-                    onDragStart = { offset -> emit(letterAt(offset.y), force = true) },
-                    onDragEnd = {
-                        lastLetter = null
-                        onRelease()
-                    },
-                    onDragCancel = {
-                        lastLetter = null
-                        onRelease()
-                    },
-                ) { change, _ ->
-                    emit(letterAt(change.position.y))
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    follow(letterAt(down.position.y))
+                    down.consume()
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                change.consume()
+                                break
+                            }
+                            follow(letterAt(change.position.y))
+                            change.consume()
+                        }
+                    } finally {
+                        release()
+                    }
                 }
             },
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -516,8 +535,7 @@ private fun OnboardLetterIndex(
             Box(
                 modifier = Modifier
                     .width(OnboardIndexWidth)
-                    .height(OnboardIndexCellHeight)
-                    .clickable(enabled = hasData) { onJump(letter) },
+                    .height(OnboardIndexCellHeight),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
