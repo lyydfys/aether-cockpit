@@ -1801,7 +1801,7 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 				continue
 			}
 
-			// 账号级模型映射（relay-panel 的 model_mapping）：精确名或通配。
+			// 账号级模型映射（高并发网关 的 model_mapping）：精确名或通配。
 			// 把路由解析出的上游模型名改写成该账号真正的上游名。
 			if mapped := env.MapModel(work.UpstreamModel); mapped != "" {
 				work.UpstreamModel = mapped
@@ -2124,7 +2124,7 @@ func (g *Gateway) openStream(ctx context.Context, h pipeline.StreamHandler, env 
 		// 成功：取消函数推迟到断连宽限期之后再执行。
 		//
 		// 客户端断开不等于上游该立刻停：usage 事件与收尾状态都出现在流末尾，
-		// 立刻断开等于把这些数据一起丢掉（relay-panel / aether 同样选择读完）。
+		// 立刻断开等于把这些数据一起丢掉（高并发网关 / aether 同样选择读完）。
 		// 但必须有上限，否则客户端一断开上游就白跑一整轮。
 		context.AfterFunc(ctx, func() {
 			time.AfterFunc(streamDrainGrace, cancelUp)

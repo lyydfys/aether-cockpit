@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -20,10 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.runtime.StripDay
 import com.muyuchat.aether.runtime.formatTokens
-import com.muyuchat.core.designsystem.McaHairline
-import com.muyuchat.core.designsystem.McaShape
 
-private val TightGap = 8.dp
+private val TightGap = 6.dp
 private val CellPadding = 4.dp
 
 /**
@@ -36,96 +35,88 @@ private val CellPadding = 4.dp
  */
 @Composable
 internal fun UsageHeatmapSection(days: List<StripDay>, error: String?, rangeLabel: String = "") {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = McaShape.Sheet,
-        color = MaterialTheme.colorScheme.surface,
-        border = McaHairline.stroke(),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "用量日历",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
+    DeepCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("用量日历")
+            Spacer(Modifier.weight(1f))
+            if (rangeLabel.isNotBlank()) {
+                AetherStatusChip(
+                    text = rangeLabel,
+                    tone = DeepTone.Neutral,
                 )
-                Spacer(Modifier.weight(1f))
-                if (rangeLabel.isNotBlank()) {
-                    Text(
-                        text = rangeLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
-            Spacer(Modifier.height(TightGap))
-            if (error != null) {
-                Text(
-                    text = "读不到用量日历：$error",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                return@Column
-            }
-            if (days.isEmpty()) {
-                Text(
-                    text = heatmapEmptyHint(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                return@Column
-            }
-            val peak = days.maxOf { it.calls }
-            // 7 格一行：360dp 屏、1.3× 字号下也放得下（10 格会横向溢出），30 天正好 5 行。
-            days.chunked(7).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
-                    row.forEach { day ->
-                        HeatmapCell(day = day, peak = peak)
-                    }
-                }
-                Spacer(Modifier.height(TightGap))
-            }
+        }
+        if (error != null) {
             Text(
-                text = "深色=调用更多；空格=那天服务端没有记录（不是 0 次）。最近一天在最右。",
-                style = MaterialTheme.typography.labelSmall,
+                text = "读不到用量日历：$error",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            return@DeepCard
+        }
+        if (days.isEmpty()) {
+            Text(
+                text = heatmapEmptyHint(),
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            return@DeepCard
         }
+        val peak = days.maxOf { it.calls }
+        // 7 格一行：360dp 屏、1.3× 字号下也放得下（10 格会横向溢出），30 天正好 5 行。
+        Column(verticalArrangement = Arrangement.spacedBy(TightGap)) {
+            days.chunked(7).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(TightGap),
+                ) {
+                    row.forEach { day ->
+                        HeatmapCell(day = day, peak = peak, modifier = Modifier.weight(1f))
+                    }
+                    repeat((7 - row.size).coerceAtLeast(0)) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+        Text(
+            text = "深色=调用更多；空格=那天服务端没有记录（不是 0 次）。最近一天在最右。",
+            style = MaterialTheme.typography.labelSmall,
+            color = AetherColors.textTertiary(),
+        )
     }
 }
 
 @Composable
-private fun HeatmapCell(day: StripDay, peak: Int) {
+private fun HeatmapCell(day: StripDay, peak: Int, modifier: Modifier = Modifier) {
     val intensity = if (peak <= 0 || day.placeholder) 0f else (day.calls.toFloat() / peak).coerceIn(0.15f, 1f)
     val background = when {
-        day.placeholder -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-        else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f + 0.55f * intensity)
+        day.placeholder -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+        else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f + 0.58f * intensity)
     }
     Surface(
-        // 格子在卡片里：只靠底色深浅区分，不再描边（卡片已有一条外框，避免双边框）。
-        // 宽高用 min 而不是定值：1.3× 字号下数字变大也不截断、不竖排。
-        modifier = Modifier
+        modifier = modifier
             .widthIn(min = 28.dp)
-            .heightIn(min = 34.dp)
-            .clip(McaShape.Badge),
+            .heightIn(min = 38.dp)
+            .clip(RoundedCornerShape(8.dp)),
+        shape = RoundedCornerShape(8.dp),
         color = background,
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = CellPadding),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = CellPadding, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
                 text = day.date.takeLast(2),
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = AetherColors.textTertiary(),
             )
             if (!day.placeholder) {
                 Text(
                     text = day.calls.toString(),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
             }

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// Responses WebSocket ingress（对齐 relay-panel 的 GET /v1/responses Upgrade）。
+// Responses WebSocket ingress（对齐 高并发网关 的 GET /v1/responses Upgrade）。
 //
 // 客户端在同一个连接上按 turn 发 Responses 请求体，服务端把现有 HTTP
 // 管线的 SSE 事件逐条转成 WebSocket 文本帧。这样 Codex CLI 一类用
@@ -28,7 +28,7 @@ import (
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 // wsMaxConnections 限制同时打开的 WS 连接：空闲连接不设读超时时，
-// 没有上限会耗尽文件描述符。relay-panel 也按 Key 限制入口连接数。
+// 没有上限会耗尽文件描述符。高并发网关 也按 Key 限制入口连接数。
 const wsMaxConnections = 256
 
 // wsMaxConnectionsPerKey 是单个调用方密钥同时打开的 WS 连接上限：

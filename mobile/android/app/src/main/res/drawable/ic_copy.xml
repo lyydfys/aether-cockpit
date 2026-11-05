@@ -2,13 +2,21 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="20"
-    android:viewportHeight="20">
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 24x24 双层一致圆角复制图标（消除原版上层直角、下层圆角的不一致） -->
     <path
-        android:pathData="M8.5,7 H15.5 A1.5,1.5 0 0 1 17,8.5 V15.5 A1.5,1.5 0 0 1 15.5,17 H8.5 A1.5,1.5 0 0 1 7,15.5 V8.5 A1.5,1.5 0 0 1 8.5,7 Z M13,7 V4.5 A1.5,1.5 0 0 0 11.5,3 H4.5 A1.5,1.5 0 0 0 3,4.5 V11.5 A1.5,1.5 0 0 0 4.5,13 H7"
         android:fillColor="@android:color/transparent"
+        android:pathData="M9,9.2C9,7.98 9.98,7 11.2,7H17.3C18.52,7 19.5,7.98 19.5,9.2V17.3C19.5,18.52 18.52,19.5 17.3,19.5H11.2C9.98,19.5 9,18.52 9,17.3V9.2Z"
+        android:strokeWidth="1.85"
         android:strokeColor="#FF000000"
-        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M6,15H5.7C4.48,15 3.5,14.02 3.5,12.8V6.7C3.5,5.48 4.48,4.5 5.7,4.5H12.8C14.02,4.5 15,5.48 15,6.7V7"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 </vector>

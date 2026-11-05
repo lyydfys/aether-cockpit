@@ -13,7 +13,7 @@ import (
 	"aether-cockpit/internal/provider"
 )
 
-// 指纹向量来自 relay-panel 对 Node.js crypto 的固定输出，验证 UTF-16 语义。
+// 指纹向量来自 高并发网关 对 Node.js crypto 的固定输出，验证 UTF-16 语义。
 func TestClaudeCodeFingerprintVectors(t *testing.T) {
 	const version = "2.1.283"
 	cases := []struct {

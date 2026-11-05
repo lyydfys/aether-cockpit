@@ -142,10 +142,6 @@ Aether Cockpit 是本机网关，不是托管代理服务。默认只绑定回�
 
 欢迎通过 Issue 报告可复现的问题、提出改进建议，或提交 Pull Request。提交前请阅读[贡献指南](CONTRIBUTING.md)和[行为准则](CODE_OF_CONDUCT.md)。支持渠道见 [SUPPORT.md](SUPPORT.md)。
 
-## 参考与致谢
-
-渠道目录、路由策略与用量视图的设计参考了 [aether](https://github.com/aether/aether)（MIT）与 [relay-panel](https://github.com/Aether/relay-panel)（LGPL-3.0）。感谢两个项目的作者与贡献者。
-
 ## 赞助支持
 
 如果这个项目帮到了你，欢迎点一个 Star、分享项目，或通过收款码支持持续开发与维护。赞助完全自愿，不影响任何功能。

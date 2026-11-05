@@ -21,7 +21,7 @@ import (
 
 // Bedrock 的 OpenAI 兼容端点不提供 Claude 的完整 Messages 语义
 // （thinking、cache、工具块结构），带 Claude 模型时必须走原生
-// /model/{id}/invoke(-with-response-stream)，与 relay-panel 行为一致。
+// /model/{id}/invoke(-with-response-stream)，与 高并发网关 行为一致。
 
 const bedrockAnthropicVersion = "bedrock-2023-05-31"
 

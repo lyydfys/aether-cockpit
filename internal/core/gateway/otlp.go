@@ -22,7 +22,7 @@ import (
 // 不引官方 SDK，纯标准库把请求审计记录（RequestLog）导出为 OTLP/JSON traces，
 // 直接兼容 OpenTelemetry Collector / Grafana Tempo / Jaeger 的 OTLP HTTP 入口。
 //
-// 设计要点（docs/AETHER_DEEP_ANALYSIS.md 第 7/8 节）：
+// 设计要点（docs/aether_DEEP_ANALYSIS.md 第 7/8 节）：
 //   - 队列满则丢最旧，绝不阻塞请求路径；丢弃计数进日志
 //   - 攒批 BatchSize（默认 32）条或 FlushIntervalS（默认 5）秒触发一次 POST
 //   - 重试最多 3 次（1s→2s→4s），只对网络错误 / 429 / 502 / 503 / 504，

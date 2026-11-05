@@ -1,6 +1,6 @@
 package gateway
 
-// Local Vault 跨工具账号迁移。
+// 本机加密凭据库 跨工具账号迁移。
 //
 // local-vault 把账号详情写成 AES-256-GCM 信封，密钥在数据目录的
 // secure-account-storage.key；索引文件只有邮箱/名称。我们只读该目录，

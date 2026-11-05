@@ -1,6 +1,6 @@
 // Package relaybilling 读取"中继/聚合面板"账号的余额。
 //
-// Codex CLI 的中转、openai-compat 自定义端点大多是 relay-panel / relay-panel 一类面板，
+// Codex CLI 的中转、openai-compat 自定义端点大多是 通用中转面板 一类面板，
 // 它们保留 OpenAI 的账单接口：
 //
 //	GET {base}/dashboard/billing/subscription → {hard_limit_usd, unlimited_quota,…}
@@ -166,7 +166,7 @@ func fallbackBalance(ctx context.Context, client *http.Client, roots []string, k
 		}
 		return bal, "剩余 $" + formatUSD(bal) + "（Key 额度）", true
 	}
-	// relay-panel 一类的中转站把 /api/usage/token/ 作为唯一的 sk- 可读额度接口。
+	// 高并发网关 一类的中转站把 /api/usage/token/ 作为唯一的 sk- 可读额度接口。
 	//
 	// 注意结尾的斜杠：relay-panel 的路由是 `/api/usage/token/`，少了斜杠会 301/404，
 	// 这是我们过去"读不到额度"的一个真实原因，两种写法都试。
@@ -200,7 +200,7 @@ func fallbackBalance(ctx context.Context, client *http.Client, roots []string, k
 			return bal, "剩余 $" + formatUSD(bal) + "（Key 额度）", true
 		}
 	}
-	// relay-panel 一类的面板在 /v1/usage 直接给 remaining（美元）。
+	// 高并发网关 一类的面板在 /v1/usage 直接给 remaining（美元）。
 	var usage struct {
 		Remaining *float64 `json:"remaining"`
 		Balance   *float64 `json:"balance"`

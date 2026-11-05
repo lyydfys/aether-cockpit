@@ -693,7 +693,7 @@ func (g *Gateway) handleKeysAction(w http.ResponseWriter, r *http.Request) {
 
 // handleProviderAccountMapping POST /api/provider/accountmapping
 //
-// 账号级模型映射（relay-panel 的 model_mapping）：客户端/路由模型名 → 该账号
+// 账号级模型映射（高并发网关 的 model_mapping）：客户端/路由模型名 → 该账号
 // 真实的上游模型名。支持精确名与 * 通配；提交空对象表示清除。
 func (g *Gateway) handleProviderAccountMapping(w http.ResponseWriter, r *http.Request) {
 	var body struct {

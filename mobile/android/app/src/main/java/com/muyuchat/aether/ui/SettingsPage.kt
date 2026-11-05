@@ -280,14 +280,12 @@ internal fun SettingsPage(
         item { MobileHeader(status) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_back,
+                    contentDescription = "返回",
+                    onClick = onBack,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
@@ -295,18 +293,12 @@ internal fun SettingsPage(
                         subtitle = "本机配置 · 只读",
                     )
                 }
-                McaIconButton(
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_refresh,
                     contentDescription = "刷新设置",
                     onClick = onRefresh,
                     enabled = state is SettingsUiState.Ready || state is SettingsUiState.Failed,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_refresh),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                )
             }
         }
         // 首选端口是**本机运行配置**，不是网关状态：必须始终可编辑。
@@ -2289,23 +2281,16 @@ internal fun settingsGroupTitle(initialGroup: String?): String? {
 @Composable
 private fun FocusedSettingsHeader(title: String, onBack: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        McaIconButton(contentDescription = "返回", onClick = onBack) {
-            Icon(
-                painter = painterResource(R.drawable.ic_back),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_back,
+            contentDescription = "返回",
+            onClick = onBack,
+            tint = MaterialTheme.colorScheme.onBackground,
         )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            DeepPageTitle(title = title)
+        }
     }
 }
 

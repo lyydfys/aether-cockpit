@@ -29,10 +29,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -113,9 +113,23 @@ internal fun OnboardPage(
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     val connect by viewModel.connect.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
     // 侧边字母索引拖动时，屏幕中央浮出的大字母。
     var indexBubble by remember { mutableStateOf<String?>(null) }
+    // 字母索引跳转请求：**只保留最新目标**。
+    // 拖动一次会连续经过 20+ 个字母，如果每次都 `scope.launch { animateScrollToItem }`，
+    // 多个动画会互相打断，最后停在哪个位置不确定（真机表现为"拖动不灵/不动"）。
+    // 这里用一个状态 + LaunchedEffect 串行化：新请求会取消旧协程，永远只跑最新的那个。
+    var scrollRequest by remember { mutableStateOf<OnboardScrollRequest?>(null) }
+    LaunchedEffect(scrollRequest) {
+        val request = scrollRequest ?: return@LaunchedEffect
+        if (request.animate) {
+            listState.animateScrollToItem(request.index)
+        } else {
+            // 拖动中要跟手：瞬时定位，不要动画堆叠。
+            listState.scrollToItem(request.index)
+        }
+        scrollRequest = null
+    }
 
     val filtered = applyOnboardQuery(providers, accounts, query, filters)
     // 名称排序按字母分组（目录顺序）；筛选/排序入口已按用户要求移除，默认即此形态。
@@ -143,20 +157,25 @@ internal fun OnboardPage(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 28.dp, top = 8.dp, bottom = 24.dp),
+        // 底部必须留够悬浮球安全区（BubbleSafeBottom=88dp），否则最后几张卡会被球压住；
+        // 右侧 28dp 是给字母索引条让位，不能丢。
+        contentPadding = PaddingValues(
+            start = 20.dp,
+            end = 28.dp,
+            top = 8.dp,
+            bottom = BubbleSafeBottom,
+        ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { MobileHeader(status) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_back,
+                    contentDescription = "返回",
+                    onClick = onBack,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                )
                 Spacer(Modifier.width(8.dp))
                 Box(Modifier.weight(1f)) {
                     // 页面标题统一走 DeepPageTitle（文案照抄桌面 onboard.js:40-41）
@@ -165,18 +184,12 @@ internal fun OnboardPage(
                         subtitle = "多平台登录：本机导入、浏览器授权、设备码、手动凭据",
                     )
                 }
-                McaIconButton(
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_refresh,
                     contentDescription = "刷新渠道",
                     onClick = onRefresh,
                     enabled = status.running,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_refresh),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                )
             }
         }
         item {
@@ -225,7 +238,15 @@ internal fun OnboardPage(
                 )
             }
         } else {
-            items(rows.size) { index ->
+            items(
+                count = rows.size,
+                key = { index ->
+                    when (val row = rows[index]) {
+                        is OnboardListRow.Letter -> "letter_${row.letter}"
+                        is OnboardListRow.Provider -> "provider_${row.provider.id}"
+                    }
+                },
+            ) { index ->
                 when (val row = rows[index]) {
                     is OnboardListRow.Letter -> OnboardLetterHeader(row.letter)
                     is OnboardListRow.Provider -> OnboardProviderCard(
@@ -269,9 +290,10 @@ internal fun OnboardPage(
     if (grouped && rows.isNotEmpty()) {
         OnboardLetterIndex(
             available = lettersWithData,
-            onJump = { letter ->
+            onJump = { letter, animate ->
                 rowIndexByLetter[letter]?.let { target ->
-                    scope.launch { listState.animateScrollToItem(target) }
+                    // 覆盖式赋值：拖动时只有最后一次请求会被真正执行。
+                    scrollRequest = OnboardScrollRequest(target, animate)
                 }
             },
             onBubbleChange = { indexBubble = it },
@@ -283,7 +305,9 @@ internal fun OnboardPage(
     // 拖动时屏幕中央的大字母气泡。
     indexBubble?.let { letter ->
         Surface(
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .aetherSpecularRim(McaShape.Card),
             shape = McaShape.Card,
             color = MaterialTheme.colorScheme.surface,
             border = McaHairline.stroke(),
@@ -294,7 +318,8 @@ internal fun OnboardPage(
             ) {
                 Text(
                     text = letter,
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
                 )
@@ -393,13 +418,21 @@ private fun OnboardProviderCard(
     accountCount: Int,
     onConnect: () -> Unit,
 ) {
+    val displayName = provider.name.ifBlank { provider.id }
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            ProviderBrandPlate(
+                providerId = provider.id,
+                name = displayName,
+                size = 40.dp,
+                online = if (accountCount > 0) true else null,
+            )
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = provider.name.ifBlank { provider.id },
+                    text = displayName,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -430,10 +463,11 @@ private fun OnboardProviderCard(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            McaButton(
+            AetherPillButton(
+                text = if (accountCount > 0) "再加一个" else "接入",
                 onClick = onConnect,
-                style = McaButtonStyle.Outlined,
-            ) { Text(if (accountCount > 0) "再加一个" else "接入") }
+                selected = accountCount == 0,
+            )
         }
     }
 }
@@ -455,6 +489,14 @@ private fun OnboardLetterHeader(letter: String) {
 internal val OnboardIndexLetters: List<String> = ('A'..'Z').map { it.toString() } + "#"
 
 /**
+ * 一次字母跳转请求。
+ *
+ * [animate] = true 表示点击（值得放动画）；false 表示拖动跟手（必须瞬时定位，
+ * 否则连续 20+ 次动画会互相打断）。请求是**覆盖式**的：拖动期间只有最新一条会执行。
+ */
+internal data class OnboardScrollRequest(val index: Int, val animate: Boolean)
+
+/**
  * 右侧竖排字母索引（通讯录式）。
  *
  * - 完整 A–Z + `#`：没数据的字母**置灰而不是隐藏**，避免条子长度随搜索结果跳动；
@@ -470,7 +512,7 @@ private val OnboardIndexWidth = 40.dp
 @Composable
 private fun OnboardLetterIndex(
     available: Set<String>,
-    onJump: (String) -> Unit,
+    onJump: (String, Boolean) -> Unit,
     onBubbleChange: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -486,11 +528,12 @@ private fun OnboardLetterIndex(
     }
 
     // 指针进入新字母：更新气泡；有数据就跳转。同一字母不重复触发。
-    fun follow(letter: String) {
+    // animate：按下那一刻（tap 或拖动起点）给动画，进入滑动后关掉——跟手必须瞬时。
+    fun follow(letter: String, animate: Boolean) {
         if (current == letter) return
         current = letter
         onBubbleChange(letter)
-        if (letter in available) onJump(letter)
+        if (letter in available) onJump(letter, animate)
     }
 
     fun release() {
@@ -510,7 +553,8 @@ private fun OnboardLetterIndex(
             .pointerInput(available) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    follow(letterAt(down.position.y))
+                    // 按下的那一格：给一次动画跳转（点击语义）。
+                    follow(letterAt(down.position.y), animate = true)
                     down.consume()
                     try {
                         while (true) {
@@ -520,7 +564,8 @@ private fun OnboardLetterIndex(
                                 change.consume()
                                 break
                             }
-                            follow(letterAt(change.position.y))
+                            // 一旦有移动就是拖动语义：后续全部瞬时定位，避免动画排队。
+                            follow(letterAt(change.position.y), animate = false)
                             change.consume()
                         }
                     } finally {

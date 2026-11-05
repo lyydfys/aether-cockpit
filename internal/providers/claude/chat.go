@@ -24,7 +24,7 @@ const (
 )
 
 // defaultUserAgent 是订阅流量的默认 UA。版本必须 >= 上游的客户端版本地板
-// （relay-panel 内置基线 CLICurrentVersion = 2.1.258）：上游按模型设定最低
+// （高并发网关 内置基线 CLICurrentVersion = 2.1.258）：上游按模型设定最低
 // claude-cli 版本（如 sonnet/opus 新模型要求 >= 2.1.251），版本过低会被
 // 判非正版客户端并持续 429 且不带 reset 头，且指纹一旦污染无法重置。
 // 值可通过 credentials.user_agent 覆盖（覆盖语义不变）。
@@ -204,7 +204,7 @@ const (
 	betaServerSideFallback  = "server-side-fallback-2026-07-01"
 )
 
-// defaultBetaHeader 是订阅流量的默认 anthropic-beta 头，对齐 relay-panel 的
+// defaultBetaHeader 是订阅流量的默认 anthropic-beta 头，对齐 高并发网关 的
 // DefaultBetaHeader（真实 Claude Code CLI 抓包形态）：oauth-2025-04-20 是
 // 订阅 token 的硬性要求（缺了 401，见 auth.go 的 oauthBetaHeader 注释），
 // interleaved-thinking 覆盖本包 thinking 字段的能力声明，
@@ -254,7 +254,7 @@ func resolveUserAgent(env *provider.AccountEnv) string {
 }
 
 // sanitizeBetaHeaders 做 anthropic-beta 头与请求体的双向能力对齐（纯函数，
-// 参照 relay-panel 的 sanitizeAnthropicBodyForBetaTokens / computeFinalAnthropicBeta）：
+// 参照 高并发网关 的 sanitizeAnthropicBodyForBetaTokens / computeFinalAnthropicBeta）：
 //   - 头里未声明某能力、而 body 带了该能力字段：剥掉 body 字段（上游会 400）；
 //   - 头里声明了能力、body 没有对应字段：合法，不动。
 //

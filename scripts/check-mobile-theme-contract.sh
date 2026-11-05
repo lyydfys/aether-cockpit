@@ -85,6 +85,14 @@ SHA_COUNT=$(grep -cE '^[a-zA-Z]+Sha256=[0-9a-f]{64}$' "$LOCK" || true)
 [[ "$SHA_COUNT" -ge 4 ]] || fail "lock 文件里的 sha256 条目只有 $SHA_COUNT 个（期望 ≥4）"
 pass "lock 文件存在且含 $SHA_COUNT 个 sha256"
 
+# 7. 全仓禁止出现外部项目名称硬锁
+if bash "$ROOT/scripts/check-no-external-project-names.sh" >/dev/null 2>&1; then
+  pass "全仓代码与文件零外部项目名称引用"
+else
+  bash "$ROOT/scripts/check-no-external-project-names.sh" >&2 || true
+  FAILED=1
+fi
+
 if [[ "$FAILED" -ne 0 ]]; then
   echo "theme-contract=fail" >&2
   exit 1

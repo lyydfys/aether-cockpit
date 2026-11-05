@@ -708,7 +708,7 @@ func SessionFingerprint(providerID string, req *ir.UnifiedChatRequest) string {
 		return hex.EncodeToString(h.Sum(nil))[:32]
 	}
 	// 第三级：来源信息（IP + UA + 凭证），客户端既没自报会话 ID、
-	// 又没有可用文本时用它兜底（relay-panel 的同一个梯子）。
+	// 又没有可用文本时用它兜底（高并发网关 的同一个梯子）。
 	if v, ok := req.Meta["client_fp"].(string); ok && strings.TrimSpace(v) != "" {
 		h.Write([]byte("fp:"))
 		h.Write([]byte(strings.TrimSpace(v)))

@@ -72,14 +72,12 @@ internal fun BackupPage(
         item { MobileHeader(status) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_back,
+                    contentDescription = "返回",
+                    onClick = onBack,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
@@ -91,6 +89,7 @@ internal fun BackupPage(
         }
         item {
             Surface(
+                modifier = Modifier.aetherSpecularRim(McaShape.Sheet),
                 shape = McaShape.Sheet,
                 color = McaTonal.fill(),
                 border = McaHairline.stroke(),

@@ -1,7 +1,7 @@
 package vertex
 
 // Vertex AI service_account 凭据：用 RS256 JWT-bearer 换 access_token。
-// 算法与 gcloud / relay-panel 一致：RS256(header.claims) + JWT bearer grant。
+// 算法与 gcloud / 高并发网关 一致：RS256(header.claims) + JWT bearer grant。
 
 import (
 	"context"

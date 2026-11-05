@@ -186,7 +186,10 @@ internal fun RoutingPage(
                             trailing = "${overview.groups.size} 组 · ${overview.modelCount} 个可选模型",
                         )
                     }
-                    items(overview.groups.size) { index ->
+                    items(
+                        count = overview.groups.size,
+                        key = { index -> overview.groups[index].id },
+                    ) { index ->
                         val group = overview.groups[index]
                         val attached = presets?.routePresets?.get(group.id).orEmpty()
                         val attachedNames = attached.map { id ->
@@ -382,14 +385,12 @@ internal fun routingMemberOverflowLabel(group: RoutingGroup, limit: Int = 12): S
 @Composable
 private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabled: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        McaIconButton(contentDescription = "返回", onClick = onBack) {
-            Icon(
-                painter = painterResource(R.drawable.ic_back),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_back,
+            contentDescription = "返回",
+            onClick = onBack,
+            tint = MaterialTheme.colorScheme.onBackground,
+        )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
@@ -397,18 +398,12 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
                 subtitle = "模型路由组与成员",
             )
         }
-        McaIconButton(
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_refresh,
             contentDescription = "刷新路由",
             onClick = onRefresh,
             enabled = refreshEnabled,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_refresh),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        )
     }
 }
 
@@ -427,6 +422,7 @@ private fun RoutingGroupCard(
     val tally = routingGroupMemberTally(group)
     DeepCard(
         modifier = Modifier
+            .aetherPressable()
             .clip(McaShape.Sheet)
             .clickable(role = Role.Button, onClick = onClick),
     ) {
@@ -529,12 +525,10 @@ private fun RoutingGroupCard(
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.width(8.dp))
-            McaButton(
+            AetherPillButton(
+                text = "路由预设",
                 onClick = onOpenPresets,
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-                contentPadding = RoutingRowButtonPadding,
-            ) { Text("路由预设") }
+            )
         }
         group.warnings.forEach { warning ->
             Spacer(Modifier.height(6.dp))
@@ -592,11 +586,10 @@ private fun TemplatesCard(templates: List<RoutingTemplate>) {
 
 @Composable
 private fun RoutingBadge(text: String, error: Boolean) {
-    val color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-    Text(
+    AetherStatusChip(
         text = text,
-        style = MaterialTheme.typography.labelSmall,
-        color = color,
+        containerColor = if (error) AetherColors.dangerContainer() else MaterialTheme.colorScheme.primaryContainer,
+        contentColor = if (error) AetherColors.danger() else MaterialTheme.colorScheme.primary,
     )
 }
 
@@ -606,19 +599,11 @@ private fun RoutingBadge(text: String, error: Boolean) {
  */
 @Composable
 private fun RoutingMemberChip(text: String) {
-    Surface(
-        shape = McaShape.Badge,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        border = McaHairline.stroke(),
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
-    }
+    AetherStatusChip(
+        text = text,
+        containerColor = AetherColors.subSurface(),
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable

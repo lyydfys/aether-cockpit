@@ -63,11 +63,11 @@ func fetchAlmaProviders() []almaProvider {
 }
 
 // almaEntries 把 Alma provider 折成可导入条目（目标渠道固定 openai-compat）。
-func (g *Gateway) almaEntries() []localProviderSwitchEntry {
-	var out []localProviderSwitchEntry
+func (g *Gateway) almaEntries() []localSQLiteEntry {
+	var out []localSQLiteEntry
 	self := strings.TrimSpace(g.PublicAddr())
 	for _, p := range fetchAlmaProviders() {
-		e := localProviderSwitchEntry{
+		e := localSQLiteEntry{
 			ID:      p.ID,
 			AppType: "alma",
 			Name:    p.Name,

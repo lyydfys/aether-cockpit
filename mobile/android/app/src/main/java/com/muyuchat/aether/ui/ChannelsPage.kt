@@ -1,5 +1,8 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -46,6 +49,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
@@ -220,18 +224,12 @@ internal fun ChannelsPage(
                             subtitle = "账号、模型与余量，一眼看到底",
                         )
                     }
-                    McaIconButton(
+                    AetherHeaderIconButton(
+                        iconRes = R.drawable.ic_refresh,
                         contentDescription = "刷新账号与额度",
                         onClick = { onAction(ChannelsAction.Refresh) },
                         enabled = state is ChannelsUiState.Ready || state is ChannelsUiState.Failed,
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_refresh),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(McaIconSize.Optical.Action),
-                        )
-                    }
+                    )
                 }
             }
         }
@@ -246,14 +244,16 @@ internal fun ChannelsPage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (onOpenOnboard != null) {
-                    McaButton(onClick = onOpenOnboard, style = McaButtonStyle.Outlined) {
-                        Text("接入渠道", maxLines = 1)
-                    }
+                    AetherPillButton(
+                        text = "接入渠道",
+                        onClick = onOpenOnboard,
+                        primary = true,
+                    )
                 }
-                McaButton(
+                AetherPillButton(
+                    text = "自定义渠道",
                     onClick = { showCustomChannels = true },
-                    style = McaButtonStyle.Outlined,
-                ) { Text("自定义渠道", maxLines = 1) }
+                )
             }
         }
 
@@ -303,13 +303,12 @@ internal fun ChannelsPage(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            AccountsLayout.entries.forEach { mode ->
-                                McaChip(
-                                    selected = layout == mode,
-                                    onClick = { layout = mode },
-                                    label = { Text(accountLayoutLabel(mode)) },
-                                )
-                            }
+                            AetherSegmentedPill(
+                                options = AccountsLayout.entries,
+                                selected = layout,
+                                onSelect = { layout = it },
+                                label = { accountLayoutLabel(it) },
+                            )
                         }
                     }
                     if (selecting) {
@@ -345,7 +344,10 @@ internal fun ChannelsPage(
                             )
                         }
                     } else {
-                        items(cardRows.size) { rowIndex ->
+                        items(
+                            count = cardRows.size,
+                            key = { rowIndex -> cardRows[rowIndex].joinToString("|") { it.accountId } },
+                        ) { rowIndex ->
                             val pair = cardRows[rowIndex]
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -574,7 +576,7 @@ private fun SelectionBar(
         Column(Modifier.weight(1f)) {
             Text(
                 text = "已选 $selectedCount",
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 1,
@@ -582,27 +584,21 @@ private fun SelectionBar(
             )
             Text(
                 text = "共 $totalVisible 个",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
         }
-        McaButton(
+        AetherPillButton(
+            text = if (allSelected) "取消全选" else "全选",
             onClick = onToggleAll,
-            style = McaButtonStyle.Text,
-            size = McaButtonSize.CardAction,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
             enabled = totalVisible > 0,
-        ) { Text(if (allSelected) "取消全选" else "全选") }
-        Spacer(Modifier.width(4.dp))
-        McaButton(
+        )
+        Spacer(Modifier.width(8.dp))
+        AetherPillButton(
+            text = "取消",
             onClick = onCancel,
-            style = McaButtonStyle.Text,
-            size = McaButtonSize.CardAction,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-        ) {
-            Text("取消")
-        }
+        )
     }
 }
 
@@ -621,10 +617,10 @@ private fun AccountFilterChips(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AccountFilter.entries.forEach { option ->
-            McaChip(
-                selected = option == selected,
+            AetherPillButton(
+                text = accountFilterLabel(option),
                 onClick = { onSelect(option) },
-                label = { Text(accountFilterLabel(option)) },
+                primary = option == selected,
                 enabled = enabled,
             )
         }
@@ -655,34 +651,26 @@ private fun BatchActionRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            McaButton(
+            AetherPillButton(
+                text = batchKindLabel(BatchKind.REFRESH),
                 onClick = onRefresh,
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 enabled = canRun,
-            ) { Text(batchKindLabel(BatchKind.REFRESH)) }
-            McaButton(
+            )
+            AetherPillButton(
+                text = batchKindLabel(BatchKind.ENABLE),
                 onClick = onEnable,
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 enabled = canRun,
-            ) { Text(batchKindLabel(BatchKind.ENABLE)) }
-            McaButton(
+            )
+            AetherPillButton(
+                text = batchKindLabel(BatchKind.DISABLE),
                 onClick = onDisable,
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 enabled = canRun,
-            ) { Text(batchKindLabel(BatchKind.DISABLE)) }
-            McaButton(
+            )
+            AetherPillButton(
+                text = batchKindLabel(BatchKind.CHECKIN),
                 onClick = onCheckin,
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 enabled = canRun && checkinCount > 0,
-            ) { Text(batchKindLabel(BatchKind.CHECKIN)) }
+            )
         }
         if (!running && selectedCount > 0 && checkinCount == 0) {
             Spacer(Modifier.height(4.dp))
@@ -702,6 +690,7 @@ private fun BatchResultCard(state: BatchUiState, onDismiss: () -> Unit) {
         return
     }
     Surface(
+        modifier = Modifier.aetherSpecularRim(McaShape.Sheet),
         shape = McaShape.Sheet,
         color = McaTonal.fill(),
         border = McaHairline.stroke(),
@@ -739,7 +728,7 @@ private fun BatchResultCard(state: BatchUiState, onDismiss: () -> Unit) {
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (state.failed > 0) {
-                            MaterialTheme.colorScheme.error
+                            AetherColors.danger()
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
@@ -750,23 +739,22 @@ private fun BatchResultCard(state: BatchUiState, onDismiss: () -> Unit) {
                         text = "${batchKindLabel(state.kind)}失败",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.error,
+                        color = AetherColors.danger(),
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
                         text = "${state.message}（错误码：${state.code}）",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = AetherColors.danger(),
                     )
                 }
                 BatchUiState.Idle -> Unit
             }
             Spacer(Modifier.height(8.dp))
-            McaButton(
+            AetherPillButton(
+                text = "关闭",
                 onClick = onDismiss,
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-            ) { Text("关闭") }
+            )
         }
     }
 }
@@ -809,7 +797,7 @@ private fun AccountsHeadline(providers: List<ProviderSummary>, accounts: List<Ac
     }
     Text(
         text = detail,
-        style = MaterialTheme.typography.bodySmall,
+        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
@@ -840,18 +828,10 @@ private fun SectionHeader(title: String, note: String) {
  */
 @Composable
 private fun ChatUnsupportedTag() {
-    Surface(
-        shape = McaShape.Badge,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        border = McaHairline.stroke(),
-    ) {
-        Text(
-            text = "仅账号/额度",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
-        )
-    }
+    AetherStatusChip(
+        text = "仅账号/额度",
+        tone = DeepTone.Neutral,
+    )
 }
 
 /**
@@ -902,8 +882,8 @@ private fun AccountQuotaCard(
         action.kind == AccountActionKind.QUOTA
     // 同一时刻只允许一个账号在动：别的卡片在忙时，这一张的写操作一起禁用。
     val anyBusy = action is AccountActionUiState.Busy
-    // 「最近读数」要相对当前时刻算；每次重组取一次即可（不缓存，读过之后自然会变）。
-    val nowMs = System.currentTimeMillis()
+    // 「最近读数」要相对当前时刻算；以读数时间戳为 key 记忆，避免滚动时每帧调用系统时钟。
+    val nowMs = remember(row.quotaReadAt, readOutcome) { System.currentTimeMillis() }
     val failure = (action as? AccountActionUiState.Failed)?.takeIf { it.accountId == row.accountId }
     // 卡片级弹窗（桌面端那些账号入口在这里归到「更多」里，避免卡片按钮堆到三行以上）
     var sheet by remember(row.accountId) { mutableStateOf(CardSheet.NONE) }
@@ -915,10 +895,12 @@ private fun AccountQuotaCard(
 
     Surface(
         // 长按进入选择态；已在选择态时点卡片就是勾选/取消勾选。
-        modifier = Modifier.combinedClickable(
-            onClick = { if (selectionMode) onToggleSelected() },
-            onLongClick = onLongPress,
-        ),
+        modifier = Modifier
+            .aetherSpecularRim(McaShape.Sheet)
+            .combinedClickable(
+                onClick = { if (selectionMode) onToggleSelected() },
+                onLongClick = onLongPress,
+            ),
         shape = McaShape.Sheet,
         color = McaTonal.fill(),
         border = McaHairline.stroke(),
@@ -930,23 +912,12 @@ private fun AccountQuotaCard(
                     SelectionMark(selected = selected)
                     Spacer(Modifier.width(12.dp))
                 }
-                val brandIcon = providerIcon(row.providerId)
-                McaIconPlate(
+                ProviderBrandPlate(
+                    providerId = row.providerId,
+                    providerName = provider?.name ?: row.label,
                     size = McaPlateSize.Medium,
-                    shape = McaShape.Badge,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ) {
-                    Icon(
-                        painter = painterResource(brandIcon.res),
-                        contentDescription = null,
-                        tint = if (brandIcon.mono) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            Color.Unspecified
-                        },
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                    online = !row.disabled,
+                )
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -976,10 +947,9 @@ private fun AccountQuotaCard(
                     }
                 }
                 if (row.disabled) {
-                    Text(
+                    AetherStatusChip(
                         text = "已停用",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tone = DeepTone.Neutral,
                     )
                     Spacer(Modifier.width(8.dp))
                 }
@@ -998,7 +968,7 @@ private fun AccountQuotaCard(
 
             // 标签：做成 chip 并横滚（两个以上标签不许换行、不许把标题挤下去）
             if (row.tags.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1007,19 +977,10 @@ private fun AccountQuotaCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     row.tags.forEach { tag ->
-                        Surface(
-                            shape = McaShape.Badge,
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = McaHairline.stroke(),
-                        ) {
-                            Text(
-                                text = tag,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 1,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            )
-                        }
+                        AetherStatusChip(
+                            text = tag,
+                            tone = DeepTone.Info,
+                        )
                     }
                 }
             }
@@ -1036,11 +997,13 @@ private fun AccountQuotaCard(
 
             // 额度窗口（有窗口画窗口条，有总量画总条，都没有就说明原因）
             Spacer(Modifier.height(12.dp))
-            QuotaBlock(row = row, nowMs = nowMs, actionFailure = failure, readOutcome = readOutcome)
-
-            // 读取时间 / 状态：桌面 `acct-foot` 的元信息行（左标签定宽、右值右对齐）
-            Spacer(Modifier.height(8.dp))
-            AccountStatusRows(row = row)
+            AetherSubSurface(padding = PaddingValues(12.dp)) {
+                Column {
+                    QuotaBlock(row = row, nowMs = nowMs, actionFailure = failure, readOutcome = readOutcome)
+                    Spacer(Modifier.height(8.dp))
+                    AccountStatusRows(row = row)
+                }
+            }
 
             // 签到（只有渠道真的声明了签到能力才出现；状态色与按钮并行，不挤成竖排）
             if (row.checkinSupported) {
@@ -1062,7 +1025,7 @@ private fun AccountQuotaCard(
                 Text(
                     text = "${failure.message}（错误码：${failure.code}）",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = AetherColors.danger(),
                 )
             }
 
@@ -1079,20 +1042,16 @@ private fun AccountQuotaCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (row.quotaSupported) {
-                        McaButton(
+                        AetherPillButton(
+                            text = quotaReadLabel(busyQuota),
                             onClick = onReadQuota,
-                            style = McaButtonStyle.Outlined,
-                            size = McaButtonSize.CardAction,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                             enabled = quotaReadEnabled(row.quotaSupported, anyBusy),
-                        ) { Text(quotaReadLabel(busyQuota)) }
+                        )
                     }
-                    McaButton(
+                    AetherPillButton(
+                        text = "更多",
                         onClick = { sheet = CardSheet.MORE },
-                        style = McaButtonStyle.Outlined,
-                        size = McaButtonSize.CardAction,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    ) { Text("更多") }
+                    )
                 }
             }
         }
@@ -1169,12 +1128,12 @@ private fun AccountStatusRow(label: String, value: String, labelWidth: Dp) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AetherColors.textTertiary(),
             modifier = Modifier.width(labelWidth),
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.End,
             maxLines = 1,
@@ -1200,7 +1159,7 @@ private fun AccountCheckinRow(
             Text(
                 text = "每日签到",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = AetherColors.textTertiary(),
             )
             Text(
                 text = checkinLabel(row.checkin),
@@ -1211,14 +1170,11 @@ private fun AccountCheckinRow(
             )
         }
         Spacer(Modifier.width(8.dp))
-        McaButton(
+        AetherPillButton(
+            text = if (busy) "签到中…" else checkinButtonLabel(row.checkin),
             onClick = onCheckin,
-            style = McaButtonStyle.Outlined,
-            size = McaButtonSize.CardAction,
             enabled = !busy && !row.disabled && !checkinSettled(row.checkin),
-        ) {
-            Text(if (busy) "签到中…" else checkinButtonLabel(row.checkin), maxLines = 1)
-        }
+        )
     }
 }
 
@@ -1264,7 +1220,7 @@ private fun QuotaBlock(
     Text(
         text = "最近读数 ${quotaReadAtLabel(row.quotaReadAt, nowMs, readOutcome)}",
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = AetherColors.textTertiary(),
     )
     accountQuotaNote(row)?.let { note ->
         Text(
@@ -1284,7 +1240,7 @@ private fun QuotaBlock(
         Text(
             text = line,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
+            color = AetherColors.danger(),
         )
     }
 }
@@ -1322,7 +1278,7 @@ private fun QuotaBarBlock(
             Spacer(Modifier.width(8.dp))
             Text(
                 text = "剩余 $percent%",
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
                 fontWeight = FontWeight.Bold,
                 color = tone,
                 maxLines = 1,
@@ -1334,8 +1290,8 @@ private fun QuotaBarBlock(
             Spacer(Modifier.height(4.dp))
             Text(
                 text = "${accountTimeLabel(resetsAt)} 重置",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                color = AetherColors.textTertiary(),
             )
         }
         // 绝对用量只在渠道真的给了 amount/limit 时才出现（契约里两者都可能缺省）。
@@ -1343,7 +1299,7 @@ private fun QuotaBarBlock(
             Spacer(Modifier.height(4.dp))
             Text(
                 text = absolute,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else if (unit.isNotBlank()) {
@@ -1351,7 +1307,7 @@ private fun QuotaBarBlock(
             Text(
                 text = "单位：$unit",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = AetherColors.textTertiary(),
             )
         }
     }
@@ -1364,21 +1320,37 @@ private fun QuotaBarBlock(
  */
 @Composable
 private fun QuotaBar(percent: Int) {
-    val fraction = (percent.coerceIn(0, 100)) / 100f
+    val targetFraction = (percent.coerceIn(0, 100)) / 100f
+    val animatedFraction by animateFloatAsState(
+        targetValue = targetFraction,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "channelQuotaBar",
+    )
+    val barColor = quotaTone(percent)
     Box(
         Modifier
             .fillMaxWidth()
             .height(6.dp)
             .clip(McaShape.Capsule)
-            .background(McaTonal.badgeFill()),
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
     ) {
-        if (fraction > 0f) {
+        if (animatedFraction > 0f) {
             Box(
                 Modifier
-                    .fillMaxWidth(fraction)
+                    .fillMaxWidth(animatedFraction)
                     .fillMaxHeight()
                     .clip(McaShape.Capsule)
-                    .background(quotaTone(percent)),
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                barColor.copy(alpha = 0.78f),
+                                barColor,
+                            ),
+                        ),
+                    ),
             )
         }
     }
@@ -1386,15 +1358,16 @@ private fun QuotaBar(percent: Int) {
 
 @Composable
 private fun quotaTone(percent: Int): Color = when {
-    percent <= 10 -> MaterialTheme.colorScheme.error
-    percent <= 40 -> MaterialTheme.colorScheme.tertiary
-    else -> MaterialTheme.colorScheme.primary
+    percent <= 10 -> AetherColors.danger()
+    percent <= 40 -> AetherColors.warning()
+    else -> AetherColors.success()
 }
 
 /** 探测结论行（行为与上一轮一致：只换成不带按钮的独立一行）。 */
 @Composable
 private fun ProbeStatusText(probe: ChannelProbe?, probing: Boolean) {
     Spacer(Modifier.height(8.dp))
+    val nowSec = remember(probe?.at) { System.currentTimeMillis() / 1000 }
     when {
         probing -> Text(
             text = "正在探测（服务端用账号池里的账号发起一次真实请求）…",
@@ -1404,23 +1377,23 @@ private fun ProbeStatusText(probe: ChannelProbe?, probing: Boolean) {
         probe == null -> Text(
             text = "还没有探测记录",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AetherColors.textTertiary(),
         )
         else -> {
             Text(
                 text = channelProbeSummary(probe),
                 style = MaterialTheme.typography.labelSmall,
                 color = if (probe.ok) {
-                    MaterialTheme.colorScheme.primary
+                    AetherColors.success()
                 } else {
-                    MaterialTheme.colorScheme.error
+                    AetherColors.danger()
                 },
             )
             if (probe.at > 0) {
                 Text(
-                    text = channelProbeAgeLabel(probe.at, System.currentTimeMillis() / 1000),
+                    text = channelProbeAgeLabel(probe.at, nowSec),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = AetherColors.textTertiary(),
                 )
             }
         }
@@ -1776,43 +1749,20 @@ private fun StateCard(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Surface(
-        shape = McaShape.Sheet,
-        color = MaterialTheme.colorScheme.primaryContainer,
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f),
-            )
-            if (actionLabel != null && onAction != null) {
-                Spacer(Modifier.height(12.dp))
-                McaButton(onClick = onAction, style = McaButtonStyle.Primary) {
-                    Text(actionLabel)
-                }
-            }
-        }
-    }
+    DeepStateCard(
+        title = title,
+        detail = detail,
+        tone = DeepTone.Info,
+        actionLabel = actionLabel,
+        onAction = onAction,
+    )
 }
 
 @Composable
 private fun LoadingCard() {
-    Surface(
-        shape = McaShape.Card,
-        color = McaTonal.fill(),
-    ) {
+    DeepCard {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CircularProgressIndicator(
@@ -1832,35 +1782,13 @@ private fun LoadingCard() {
 
 @Composable
 private fun ErrorCard(code: String, message: String, onRetry: () -> Unit) {
-    Surface(
-        shape = McaShape.Sheet,
-        color = MaterialTheme.colorScheme.errorContainer,
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(
-                text = "读取账号失败",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "错误码：$code",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.75f),
-            )
-            Spacer(Modifier.height(12.dp))
-            McaButton(onClick = onRetry, style = McaButtonStyle.Outlined) {
-                Text("重试")
-            }
-        }
-    }
+    DeepStateCard(
+        title = "读取账号失败",
+        detail = "$message（错误码：$code）",
+        tone = DeepTone.Danger,
+        actionLabel = "重试",
+        onAction = onRetry,
+    )
 }
 
 // ——— 卡片级弹窗：详情/设置、标签、备注、预设、复制配置（对齐桌面 channels.js） ———

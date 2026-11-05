@@ -125,7 +125,7 @@ func (g *Gateway) handleImportAppsDiscovery(w http.ResponseWriter, r *http.Reque
 	for _, e := range g.localVaultEntries() {
 		out = append(out, map[string]any{
 			"fingerprint": e.Fingerprint,
-			"source":      "Local Vault",
+			"source":      "本机加密凭据库",
 			"name":        e.Label,
 		})
 	}
@@ -139,9 +139,9 @@ func (g *Gateway) handleImportApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	found := g.discoverLocalAll(r.Context())
-	// Local Provider Switch 的配置是"另一个应用里的账号"，与本机登录态一起列出；
+	// 本机配置库 的配置是"另一个应用里的账号"，与本机登录态一起列出；
 	// 数据库不存在时静默跳过。
-	ccEntries, _ := readLocalProviderSwitchEntries()
+	ccEntries, _ := readLocalSQLiteEntries()
 	localVaultEntries := g.localVaultEntries()
 	sources := make([]map[string]any, 0, 8)
 	for _, m := range provider.AllManifests() {
@@ -205,7 +205,7 @@ func (g *Gateway) handleImportApps(w http.ResponseWriter, r *http.Request) {
 				"provider": map[string]any{
 					"name":   e.Label,
 					"chat":   "",
-					"key":    "Local Provider Switch 配置",
+					"key":    "本机 SQLite 配置",
 					"models": []string{},
 				},
 			})
@@ -228,7 +228,7 @@ func (g *Gateway) handleImportApps(w http.ResponseWriter, r *http.Request) {
 				"provider": map[string]any{
 					"name":   e.Label,
 					"chat":   "",
-					"key":    "Local Vault",
+					"key":    "本机加密凭据库",
 					"models": []string{},
 				},
 			})
@@ -241,7 +241,7 @@ func (g *Gateway) handleImportApps(w http.ResponseWriter, r *http.Request) {
 			path = platformCockpit[0].SourcePath
 		}
 		if path == "" && len(items) > 0 {
-			path = localProviderSwitchDBPath()
+			path = localSQLiteDBPath()
 		}
 		sources = append(sources, map[string]any{
 			"id": m.ID, "name": m.DisplayName, "found": len(items) > 0,
@@ -282,11 +282,11 @@ func (g *Gateway) handleImportAppsSubmit(w http.ResponseWriter, r *http.Request)
 	}
 	added := make([]string, 0, len(body.Picks))
 	found := g.discoverLocalAll(r.Context())
-	ccEntries, _ := readLocalProviderSwitchEntries()
+	ccEntries, _ := readLocalSQLiteEntries()
 	localVaultEntries := g.localVaultEntries()
 	for _, pick := range body.Picks {
-		if strings.HasPrefix(pick.Ref, "localproviderswitch:") {
-			id := strings.TrimPrefix(pick.Ref, "localproviderswitch:")
+		if strings.HasPrefix(pick.Ref, "localsqlite:") {
+			id := strings.TrimPrefix(pick.Ref, "localsqlite:")
 			for _, e := range ccEntries {
 				if e.ID != id || e.Target != pick.Source || e.Skip != "" {
 					continue

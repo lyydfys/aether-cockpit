@@ -133,7 +133,7 @@
 
 ## 0.1.19（2026-11-04）
 
-### 自定义渠道（Local Provider Switch 式）
+### 自定义渠道（本机配置库 式）
 
 - 新增「自定义渠道」：填名称、Base URL、协议（openai / anthropic / responses）、模型清单、可选请求头，保存后**立即注册成渠道**，可继续接入账号、出现在路由与模型清单里。设置持久化，重启后自动恢复。
 - 入口在渠道页「接入新渠道」旁；抽屉里可管理已保存的自定义渠道（编辑 / 删除），支持「探测模型」（`/models` 失败会给可读原因，不会静默）。
@@ -163,7 +163,7 @@
 
 ### 积分类渠道（签到/credits）读数修正
 
-对照 `ref-local-vault` / `ref-local-provider-switch` 逐渠道审计后发现四个渠道的积分读数确实不对，已修：
+对照 `ref-local-vault` / `ref-local-sqlite` 逐渠道审计后发现四个渠道的积分读数确实不对，已修：
 
 - **Trae（最严重）**：用量卡读的是**签到累计积分**（`checkin_credits/status`），不是套餐额度。改为读 `pay/ide_user_ent_usage`（`basic_usage_amount` 已用 / `basic_usage_limit` 总量 / `end_time` 重置），多个额度包合并求和；签到积分降级为兜底并在文案里标明"这是签到积分"。国际版 / Solo 之前直接报"没有公开接口"，现在按 region 拼 `api.trae.ai` / `api.trae.cn` 也能读。
 - **WorkBuddy**：字段优先级反了——用"购买总量"（`Capacity*`）而不是"本周期额度"（`Cycle*`），导致显示"还剩一大截"却马上被限流。现在 `Cycle*` 优先；剩余一律 `total - used` 反算（上游的 `*Remain` 在部分账号上不刷新）；额度用尽（0）不再被当成"没读到"而回落到别的接口；`CycleEndTime` 同时支持 RFC3339 与毫秒/秒时间戳（过去被当数字解析成 0）。
@@ -182,7 +182,7 @@
 
 ### 额度读取：按中转面板的真实接口重做
 
-参照 local-provider-switch / local-vault 的做法重做了通用兜底，修掉一批"读得到但读错 / 根本读不到"的问题：
+参照 local-sqlite / local-vault 的做法重做了通用兜底，修掉一批"读得到但读错 / 根本读不到"的问题：
 
 - **`/api/usage/token/` 带斜杠**：relay-panel 的路由是带尾斜杠的，我们过去只试无斜杠版本，等于对所有 relay-panel 站点都读不到额度。现在两种写法都试。
 - **账号级余额**：relay-panel 在 `allow_user_quota_query` 开启时会顺带返回 `user_quota`，优先用它（比 Key 额度更接近用户在面板看到的数字）。

@@ -11,7 +11,7 @@ import (
 
 // QueryQuota 读取中继面板的剩余余额。
 //
-// 这个渠道大多数是 relay-panel / relay-panel 一类聚合中转，它们保留 OpenAI 的
+// 这个渠道大多数是 通用中转面板 一类聚合中转，它们保留 OpenAI 的
 // 账单接口；读不到时如实报错，不影响对话路由。
 func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*provider.QuotaStatus, error) {
 	switch p.cfg.QuotaKind {

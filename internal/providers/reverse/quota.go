@@ -18,7 +18,7 @@ import (
 )
 
 // openCodeGoUsageURL 是 OpenCode Go 订阅的用量端点。
-// 聊天走 /zen/v1，而 Go 的滚动窗口在 /zen/go/v1 下（对齐 relay-panel）。
+// 聊天走 /zen/v1，而 Go 的滚动窗口在 /zen/go/v1 下（对齐 高并发网关）。
 const openCodeGoUsageURL = "https://opencode.ai/zen/go/v1/usage"
 
 // QueryQuota 读取逆向渠道账号的剩余额度。

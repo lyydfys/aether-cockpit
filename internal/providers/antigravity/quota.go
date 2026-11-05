@@ -16,7 +16,7 @@ import (
 
 // QueryQuota 读取 Antigravity（Cloud Code Assist）的剩余额度。
 //
-// 与 relay-panel / code-agent-auth 相同的数据源，不需要本地语言服务器：
+// 与 高并发网关 / oauth-bridge 相同的数据源，不需要本地语言服务器：
 //   - POST /v1internal:retrieveUserQuotaSummary {project}
 //     → 按模型池（Gemini / Claude & GPT…）给出 5 小时与每周窗口；
 //   - POST /v1internal:retrieveUserQuota {project}

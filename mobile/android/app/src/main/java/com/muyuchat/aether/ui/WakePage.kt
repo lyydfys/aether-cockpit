@@ -118,14 +118,12 @@ internal fun WakePage(
         item { MobileHeader(status) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_back,
+                    contentDescription = "返回",
+                    onClick = onBack,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
@@ -134,18 +132,12 @@ internal fun WakePage(
                         subtitle = "定时唤醒 · 可手动触发",
                     )
                 }
-                McaIconButton(
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_refresh,
                     contentDescription = "刷新唤醒队列",
                     onClick = onRefresh,
                     enabled = state !is WakeUiState.Loading,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_refresh),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                )
             }
         }
         // 桌面 KPI 行（scheduler.js:192-197）：任务数 / 今日完成 / 下次唤醒 / 唤醒次数。
@@ -177,13 +169,14 @@ internal fun WakePage(
                     ?.let { "$it 条" },
                 action = {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        McaButton(onClick = onRefreshScheduler, style = McaButtonStyle.Outlined) { Text("刷新") }
-                        McaButton(
+                        AetherPillButton(text = "刷新", onClick = onRefreshScheduler)
+                        AetherPillButton(
+                            text = if (checkinRunning) "入队中…" else "一键签到",
                             onClick = onRunCheckin,
-                            style = McaButtonStyle.Primary,
+                            selected = true,
                             enabled = !checkinRunning &&
                                 (scheduler as? SchedulerUiState.Ready)?.state?.enabled == true,
-                        ) { Text(if (checkinRunning) "入队中…" else "一键签到") }
+                        )
                     }
                 },
             )
@@ -208,11 +201,11 @@ internal fun WakePage(
                 text = "账号唤醒",
                 trailing = if (state is WakeUiState.Ready) wakeTaskCountLabel(state.tasks.size) else null,
                 action = {
-                    McaButton(
+                    AetherPillButton(
+                        text = "新建",
                         onClick = { showCreate = true },
-                        style = McaButtonStyle.Outlined,
                         enabled = status.running,
-                    ) { Text("新建") }
+                    )
                 },
             )
         }
@@ -248,7 +241,10 @@ internal fun WakePage(
                         )
                     }
                 } else {
-                    items(state.tasks.size) { index ->
+                    items(
+                        count = state.tasks.size,
+                        key = { index -> state.tasks[index].id },
+                    ) { index ->
                         val task = state.tasks[index]
                         WakeTaskCard(
                             task = task,
@@ -549,13 +545,18 @@ private fun WakeTaskCard(
             Spacer(Modifier.width(8.dp))
             // 状态 chip（桌面 scheduler.js:391-394 的优先级：running > last_ok > last_result > 未执行）
             val chip = wakeStatusChip(task)
-            Text(
+            AetherStatusChip(
                 text = chip.label,
-                style = MaterialTheme.typography.labelSmall,
-                color = when (chip.tone) {
-                    WakeChipTone.RUNNING -> MaterialTheme.colorScheme.tertiary
-                    WakeChipTone.OK -> MaterialTheme.colorScheme.primary
-                    WakeChipTone.FAILED -> MaterialTheme.colorScheme.error
+                containerColor = when (chip.tone) {
+                    WakeChipTone.RUNNING -> AetherColors.warningContainer()
+                    WakeChipTone.OK -> AetherColors.successContainer()
+                    WakeChipTone.FAILED -> AetherColors.dangerContainer()
+                    WakeChipTone.IDLE -> AetherColors.subSurface()
+                },
+                contentColor = when (chip.tone) {
+                    WakeChipTone.RUNNING -> AetherColors.warning()
+                    WakeChipTone.OK -> AetherColors.success()
+                    WakeChipTone.FAILED -> AetherColors.danger()
                     WakeChipTone.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )

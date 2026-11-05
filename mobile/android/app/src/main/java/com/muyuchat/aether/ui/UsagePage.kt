@@ -1,11 +1,15 @@
 package com.muyuchat.aether.ui
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -13,13 +17,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,9 +39,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -75,8 +84,6 @@ import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
-import com.muyuchat.core.designsystem.McaIconButton
-import com.muyuchat.core.designsystem.McaIconSize
 import com.muyuchat.core.designsystem.McaShape
 import java.util.Locale
 
@@ -339,18 +346,12 @@ private fun UsageTitle(state: UsageUiState, onRefresh: () -> Unit) {
                 subtitle = "本机账本 · 只读",
             )
         }
-        McaIconButton(
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_refresh,
             contentDescription = "刷新用量",
             onClick = onRefresh,
             enabled = state is UsageUiState.Ready || state is UsageUiState.Failed,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_refresh),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        )
     }
 }
 
@@ -370,36 +371,36 @@ private fun UsageScopeBar(
     /** 「卡片排序」入口；null 时不渲染（页面未接线时保持原样）。 */
     onOpenCardOrder: (() -> Unit)? = null,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(TightGap)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
-            UsagePeriod.entries.forEach { value ->
-                McaButton(
-                    onClick = { onPeriod(value) },
-                    style = if (value == period) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) {
-                    Text(value.label)
-                }
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    val activeCurrency = if (currency.equals("CNY", ignoreCase = true)) "CNY" else "USD"
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        AetherSegmentedPill(
+            options = UsagePeriod.entries,
+            selected = period,
+            onSelect = onPeriod,
+            label = { it.label },
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(TightGap),
+        ) {
             Text(
                 text = "计价币种",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.width(TightGap))
-            listOf("USD", "CNY").forEach { code ->
-                McaButton(
-                    onClick = { onCurrency(code) },
-                    style = if (currency.equals(code, ignoreCase = true)) {
-                        McaButtonStyle.Primary
-                    } else {
-                        McaButtonStyle.Outlined
-                    },
-                    size = McaButtonSize.CardAction,
-                ) { Text(if (code == "USD") "\$ USD" else "¥ CNY") }
-                Spacer(Modifier.width(TightGap))
+            AetherSegmentedPill(
+                options = listOf("USD", "CNY"),
+                selected = activeCurrency,
+                onSelect = onCurrency,
+                label = { if (it == "USD") "\$ USD" else "¥ CNY" },
+            )
+            Spacer(Modifier.weight(1f))
+            if (onOpenCardOrder != null) {
+                AetherPillButton(
+                    text = "卡片排序",
+                    onClick = onOpenCardOrder,
+                )
             }
         }
         // 汇率单独一行：1.3× 下与币种按钮挤同一行会被省略号截断（「汇率 1 USD = 7…」）。
@@ -407,18 +408,8 @@ private fun UsageScopeBar(
         Text(
             text = usageRateText(usdCny, pricingKnown),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AetherColors.textTertiary(),
         )
-        // 「卡片排序」入口：顺序是纯本地偏好（服务端 arrange 只是回显），所以只在本地改。
-        if (onOpenCardOrder != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
-                McaButton(
-                    onClick = onOpenCardOrder,
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text("卡片排序", maxLines = 1) }
-            }
-        }
     }
 }
 
@@ -432,28 +423,45 @@ private fun UsageScopeBar(
 private fun UsageKpiCard(summary: UsageSummary, period: UsagePeriod, currency: String, rate: Double) {
     val cells = listOf(
         // 请求数不再写「今日」注解：卡片标题已经交代了周期，同一句写两遍只是噪音。
-        Triple("请求数", formatUsageCount(summary.calls), ""),
-        Triple("成功率", usageSuccessRateText(summary), "失败 ${formatUsageCount(summary.errors)} 次"),
-        Triple("Token", formatUsageCount(summary.totalTokens), usageTokensNoteText(summary)),
-        Triple("费用", formatUsageAmount(summary.cost, currency, rate), usageCostNoteText(summary)),
+        KpiMetricSpec("请求数", formatUsageCount(summary.calls), "", AetherIdentityTone.BLUE.foreground()),
+        KpiMetricSpec("成功率", usageSuccessRateText(summary), "失败 ${formatUsageCount(summary.errors)} 次", AetherIdentityTone.GREEN.foreground()),
+        KpiMetricSpec("Token", formatUsageCount(summary.totalTokens), usageTokensNoteText(summary), AetherIdentityTone.PURPLE.foreground()),
+        KpiMetricSpec("费用", formatUsageAmount(summary.cost, currency, rate), usageCostNoteText(summary), AetherIdentityTone.AMBER.foreground()),
     )
     val columns = if (isLargeFontScale()) 1 else 2
     DeepCard {
-        DeepCardTitle(usagePeriodScopeLabel(period))
-        cells.chunked(columns).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(DeepCardPadding)) {
-                row.forEach { (label, value, note) ->
-                    UsageStatCell(
-                        label = label,
-                        value = value,
-                        note = note,
-                        modifier = Modifier.weight(1f),
-                    )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle(usagePeriodScopeLabel(period))
+            Spacer(Modifier.weight(1f))
+            AetherStatusChip(
+                text = "本机账本",
+                tone = DeepTone.Neutral,
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            cells.chunked(columns).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { spec ->
+                        UsageStatCell(
+                            label = spec.label,
+                            value = spec.value,
+                            note = spec.note,
+                            accentColor = spec.accentColor,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+private data class KpiMetricSpec(
+    val label: String,
+    val value: String,
+    val note: String,
+    val accentColor: Color,
+)
 
 /**
  * 一格数字：说明 → 大数字（单位降级）→ 注解。
@@ -462,49 +470,75 @@ private fun UsageKpiCard(summary: UsageSummary, period: UsagePeriod, currency: S
  * 小号 `$` 在大号数字旁会沉到基线以下）。同一段文字里降级单位，基线与行高由排版引擎保证。
  */
 @Composable
-private fun UsageStatCell(label: String, value: String, note: String, modifier: Modifier = Modifier) {
+private fun UsageStatCell(
+    label: String,
+    value: String,
+    note: String,
+    accentColor: Color,
+    modifier: Modifier = Modifier,
+) {
     val parts = statFocusParts(value)
     val bigSize = MaterialTheme.typography.headlineSmall.fontSize
     val smallSize = MaterialTheme.typography.labelSmall.fontSize
     val onSurface = MaterialTheme.colorScheme.onSurface
     val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
-    Column(
+    AetherSubSurface(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        padding = PaddingValues(12.dp),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = buildAnnotatedString {
-                if (parts.prefix.isNotEmpty()) {
-                    withStyle(SpanStyle(fontSize = smallSize, color = onSurfaceVariant)) {
-                        append(parts.prefix)
-                    }
-                }
-                withStyle(SpanStyle(fontSize = bigSize, fontWeight = FontWeight.Bold, color = onSurface)) {
-                    append(parts.number)
-                }
-                if (parts.suffix.isNotEmpty()) {
-                    withStyle(SpanStyle(fontSize = smallSize, color = onSurfaceVariant)) {
-                        append(parts.suffix)
-                    }
-                }
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (note.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(accentColor),
+                )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
-                text = note,
-                style = MaterialTheme.typography.labelSmall,
-                color = onSurfaceVariant,
-                maxLines = 2,
+                text = buildAnnotatedString {
+                    if (parts.prefix.isNotEmpty()) {
+                        withStyle(SpanStyle(fontSize = smallSize, color = onSurfaceVariant)) {
+                            append(parts.prefix)
+                        }
+                    }
+                    withStyle(
+                        SpanStyle(
+                            fontSize = bigSize,
+                            fontWeight = FontWeight.Bold,
+                            color = onSurface,
+                            fontFeatureSettings = "tnum",
+                        ),
+                    ) {
+                        append(parts.number)
+                    }
+                    if (parts.suffix.isNotEmpty()) {
+                        withStyle(SpanStyle(fontSize = smallSize, color = onSurfaceVariant)) {
+                            append(parts.suffix)
+                        }
+                    }
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+            if (note.isNotEmpty()) {
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AetherColors.textTertiary(),
+                    maxLines = 2,
+                )
+            }
         }
     }
 }
@@ -519,14 +553,17 @@ private fun UsageStatCell(label: String, value: String, note: String, modifier: 
 @Composable
 private fun UsageTrendCard(points: List<UsageDayPoint>, period: UsagePeriod, currency: String, rate: Double) {
     DeepCard {
-        DeepCardTitle("趋势")
-        val totalCalls = points.sumOf { it.calls }
-        val totalCost = points.sumOf { it.cost }
-        Text(
-            text = usageTrendTotalText(totalCalls, totalCost, currency, rate),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("趋势")
+            Spacer(Modifier.weight(1f))
+            val totalCalls = points.sumOf { it.calls }
+            val totalCost = points.sumOf { it.cost }
+            Text(
+                text = usageTrendTotalText(totalCalls, totalCost, currency, rate),
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (points.isEmpty() || points.all { it.calls == 0L }) {
             Text(
                 text = usageSeriesEmptyHint(),
@@ -537,56 +574,64 @@ private fun UsageTrendCard(points: List<UsageDayPoint>, period: UsagePeriod, cur
         }
         val maxCalls = points.maxOf { it.calls }.coerceAtLeast(1L)
         val step = usageTrendLabelStep(points.size)
-        Row(
-            modifier = Modifier.fillMaxWidth().height(TrendPlotHeight),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            points.forEach { point ->
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.Bottom,
-                    horizontalAlignment = Alignment.CenterHorizontally,
+        val primaryColor = MaterialTheme.colorScheme.primary
+        val dangerColor = AetherColors.danger()
+        AetherSubSurface(padding = PaddingValues(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(TrendPlotHeight),
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
-                    val barHeight: Dp = if (point.calls <= 0L) {
-                        0.dp
-                    } else {
-                        (TrendPlotHeight * (point.calls.toFloat() / maxCalls.toFloat()))
-                            .coerceAtLeast(TrendBarMinHeight)
+                    points.forEach { point ->
+                        Column(
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            verticalArrangement = Arrangement.Bottom,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            val barHeight: Dp = if (point.calls <= 0L) {
+                                0.dp
+                            } else {
+                                (TrendPlotHeight * (point.calls.toFloat() / maxCalls.toFloat()))
+                                    .coerceAtLeast(TrendBarMinHeight)
+                            }
+                            val baseColor = if (point.errors > 0L) dangerColor else primaryColor
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(barHeight)
+                                    .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp, bottomStart = 2.dp, bottomEnd = 2.dp))
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                baseColor.copy(alpha = 0.92f),
+                                                baseColor.copy(alpha = 0.55f),
+                                            ),
+                                        ),
+                                    ),
+                            )
+                        }
                     }
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(barHeight)
-                            .clip(McaShape.Badge)
-                            .background(
-                                if (point.errors > 0L) {
-                                    MaterialTheme.colorScheme.error.copy(alpha = 0.75f)
-                                } else {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
-                                },
-                            ),
-                    )
                 }
-            }
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            points.forEachIndexed { index, point ->
-                Text(
-                    text = if (index % step == 0) trendAxisLabel(point.label) else "",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip,
-                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    points.forEachIndexed { index, point ->
+                        Text(
+                            text = if (index % step == 0) trendAxisLabel(point.label) else "",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                            color = AetherColors.textTertiary(),
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Clip,
+                        )
+                    }
+                }
             }
         }
         Text(
             text = usageTrendLegendText(period),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AetherColors.textTertiary(),
         )
     }
 }
@@ -613,21 +658,17 @@ private fun UsageBreakdownCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             DeepCardTitle("用量分布")
             Spacer(Modifier.weight(1f))
-            Text(
+            AetherStatusChip(
                 text = usageBreakdownChipText(rows.size),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                tone = DeepTone.Neutral,
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
-            UsageBreakdown.entries.forEach { value ->
-                McaButton(
-                    onClick = { onBreakdown(value) },
-                    style = if (value == breakdown) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text(value.label) }
-            }
-        }
+        AetherSegmentedPill(
+            options = UsageBreakdown.entries,
+            selected = breakdown,
+            onSelect = onBreakdown,
+            label = { it.label },
+        )
         // 排序维度：默认「按费用」（桌面固定顺序），另外两档按调用/按 Token 看同一批数据。
         // 单行横滚，1.3× 下也不会挤成两行或竖排。
         Row(
@@ -642,13 +683,12 @@ private fun UsageBreakdownCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            UsageSortKey.entries.forEach { value ->
-                McaButton(
-                    onClick = { sortKey = value },
-                    style = if (value == sortKey) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text(value.label, maxLines = 1) }
-            }
+            AetherSegmentedPill(
+                options = UsageSortKey.entries,
+                selected = sortKey,
+                onSelect = { sortKey = it },
+                label = { it.label },
+            )
         }
         if (rows.isEmpty()) {
             Text(
@@ -666,16 +706,18 @@ private fun UsageBreakdownCard(
         }
         val maxCost = rows.maxOf { it.cost }.coerceAtLeast(0.000001)
         // 合计行（桌面 usage.js:227）：占比恒 100%。
-        UsageRankRow(
-            name = "合计",
-            calls = summary.calls,
-            errors = summary.errors,
-            tokens = summary.totalTokens,
-            cacheRate = usageCacheHitRateText(summary),
-            amountText = formatUsageAmount(summary.cost, currency, rate),
-            sharePct = 100.0,
-            emphasized = true,
-        )
+        AetherSubSurface(padding = PaddingValues(12.dp)) {
+            UsageRankRow(
+                name = "合计",
+                calls = summary.calls,
+                errors = summary.errors,
+                tokens = summary.totalTokens,
+                cacheRate = usageCacheHitRateText(summary),
+                amountText = formatUsageAmount(summary.cost, currency, rate),
+                sharePct = 100.0,
+                emphasized = true,
+            )
+        }
         rows.take(12).forEach { row ->
             UsageRankRow(
                 name = row.name,
@@ -692,7 +734,7 @@ private fun UsageBreakdownCard(
             Text(
                 text = "…另有 ${rows.size - 12} 类，可在「请求」页按同一维度筛选查看。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = AetherColors.textTertiary(),
             )
         }
     }
@@ -709,13 +751,22 @@ private fun UsageRankRow(
     sharePct: Double,
     emphasized: Boolean,
 ) {
+    val targetRatio = (sharePct / 100.0).coerceIn(0.0, 1.0).toFloat()
+    val animatedRatio by animateFloatAsState(
+        targetValue = targetRatio,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "usageRankShare",
+    )
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = name,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
-                fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Normal,
+                fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -723,14 +774,15 @@ private fun UsageRankRow(
             if (errors > 0L) {
                 Text(
                     text = "失败 ${formatUsageCount(errors)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    color = AetherColors.danger(),
                 )
                 Spacer(Modifier.width(TightGap))
             }
             Text(
                 text = amountText,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                fontWeight = if (emphasized) FontWeight.Bold else FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.End,
             )
@@ -738,14 +790,14 @@ private fun UsageRankRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "${formatUsageCount(calls)} 次 · ${formatTokens(tokens)} Token",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.weight(1f))
             Text(
                 text = "缓存 $cacheRate",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                color = AetherColors.textTertiary(),
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -754,23 +806,22 @@ private fun UsageRankRow(
                     .weight(1f)
                     .height(6.dp)
                     .clip(McaShape.Badge)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
             ) {
-                val ratio = (sharePct / 100.0).coerceIn(0.0, 1.0).toFloat()
-                if (ratio > 0f) {
+                if (animatedRatio > 0f) {
                     Box(
                         Modifier
                             .fillMaxHeight()
-                            .fillMaxWidth(ratio)
+                            .fillMaxWidth(animatedRatio)
                             .clip(McaShape.Badge)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)),
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.88f)),
                     )
                 }
             }
             Spacer(Modifier.width(TightGap))
             Text(
                 text = sharePctText(sharePct),
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -1060,10 +1111,9 @@ private fun UsageQuotaHistoryCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     DeepCardTitle("额度历史")
                     Spacer(Modifier.weight(1f))
-                    Text(
+                    AetherStatusChip(
                         text = if (accounts.isEmpty()) "无读数" else "${accounts.size} 个账号 · 45 天",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tone = DeepTone.Neutral,
                     )
                 }
                 if (accounts.isEmpty()) {
@@ -1081,7 +1131,7 @@ private fun UsageQuotaHistoryCard(
                     Text(
                         text = "还有 ${accounts.size - 4} 个账号没有展开（同屏最多 4 个，避免刷不到底）",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = AetherColors.textTertiary(),
                     )
                 }
             }
@@ -1091,74 +1141,117 @@ private fun UsageQuotaHistoryCard(
 
 @Composable
 private fun QuotaAccountBlock(account: QuotaHistoryAccount, holds: Map<String, QuotaHoldWindow>) {
-    Spacer(Modifier.height(4.dp))
-    Text(
-        text = quotaAccountLabel(account.provider, account.user),
-        style = MaterialTheme.typography.bodySmall,
-        fontWeight = FontWeight.Medium,
-        color = MaterialTheme.colorScheme.onSurface,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
-    account.lines.forEach { line ->
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = line.name,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.width(72.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            val dots = quotaSparklineDots(line.points, width = 1_000f, height = 100f)
-            // 颜色必须在**组合期**读好再传进 Canvas：DrawScope 的 lambda 不是 @Composable 上下文，
-            // 在里面写 MaterialTheme.colorScheme.primary 会报「@Composable invocations can only
-            // happen from the context of a @Composable function」。
-            val lineColor = MaterialTheme.colorScheme.primary
-            Canvas(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(QuotaSparkHeight),
+    AetherSubSurface(padding = PaddingValues(12.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (dots.size < 2) {
-                    return@Canvas
-                }
-                val scaleX = size.width / 1_000f
-                val scaleY = size.height / 100f
-                val path = Path()
-                val first = dots.first()
-                path.moveTo(first.x * scaleX, first.y * scaleY)
-                dots.drop(1).forEach { dot -> path.lineTo(dot.x * scaleX, dot.y * scaleY) }
-                drawPath(
-                    path = path,
-                    color = lineColor,
-                    style = Stroke(width = 2f),
+                ProviderBrandPlate(
+                    providerId = account.provider,
+                    providerName = account.provider,
+                    size = 24.dp,
                 )
-                // 末点画一个点，明确"读到这里"。
-                val last = dots.last()
-                drawCircle(
-                    color = lineColor,
-                    radius = 3f,
-                    center = Offset(last.x * scaleX, last.y * scaleY),
+                Text(
+                    text = quotaAccountLabel(account.provider, account.user),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = quotaLineSummaryText(line),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.End,
-                maxLines = 1,
-            )
+            account.lines.forEach { line ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = line.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.width(68.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        val dots = quotaSparklineDots(line.points, width = 1_000f, height = 100f)
+                        val lineColor = MaterialTheme.colorScheme.primary
+                        Canvas(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(QuotaSparkHeight),
+                        ) {
+                            if (dots.size < 2) {
+                                return@Canvas
+                            }
+                            val scaleX = size.width / 1_000f
+                            val scaleY = size.height / 100f
+                            val path = Path()
+                            val fillPath = Path()
+                            val first = dots.first()
+                            val firstX = first.x * scaleX
+                            val firstY = first.y * scaleY
+                            path.moveTo(firstX, firstY)
+                            fillPath.moveTo(firstX, size.height)
+                            fillPath.lineTo(firstX, firstY)
+                            dots.drop(1).forEach { dot ->
+                                val dx = dot.x * scaleX
+                                val dy = dot.y * scaleY
+                                path.lineTo(dx, dy)
+                                fillPath.lineTo(dx, dy)
+                            }
+                            val last = dots.last()
+                            val lastX = last.x * scaleX
+                            val lastY = last.y * scaleY
+                            fillPath.lineTo(lastX, size.height)
+                            fillPath.close()
+
+                            drawPath(
+                                path = fillPath,
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(
+                                        lineColor.copy(alpha = 0.24f),
+                                        lineColor.copy(alpha = 0.02f),
+                                    ),
+                                ),
+                            )
+                            drawPath(
+                                path = path,
+                                color = lineColor,
+                                style = Stroke(
+                                    width = 2.dp.toPx(),
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round,
+                                ),
+                            )
+                            drawCircle(
+                                color = lineColor.copy(alpha = 0.28f),
+                                radius = 5.5.dp.toPx(),
+                                center = Offset(lastX, lastY),
+                            )
+                            drawCircle(
+                                color = lineColor,
+                                radius = 2.75.dp.toPx(),
+                                center = Offset(lastX, lastY),
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = quotaLineSummaryText(line),
+                            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.End,
+                            maxLines = 1,
+                        )
+                    }
+                    val hold = holds[quotaHoldKey(account.provider, account.user, line.name)]
+                    Text(
+                        text = quotaHoldText(hold),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AetherColors.textTertiary(),
+                    )
+                }
+            }
         }
-        val hold = holds[quotaHoldKey(account.provider, account.user, line.name)]
-        Text(
-            text = quotaHoldText(hold),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -1221,39 +1314,37 @@ private fun UsageVendorCheckinCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CheckinVendor.entries.forEach { vendor ->
-                McaButton(
+                AetherPillButton(
+                    text = if (running?.vendor == vendor) "签到中…" else vendor.label,
                     onClick = { pending = vendor },
-                    style = if (running?.vendor == vendor) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
+                    primary = running?.vendor == vendor || pending == vendor,
                     enabled = running == null,
-                ) {
-                    Text(
-                        text = if (running?.vendor == vendor) "签到中…" else vendor.label,
-                        maxLines = 1,
-                    )
-                }
+                )
             }
         }
         pending?.let { vendor ->
-            Text(
-                text = "确认签到「${vendor.label}」？${vendorCheckinScopeHint(vendor)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
-                McaButton(
-                    onClick = {
-                        pending = null
-                        onCheckin(vendor)
-                    },
-                    style = McaButtonStyle.Primary,
-                    size = McaButtonSize.CardAction,
-                ) { Text("确认签到") }
-                McaButton(
-                    onClick = { pending = null },
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text("取消") }
+            AetherSubSurface(padding = PaddingValues(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "确认签到「${vendor.label}」？${vendorCheckinScopeHint(vendor)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(TightGap)) {
+                        AetherPillButton(
+                            text = "确认签到",
+                            onClick = {
+                                pending = null
+                                onCheckin(vendor)
+                            },
+                            primary = true,
+                        )
+                        AetherPillButton(
+                            text = "取消",
+                            onClick = { pending = null },
+                        )
+                    }
+                }
             }
         }
         when (state) {
@@ -1266,33 +1357,37 @@ private fun UsageVendorCheckinCard(
             is VendorCheckinUiState.Failed -> Text(
                 text = state.message,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
+                color = AetherColors.danger(),
             )
             is VendorCheckinUiState.Ready -> {
-                Text(
-                    text = vendorCheckinSummary(state.results),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                state.results.take(8).forEach { result ->
-                    Text(
-                        text = vendorCheckinLine(result),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = variant,
-                    )
+                AetherSubSurface(padding = PaddingValues(12.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = vendorCheckinSummary(state.results),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        state.results.take(8).forEach { result ->
+                            Text(
+                                text = vendorCheckinLine(result),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = variant,
+                            )
+                        }
+                        if (state.results.size > 8) {
+                            Text(
+                                text = "…另有 ${state.results.size - 8} 个账号",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AetherColors.textTertiary(),
+                            )
+                        }
+                        AetherPillButton(
+                            text = "清除结果",
+                            onClick = onDismiss,
+                        )
+                    }
                 }
-                if (state.results.size > 8) {
-                    Text(
-                        text = "…另有 ${state.results.size - 8} 个账号",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = variant,
-                    )
-                }
-                McaButton(
-                    onClick = onDismiss,
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text("清除结果") }
             }
         }
     }

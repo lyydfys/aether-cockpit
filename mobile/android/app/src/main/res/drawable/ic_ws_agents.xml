@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Agent 接入：24x24 智能体星芒核心 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M12,3.5L14.2,9.2L19.9,11.4L14.2,13.6L12,19.3L9.8,13.6L4.1,11.4L9.8,9.2L12,3.5Z M18.5,3.8V6.8M17,5.3H20"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

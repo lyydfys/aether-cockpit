@@ -286,7 +286,9 @@ private fun QuotaAlertsCard(report: QuotaAlertsReport, onOpenUsage: (() -> Unit)
         shape = McaShape.Sheet,
         color = McaTonal.fill(),
         border = BorderStroke(1.dp, amber),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .aetherSpecularRim(McaShape.Sheet),
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -665,14 +667,12 @@ private fun ProbeHeadline(
     enabled: Boolean,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        McaIconButton(contentDescription = "返回", onClick = onBack) {
-            Icon(
-                painter = painterResource(R.drawable.ic_back),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_back,
+            contentDescription = "返回",
+            onClick = onBack,
+            tint = MaterialTheme.colorScheme.onBackground,
+        )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
@@ -687,14 +687,12 @@ private fun ProbeHeadline(
                 )
             }
         }
-        McaIconButton(contentDescription = "重新探测", onClick = onRefresh, enabled = enabled) {
-            Icon(
-                painter = painterResource(R.drawable.ic_refresh),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_refresh,
+            contentDescription = "重新探测",
+            onClick = onRefresh,
+            enabled = enabled,
+        )
     }
 }
 
@@ -710,6 +708,7 @@ private fun ApiServiceCard(
     val base = probeBaseUrl(status, state)
     val lan = state.settings?.lanEnabled ?: false
     val health = (state.anonymous.health as? ProbeOutcome.Ok)?.value
+    val isOk = health?.status == "ok"
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             DeepCardTitle("API 服务")
@@ -720,27 +719,19 @@ private fun ApiServiceCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.weight(1f))
-            Text(
-                text = if (health?.status == "ok") "运行中" else "未就绪",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium,
-                color = if (health?.status == "ok") {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
+            AetherStatusChip(
+                text = if (isOk) "运行中" else "未就绪",
+                containerColor = if (isOk) AetherColors.successContainer() else AetherColors.dangerContainer(),
+                contentColor = if (isOk) AetherColors.success() else AetherColors.danger(),
             )
         }
         Spacer(Modifier.height(10.dp))
         ProbeFieldRow("入口", base, trailing = {
-            McaIconButton(contentDescription = "复制入口", onClick = { onCopy(base) }) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_copy),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(McaIconSize.Xs),
-                )
-            }
+            AetherCompactIconButton(
+                iconRes = R.drawable.ic_copy,
+                contentDescription = "复制入口",
+                onClick = { onCopy(base) },
+            )
         })
         ProbeFieldRow("监听范围", if (lan) "局域网（需密钥）· 外部可达" else "仅本机 · 外部不可达")
         ProbeFieldRow("调用方密钥", "${state.callerKeys.size} 把 · 也可以在这里生成和管理")
@@ -749,11 +740,10 @@ private fun ApiServiceCard(
             if (state.clients.isEmpty()) "未检测到" else state.clients.joinToString(" · ") { it.name.ifBlank { it.id } },
         )
         Spacer(Modifier.height(8.dp))
-        McaButton(
+        AetherPillButton(
+            text = "复制接入片段",
             onClick = { onCopy(probeSnippet(base, protocol, probeSampleModel())) },
-            style = McaButtonStyle.Outlined,
-            size = McaButtonSize.CardAction,
-        ) { Text("复制接入片段") }
+        )
     }
 }
 
@@ -779,37 +769,27 @@ private fun SnippetCard(
             )
         }
         Spacer(Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            ProbeProtocols.forEach { (id, label, _) ->
-                McaButton(
-                    onClick = { onProtocol(id) },
-                    style = if (protocol == id) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text(label) }
-            }
-        }
+        AetherSegmentedPill(
+            options = ProbeProtocols.map { (id, label, _) -> id to label },
+            selected = protocol,
+            onSelect = onProtocol,
+        )
         Spacer(Modifier.height(8.dp))
-        Surface(
-            shape = McaShape.CardAction,
-            color = McaTonal.fill(),
-            border = McaHairline.stroke(),
+        AetherSubSurface(
+            modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
                 text = probeSnippet(base, protocol, probeSampleModel()),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                modifier = Modifier.fillMaxWidth(),
             )
         }
         Spacer(Modifier.height(8.dp))
-        McaButton(
+        AetherPillButton(
+            text = "复制片段",
             onClick = { onCopy(probeSnippet(base, protocol, probeSampleModel())) },
-            style = McaButtonStyle.Outlined,
-            size = McaButtonSize.CardAction,
-        ) { Text("复制片段") }
+        )
     }
 }
 
@@ -882,44 +862,49 @@ private fun ChannelProbeCard(report: ChannelProbeReport, probing: Boolean, onPro
             )
         }
         Spacer(Modifier.height(8.dp))
-        McaButton(
+        AetherPillButton(
+            text = if (probing) "探测中…" else "全部探测",
             onClick = onProbe,
-            style = McaButtonStyle.Primary,
-            size = McaButtonSize.CardAction,
+            selected = true,
             enabled = !probing,
-        ) { Text(if (probing) "探测中…" else "全部探测") }
+        )
         if (report.entries.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             DeepCardBody("还没有探测结果。点「全部探测」发一次最小请求；会消耗真实账号额度。")
             return@DeepCard
         }
+        val nowSec = remember(report.checkedAt) { System.currentTimeMillis() / 1000 }
         report.entries.forEach { entry ->
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = entry.providerId + if (entry.label.isNotBlank()) " · ${entry.label}" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                ProviderBrandPlate(
+                    providerId = entry.providerId,
+                    name = entry.providerId,
+                    size = 32.dp,
+                    online = entry.ok,
                 )
-                Text(
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = entry.providerId + if (entry.label.isNotBlank()) " · ${entry.label}" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = channelProbeAgeLabel(entry.at, nowSec),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                AetherStatusChip(
                     text = channelProbeSummary(entry),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (entry.ok) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                    maxLines = 1,
+                    containerColor = if (entry.ok) AetherColors.successContainer() else AetherColors.dangerContainer(),
+                    contentColor = if (entry.ok) AetherColors.success() else AetherColors.danger(),
                 )
             }
-            Text(
-                text = channelProbeAgeLabel(entry.at, System.currentTimeMillis() / 1000),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -943,17 +928,15 @@ private fun VersionProbeCard(state: ProbeUiState.Ready, onOpenEndpoint: (String)
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                McaButton(
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AetherPillButton(
+                    text = "查看 /healthz",
                     onClick = { onOpenEndpoint("/healthz") },
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text("查看 /healthz") }
-                McaButton(
+                )
+                AetherPillButton(
+                    text = "查看 /readyz",
                     onClick = { onOpenEndpoint("/readyz") },
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text("查看 /readyz") }
+                )
             }
         }
         Row(
@@ -966,11 +949,10 @@ private fun VersionProbeCard(state: ProbeUiState.Ready, onOpenEndpoint: (String)
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.widthIn(min = 96.dp),
             )
-            McaButton(
+            AetherPillButton(
+                text = "查看 /metrics",
                 onClick = { onOpenEndpoint("/metrics") },
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
-            ) { Text("查看 /metrics") }
+            )
         }
     }
 }

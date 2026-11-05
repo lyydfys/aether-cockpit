@@ -70,7 +70,12 @@ jobs:
           echo "ANDROID_NDK_VERSION=29.0.13113456" >> "$GITHUB_ENV"
 
       - name: Make scripts executable
-        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh scripts/check-mobile-stage1.sh scripts/check-mobile-release.sh scripts/check-mobile-apk-contents.sh scripts/check-mobile-theme-contract.sh scripts/check-mobile-api-contract.sh
+        run: chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh scripts/check-mobile-stage0.sh scripts/check-mobile-stage1.sh scripts/check-mobile-release.sh scripts/check-mobile-apk-contents.sh scripts/check-mobile-theme-contract.sh scripts/check-mobile-api-contract.sh scripts/check-no-external-project-names.sh
+
+      - name: Run external project name hard lock gate
+        run: |
+          bash scripts/check-no-external-project-names.sh --self-test
+          bash scripts/check-no-external-project-names.sh
 
       - name: Run theme contract gate
         run: bash scripts/check-mobile-theme-contract.sh

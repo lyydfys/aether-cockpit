@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# scripts/check-no-external-project-names.sh
+#
+# Hard-lock gate enforcing zero external / competitor / reference project names
+# anywhere in repository filenames, comments, documentation, or source code.
+#
+# Usage:
+#   bash scripts/check-no-external-project-names.sh
+#   bash scripts/check-no-external-project-names.sh --self-test
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+# Build forbidden tokens from split segments so this script itself contains zero literal matches.
+T_DSH1="dsh""-go"
+T_DSH2="dsh""go"
+T_DSH_AUTH="ccch1m""neyyy"
+T_MAG="mag""pie"
+T_MAG_AUTH="yet""one"
+T_SUB="sub2""api"
+T_SUB_AUTH="wei-""shaw"
+T_CT1="cockpit""-tools"
+T_CT2="cockpit""_tools"
+T_CT3="cockpit""tools"
+T_CT4="Cockpit"" Tools"
+T_CC1="cc-""switch"
+T_CC2="cc_""switch"
+T_CC3="cc""switch"
+T_CC4="CC ""Switch"
+T_CP1="cli""proxy""api"
+T_CP2="cli""proxy"
+T_NA="new-""api"
+T_OA="one-""api"
+T_VEL="velo""era"
+T_AGY="opencode-""agy-""auth"
+T_CLW="cle""wd"
+T_LITE="lite""llm"
+T_PROMPT="prompt""foo"
+T_AGW="agent""gateway"
+T_HUB="one-""hub"
+T_SUP="super-""api"
+T_CN="chat""ni""o"
+T_CHERRY="cherry"" studio"
+T_NEXT="next""chat"
+T_LOBE="lobe-""chat"
+T_OPENWUI="open-""webui"
+T_LIBRE="libre""chat"
+
+PATTERN="(${T_DSH1}|${T_DSH2}|${T_DSH_AUTH}|${T_MAG}|${T_MAG_AUTH}|${T_SUB}|${T_SUB_AUTH}|${T_CT1}|${T_CT2}|${T_CT3}|${T_CT4}|${T_CC1}|${T_CC2}|${T_CC3}|${T_CC4}|${T_CP1}|${T_CP2}|${T_NA}|${T_OA}|${T_VEL}|${T_AGY}|${T_LITE}|${T_PROMPT}|${T_AGW}|${T_HUB}|${T_SUP}|${T_CN}|${T_CHERRY}|${T_NEXT}|${T_LOBE}|${T_OPENWUI}|${T_LIBRE}|\\b${T_CLW}\\b)"
+
+run_scan() {
+  local target_dir="$1"
+  local failed=0
+
+  # 1. Check file & directory paths
+  local path_hits
+  path_hits="$(find "$target_dir" \
+    -path "$target_dir/.git" -prune -o \
+    -path "*/node_modules" -prune -o \
+    -path "*/.gradle" -prune -o \
+    -path "*/build" -prune -o \
+    -path "$target_dir/bin" -prune -o \
+    -print | grep -E -i "$PATTERN" || true)"
+
+  if [[ -n "$path_hits" ]]; then
+    echo "FAIL [no-external-project-names]: forbidden project name found in file/directory path:" >&2
+    echo "$path_hits" >&2
+    failed=1
+  fi
+
+  # 2. Check file contents across all text files
+  local content_hits
+  content_hits="$(grep -R -I -n -E -i \
+    --exclude-dir=.git \
+    --exclude-dir=node_modules \
+    --exclude-dir=.gradle \
+    --exclude-dir=build \
+    --exclude-dir=bin \
+    "$PATTERN" "$target_dir" || true)"
+
+  if [[ -n "$content_hits" ]]; then
+    echo "FAIL [no-external-project-names]: forbidden project name found in file contents:" >&2
+    echo "$content_hits" >&2
+    failed=1
+  fi
+
+  return "$failed"
+}
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+  echo "// reference to ${T_DSH1}" > "$TMP_DIR/sample.kt"
+  if run_scan "$TMP_DIR" >/dev/null 2>&1; then
+    echo "FAIL: --self-test expected scanner to reject forbidden project token" >&2
+    exit 1
+  fi
+  echo "[self-test] PASS: scanner caught injected forbidden project token"
+  exit 0
+fi
+
+if ! run_scan "$ROOT"; then
+  echo "no-external-project-names=fail" >&2
+  exit 1
+fi
+
+echo "no-external-project-names=pass"

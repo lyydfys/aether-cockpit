@@ -1,7 +1,7 @@
 package gateway
 
 // 意图路由（对标 aether internal/gateway/classify.go，设计依据
-// docs/AETHER_DEEP_ANALYSIS.md 第 2 节）。
+// docs/aether_DEEP_ANALYSIS.md 第 2 节）。
 //
 // 虚拟组里的渠道往往"强弱分明"——一个代码能力强、一个便宜但弱。priority
 // 只能按静态顺序 fallback；smart 策略在每次请求前用一个小分类模型读一遍

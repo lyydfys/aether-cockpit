@@ -13,7 +13,7 @@ import java.net.URLEncoder
  * Agent 接入（`GET /api/state`、`GET|POST /api/agents/cli`、`GET /api/agent-models/{id}`）。
  *
  * 桌面端 Agent 接入视图（`misc.js:10`）同时读三样东西，这里一一对应：
- * - `GET /api/state` → `agents[]`（`aether_api.go:141-171`，字段见 `:43-56`）与 `profiles[]`（`:59-63`）；
+ * - `GET /api/state` → `agents[]`（`state_api.go:141-171`，字段见 `:43-56`）与 `profiles[]`（`:59-63`）；
  * - `GET /api/agents/cli` → 本机 CLI 巡检（`agents_cli.go:182-195`，条目见 `:44-53`）；
  * - `GET /api/agent-models/{id}` → 某 agent 的模型清单（`agents_api.go:133-137`，条目见 `:20-27`）。
  *

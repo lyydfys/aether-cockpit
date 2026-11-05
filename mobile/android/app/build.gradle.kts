@@ -139,7 +139,8 @@ val verifyNativeFreshness = tasks.register("verifyNativeFreshness") {
             return@doLast
         }
         val newestGo = goRoot.walkTopDown()
-            .filter { it.isFile && it.name.endsWith(".go") }
+            // *_test.go 不进 c-shared 产物，不该触发重编（否则改一条测试就要求重编 33MB 的 .so）。
+            .filter { it.isFile && it.name.endsWith(".go") && !it.name.endsWith("_test.go") }
             .maxByOrNull { it.lastModified() }
             ?: return@doLast
         targetAbis.forEach { abi ->

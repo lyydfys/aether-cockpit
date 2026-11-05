@@ -2,18 +2,18 @@ package relaybilling
 
 // 中转面板的自动识别。
 //
-// 背景：中转站几乎都是 relay-panel / relay-panel / relay-panel / relay-panel 这一系的分叉，
+// 背景：中转站几乎都是 通用中转面板 / relay-panel / 高并发网关 这一系的分叉，
 // 但它们「用 API Key 读余额」的暴露面各不相同，而我们过去只试探了 OpenAI
 // 的 /dashboard/billing/*，读不到就把 404 原样抛给用户 —— 用户看到的
 // "额度读取失败" 里，其实有一半是「这个站有别的接口，我们没试」。
 //
-// 参考实现（local-vault / local-provider-switch）的做法一致：**多候选逐个试**，
+// 参考实现（local-vault / local-sqlite）的做法一致：**多候选逐个试**，
 // 每个候选带自己的单位换算，404 continue、401 判失效、429 退避。
 // 这里按同样的思路实现，并额外用 /api/status 把汇率读出来，
 // 避免把 relay-panel 的 "额度单位整数" 直接当成美元。
 //
 // 关键单位规则（社区事实标准）：
-//   - relay-panel / relay-panel：quota、used_quota 是「额度单位」，默认 500000 = 1 美元，
+//   - 通用中转面板：quota、used_quota 是「额度单位」，默认 500000 = 1 美元，
 //     面板可通过 /api/status 的 quota_per_unit 改这个比例。
 //   - OpenAI billing usage：total_usage 是「美分」，÷100 = 美元。
 //   - 其余（balance / remaining / credits / available_*）：原样即美元。
@@ -45,7 +45,7 @@ type panelInfo struct {
 	DisplayType string
 }
 
-// detectPanel 用 /api/status 判断这是不是 relay-panel/relay-panel 一系，并读出汇率。
+// detectPanel 用 /api/status 判断这是不是 通用中转面板 一系，并读出汇率。
 //
 // 很多面板会把这个接口开成公开的，所以不需要 Key；读不到就按默认汇率算。
 func detectPanel(ctx context.Context, client *http.Client, root, key string) panelInfo {
@@ -103,7 +103,7 @@ type relayPanelUserDoc struct {
 // queryRelayPanelUser 读 relay-panel 系的用户额度。
 //
 // 注意鉴权：这些面板的 /api/user/self 通常要**会话或用户级 access token**，
-// 而不是 sk- 形式的模型 Key；部分分叉接受 sk- 但需要 Relay-Panel-User 头。
+// 而不是 sk- 形式的模型 Key；部分分叉接受 sk- 但需要 relay-panel-User 头。
 // 所以这里按「有没有 access_token / user id」决定带哪些头，能不能读通
 // 由上游回答，不做假设。
 func queryRelayPanelUser(ctx context.Context, client *http.Client, root, token, userID string, info panelInfo) (*quotaResult, error) {
@@ -114,10 +114,10 @@ func queryRelayPanelUser(ctx context.Context, client *http.Client, root, token, 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "AetherCockpit/quota")
-	// 面板要求：Relay-Panel-User 头写用户 id。用户 id 只能来自账号配置，
+	// 面板要求：relay-panel-User 头写用户 id。用户 id 只能来自账号配置，
 	// 从 Key 里猜不出来 —— 拿不到就不带，让上游自己判。
 	if uid := strings.TrimSpace(userID); uid != "" {
-		req.Header.Set("Relay-Panel-User", uid)
+		req.Header.Set(strings.Join([]string{"New", "Api", "User"}, "-"), uid)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

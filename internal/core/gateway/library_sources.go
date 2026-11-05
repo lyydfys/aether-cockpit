@@ -68,7 +68,7 @@ func skillRoots(home string, projects []LibraryProject) []resourceRoot {
 		// .system 是 Codex 自带技能，单独标出来。
 		add(filepath.Join(home, ".codex", "skills", ".system"), []string{"codex_cli"}, "builtin", "Codex 内置", "")
 		add(filepath.Join(home, ".gemini", "skills"), []string{"gemini_cli"}, "user", "Gemini CLI 用户", "")
-		// 与 Local Provider Switch 等项目管理器对齐：这些 Agent 也使用标准 SKILL.md 目录。
+		// 与 本机配置库 等项目管理器对齐：这些 Agent 也使用标准 SKILL.md 目录。
 		add(filepath.Join(home, ".config", "opencode", "skills"), []string{"opencode"}, "user", "opencode 用户", "")
 		add(filepath.Join(home, ".gemini", "config", "skills"), []string{"gemini_cli"}, "user", "Gemini 配置", "")
 		add(filepath.Join(home, ".claude-desktop", "skills"), []string{"claude_desktop"}, "user", "Claude Desktop 用户", "")

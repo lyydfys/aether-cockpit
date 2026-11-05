@@ -29,6 +29,12 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Check no external project names (hard lock)
+        shell: bash
+        run: |
+          bash scripts/check-no-external-project-names.sh --self-test
+          bash scripts/check-no-external-project-names.sh
+
       - name: Run static analysis
         run: go vet ./...
 

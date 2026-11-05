@@ -1,6 +1,6 @@
 // Package channels 是「一等公民厂商」与「添加供应商预设」的单一数据源。
 //
-// 平台清单参照 relay-panel 的 platformList：每个厂商登记一条，接入只需 Key，
+// 平台清单参照 高并发网关 的 platformList：每个厂商登记一条，接入只需 Key，
 // Base URL 可被账号覆盖。网关用它渲染 presets，OpenAI 兼容渠道用它注册
 // 各自的 Provider，避免两处各写一份。
 package channels

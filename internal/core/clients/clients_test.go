@@ -604,7 +604,7 @@ func TestCodexCatalogWritten(t *testing.T) {
 	}
 
 	// 用户自己的 catalog 键不能被覆盖。
-	userCfg := "model_provider = \"custom\"\nmodel_catalog_json = \"local-provider-switch-model-catalog.json\"\n"
+	userCfg := "model_provider = \"custom\"\nmodel_catalog_json = \"custom-model-catalog.json\"\n"
 	if err := os.WriteFile(path, []byte(userCfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -613,7 +613,7 @@ func TestCodexCatalogWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, _ = os.ReadFile(path)
-	if !strings.Contains(string(cfg), "local-provider-switch-model-catalog.json") || strings.Contains(string(cfg), "aether-models.json") {
+	if !strings.Contains(string(cfg), "custom-model-catalog.json") || strings.Contains(string(cfg), "aether-models.json") {
 		t.Fatalf("用户 catalog 被改: %s", cfg)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "aether-models.json")); !os.IsNotExist(err) {

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 接入渠道：24x24 授权插头与连接闪电 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M9,3.8V7.5M15,3.8V7.5M6.2,7.5H17.8V11.5C17.8,14.7 15.2,17.3 12,17.3C8.8,17.3 6.2,14.7 6.2,11.5V7.5ZM12,17.3V20.5"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

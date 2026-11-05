@@ -115,7 +115,7 @@ type AccountEnv struct {
 	concurrency *int
 	// allowedModels 非空时，该账号只服务这些模型。
 	allowedModels []string
-	// modelMapping 是账号级"客户端名 -> 上游名"映射（relay-panel 的 model_mapping）。
+	// modelMapping 是账号级"客户端名 -> 上游名"映射（高并发网关 的 model_mapping）。
 	// 键可为精确名或含 * 的通配（如 claude-*）；精确优先，其次最长模式。
 	modelMapping map[string]string
 	// officialPaused 官方通道暂停：鉴权被拒或用户手动暂停后置位，

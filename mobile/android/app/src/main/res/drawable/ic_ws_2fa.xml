@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 2FA 管理：24x24 加密护盾与锁孔 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M12,3.4L18.6,6.1C19.15,6.32 19.5,6.85 19.5,7.45V11.8C19.5,16.15 16.35,19.45 12,20.7C7.65,19.45 4.5,16.15 4.5,11.8V7.45C4.5,6.85 4.85,6.32 5.4,6.1L12,3.4Z"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M9.6,12.1L11.3,13.8L14.6,10.3"
+        android:strokeWidth="1.95"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

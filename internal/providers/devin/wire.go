@@ -1,7 +1,7 @@
 package devin
 
 // Devin CLI 的 Connect-RPC 线协议：请求编码、帧封装与响应解码。
-// 协议依据 RelayProxy internal/runtime/executor/helps/devin_wire.go（逐段移植，
+// 协议依据 代理服务进程 internal/runtime/executor/helps/devin_wire.go（逐段移植，
 // 去掉敏感词混淆与日志辅助，只保留收发所需）。
 
 import (

@@ -148,14 +148,12 @@ internal fun LibraryPage(
         item { MobileHeader(status) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_back,
+                    contentDescription = "返回",
+                    onClick = onBack,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
@@ -166,28 +164,58 @@ internal fun LibraryPage(
                 }
                 // 「新增」由各页签分区标题上的「新建指令 / 新建技能…」按钮承担（桌面也是分区建）。
                 // 头部重复一个「新增」会在 1.3× 把副标题挤成省略号，这里不再重复放。
-                McaIconButton(
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_refresh,
                     contentDescription = "刷新资源库",
                     onClick = onRefresh,
                     enabled = state !is LibraryUiState.Loading,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_refresh),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                )
             }
         }
         // 桌面 KPI 行（library.js:118-125）：指令 / 技能 / MCP 服务器 / 子代理。
         val readyEntries = (state as? LibraryUiState.Ready)?.entries.orEmpty()
         item {
             DeepCard {
-                LibraryKpiRow("指令", readyEntries.count { it.kind == LibraryKind.PROMPT }, "库中条目")
-                LibraryKpiRow("技能", readyEntries.count { it.kind == LibraryKind.SKILL }, "库中条目")
-                LibraryKpiRow("MCP 服务器", readyEntries.count { it.kind == LibraryKind.MCP }, "库中条目")
-                LibraryKpiRow("子代理", readyEntries.count { it.kind == LibraryKind.SUBAGENT }, "库中条目")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        LibraryKpiTile(
+                            label = "指令",
+                            value = readyEntries.count { it.kind == LibraryKind.PROMPT },
+                            detail = "库中条目",
+                            accent = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        LibraryKpiTile(
+                            label = "技能",
+                            value = readyEntries.count { it.kind == LibraryKind.SKILL },
+                            detail = "库中条目",
+                            accent = AetherColors.success(),
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        LibraryKpiTile(
+                            label = "MCP 服务器",
+                            value = readyEntries.count { it.kind == LibraryKind.MCP },
+                            detail = "库中条目",
+                            accent = AetherColors.warning(),
+                            modifier = Modifier.weight(1f),
+                        )
+                        LibraryKpiTile(
+                            label = "子代理",
+                            value = readyEntries.count { it.kind == LibraryKind.SUBAGENT },
+                            detail = "库中条目",
+                            accent = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
         }
         notice?.let { message ->
@@ -222,16 +250,18 @@ internal fun LibraryPage(
                     ) {
                         LibraryKind.entries.forEach { kind ->
                             val count = state.entries.count { it.kind == kind }
-                            McaButton(
+                            AetherPillButton(
+                                text = "${libraryTabLabel(kind)} $count",
                                 onClick = { tab = kind.name },
-                                style = if (tab == kind.name) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                            ) { Text("${libraryTabLabel(kind)} $count", maxLines = 1) }
+                                selected = tab == kind.name,
+                            )
                         }
                         // 第 5 页签：Hooks（只读）。独立 id，不复用 LibraryKind。
-                        McaButton(
+                        AetherPillButton(
+                            text = "Hooks ${state.hooks.size}",
                             onClick = { tab = HookTab },
-                            style = if (tab == HookTab) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-                        ) { Text("Hooks ${state.hooks.size}", maxLines = 1) }
+                            selected = tab == HookTab,
+                        )
                     }
                 }
                 if (tab == HookTab) {
@@ -253,7 +283,10 @@ internal fun LibraryPage(
                             )
                         }
                     } else {
-                        items(state.hooks.size) { index ->
+                        items(
+                            count = state.hooks.size,
+                            key = { index -> "${state.hooks[index].name}_$index" },
+                        ) { index ->
                             val hook = state.hooks[index]
                             HookRow(hook = hook, onClick = { hookDetail = hook })
                         }
@@ -276,11 +309,11 @@ internal fun LibraryPage(
                         text = librarySectionTitle(currentKind),
                         trailing = libraryCountLabel(visible.size),
                         action = {
-                            McaButton(
+                            AetherPillButton(
+                                text = libraryCreateLabel(currentKind),
                                 onClick = { showCreate = true },
-                                style = McaButtonStyle.Outlined,
                                 enabled = status.running && !saving,
-                            ) { Text(libraryCreateLabel(currentKind)) }
+                            )
                         },
                     )
                 }
@@ -296,44 +329,31 @@ internal fun LibraryPage(
                                     .horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                McaButton(
+                                AetherPillButton(
+                                    text = "从仓库安装",
                                     onClick = {
                                         showSkillInstall = true
                                         skillPicked = emptySet()
                                         onDismissSkillActions()
                                     },
-                                    style = McaButtonStyle.Outlined,
-                                    size = McaButtonSize.CardAction,
                                     enabled = status.running &&
                                         onProbeSkills != null &&
                                         skillInstall !is SkillInstallUiState.Installing,
-                                ) { Text("从仓库安装", maxLines = 1) }
-                                McaButton(
+                                )
+                                AetherPillButton(
+                                    text = if (skillCheck is SkillCheckUiState.Checking) "检查中…" else "检查更新",
                                     onClick = { onCheckSkills?.invoke() },
-                                    style = McaButtonStyle.Outlined,
-                                    size = McaButtonSize.CardAction,
                                     enabled = status.running &&
                                         onCheckSkills != null &&
                                         skillCheck !is SkillCheckUiState.Checking,
-                                ) {
-                                    Text(
-                                        text = if (skillCheck is SkillCheckUiState.Checking) "检查中…" else "检查更新",
-                                        maxLines = 1,
-                                    )
-                                }
-                                McaButton(
+                                )
+                                AetherPillButton(
+                                    text = if (skillUpdate is SkillUpdateUiState.Running) "更新中…" else "更新全部",
                                     onClick = { updateAllConfirm = true },
-                                    style = McaButtonStyle.Outlined,
-                                    size = McaButtonSize.CardAction,
                                     enabled = status.running &&
                                         onUpdateAllSkills != null &&
                                         skillUpdate !is SkillUpdateUiState.Running,
-                                ) {
-                                    Text(
-                                        text = if (skillUpdate is SkillUpdateUiState.Running) "更新中…" else "更新全部",
-                                        maxLines = 1,
-                                    )
-                                }
+                                )
                             }
                             SkillActionPanel(skillInstall, skillCheck, skillUpdate)
                         }
@@ -355,7 +375,10 @@ internal fun LibraryPage(
                         )
                     }
                 } else {
-                    items(visible.size) { index ->
+                    items(
+                        count = visible.size,
+                        key = { index -> "${visible[index].kind.name}_${visible[index].id}" },
+                    ) { index ->
                         val entry = visible[index]
                         LibraryRow(
                             entry = entry,
@@ -553,34 +576,45 @@ internal fun libraryCreateLabel(kind: LibraryKind): String = when (kind) {
     LibraryKind.SUBAGENT -> "新建子代理"
 }
 
-/** KPI 一行（桌面 `.kpi`，`library.js:33-35`）。 */
+/** KPI 一格（Bento Tile）。 */
 @Composable
-private fun LibraryKpiRow(label: String, value: Int, detail: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
+private fun LibraryKpiTile(
+    label: String,
+    value: Int,
+    detail: String,
+    accent: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+) {
+    AetherSubSurface(modifier = modifier) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AetherStatusDot(color = accent, pulse = false, size = 6.dp)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
             Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
+                text = value.toString(),
+                style = MaterialTheme.typography.titleLarge.copy(fontFeatureSettings = "tnum"),
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
             )
+            Spacer(Modifier.height(2.dp))
             Text(
                 text = "$detail $value",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                color = AetherColors.textTertiary(),
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = value.toString(),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
     }
 }
 
@@ -605,7 +639,7 @@ internal fun libraryEmptyCopy(hasAnyEntry: Boolean, kindLabel: String?): Library
 
 @Composable
 private fun HookRow(hook: HookEntry, onClick: () -> Unit) {
-    DeepCard(modifier = Modifier.clickable(onClick = onClick)) {
+    DeepCard(modifier = Modifier.aetherPressable().clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text(
@@ -661,19 +695,11 @@ private fun HookRow(hook: HookEntry, onClick: () -> Unit) {
 /** 只读小 chip（event / agents）。 */
 @Composable
 private fun HookChip(text: String) {
-    Surface(
-        shape = McaShape.CardAction,
-        color = MaterialTheme.colorScheme.surface,
-        border = McaHairline.stroke(),
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
-    }
+    AetherStatusChip(
+        text = text,
+        containerColor = AetherColors.subSurface(),
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** matcher / command 等机器可读字段：等宽字体。 */

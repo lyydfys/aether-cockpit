@@ -19,14 +19,14 @@ import (
 )
 
 // sessionKey 引导授权：把浏览器 claude.ai 的 sessionKey Cookie 换成
-// 标准 OAuth 凭证（access_token / refresh_token），对标 relay-panel 的
+// 标准 OAuth 凭证（access_token / refresh_token），对标 高并发网关 的
 // CookieAuth 三步流（repository/claude_oauth_service.go + service/oauth_service.go）。
 //
 // 适用场景：本机没有 Claude Code 的 credentials.json（例如 Claude Code
 // 未登录或在别的机器上），只在浏览器里登录过 claude.ai 网页版时，
 // 从浏览器 DevTools 复制 sessionKey Cookie 即可完成接入，无需手动抓 token。
 //
-// 三步流（请求形状逐项核对过 relay-panel 源码）：
+// 三步流（请求形状逐项核对过 高并发网关 源码）：
 //  1. GET https://claude.ai/api/organizations（Cookie: sessionKey=...）
 //     → 组织数组 [{uuid, name, raven_type}]；多个组织时优先 raven_type=="team"，
 //     否则取第一个；响应字段 raven_type 为指针，nil 表示个人组织；
@@ -45,22 +45,22 @@ var (
 	// claudeAuthorizeURL 第 2 步的基地址，实际端点为
 	// {claudeAuthorizeURL}/v1/oauth/{orgUUID}/authorize。
 	claudeAuthorizeURL = "https://claude.ai"
-	// claudeOAuthTokenURL 第 3 步：授权码换 token（relay-panel 的 oauth.TokenURL，
+	// claudeOAuthTokenURL 第 3 步：授权码换 token（高并发网关 的 oauth.TokenURL，
 	// 注意与 auth.go 的刷新端点 console.anthropic.com 是不同域，两者均可用）。
 	claudeOAuthTokenURL = "https://platform.claude.com/v1/oauth/token"
 )
 
 const (
-	// sessionKeyScope 是 sessionKey 引导授权申请的 scope（relay-panel 的
+	// sessionKeyScope 是 sessionKey 引导授权申请的 scope（高并发网关 的
 	// oauth.ScopeAPI）：内部 API 调用不支持 org:create_api_key，因此不申请。
 	sessionKeyScope = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
-	// claudeRedirectURI 是 OAuth 回调地址（relay-panel 的 oauth.RedirectURI），
+	// claudeRedirectURI 是 OAuth 回调地址（高并发网关 的 oauth.RedirectURI），
 	// 授权端点只回显在响应的 redirect_uri 里，不做真实跳转。
 	claudeRedirectURI = "https://platform.claude.com/oauth/code/callback"
 
 	// browserUA 用于第 1/2 步访问 claude.ai 网页后端：配合账号 env.HTTPClient
-	// 的 uTLS Chrome 指纹（relay-panel 用 ImpersonateChrome 达到同样效果）。
+	// 的 uTLS Chrome 指纹（高并发网关 用 ImpersonateChrome 达到同样效果）。
 	browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
@@ -169,7 +169,7 @@ func fetchOrganizationUUID(ctx context.Context, client *http.Client, sessionKey 
 
 // fetchAuthorizationCode 第 2 步：用 sessionKey + PKCE 拿授权码。
 // 响应的 redirect_uri 形如 {claudeRedirectURI}?code=...&state=...；
-// state 非空时按 relay-panel 形态返回 "code#state"，第 3 步再拆开原样回传。
+// state 非空时按 高并发网关 形态返回 "code#state"，第 3 步再拆开原样回传。
 func fetchAuthorizationCode(ctx context.Context, client *http.Client, sessionKey, orgUUID, challenge, state string) (string, error) {
 	endpoint := strings.TrimRight(claudeAuthorizeURL, "/") + "/v1/oauth/" + url.PathEscape(orgUUID) + "/authorize"
 	payload, err := json.Marshal(map[string]any{
@@ -191,7 +191,7 @@ func fetchAuthorizationCode(ctx context.Context, client *http.Client, sessionKey
 		return "", ir.NewAPIError(ir.ErrCodeInternal, "构造授权请求失败").WithCause(err)
 	}
 	applySessionKeyCookie(req, sessionKey)
-	// 伪装成 claude.ai 网页端发起的授权（relay-panel 同款头组）。
+	// 伪装成 claude.ai 网页端发起的授权（高并发网关 同款头组）。
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("Cache-Control", "no-cache")
@@ -241,7 +241,7 @@ func fetchAuthorizationCode(ctx context.Context, client *http.Client, sessionKey
 }
 
 // exchangeCodeForToken 第 3 步：授权码 + code_verifier 换 token。
-// 请求形状照抄 relay-panel：JSON 体，Accept 与 UA 沿用其 resty 默认值。
+// 请求形状照抄 高并发网关：JSON 体，Accept 与 UA 沿用其 resty 默认值。
 func exchangeCodeForToken(ctx context.Context, client *http.Client, fullCode, verifier string) (*oauthToken, error) {
 	authCode := fullCode
 	reqBody := map[string]any{
@@ -316,7 +316,7 @@ func sessionKeyStepError(step string, status int, body []byte) error {
 	return ir.NewAPIError(ir.ErrCodeUpstreamFailed, msg).WithProvider(channelID)
 }
 
-// generatePKCE 生成 PKCE 参数（RFC 7636，与 relay-panel 同款）：
+// generatePKCE 生成 PKCE 参数（RFC 7636，与 高并发网关 同款）：
 // code_verifier 为 32 随机字节的 base64url（43 字符，满足 43-128 约束），
 // code_challenge 为其 SHA-256 的 base64url（S256）。
 func generatePKCE() (verifier, challenge string, err error) {

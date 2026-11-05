@@ -1,10 +1,10 @@
 package com.muyuchat.aether.ui
 
 import androidx.annotation.DrawableRes
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,44 +13,34 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.Icon
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.GatewayStatus
-import com.muyuchat.core.designsystem.McaIconPlate
-import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaPlateSize
-import com.muyuchat.core.designsystem.McaShape
 
 /*
  * 「更多」目录页。
  *
- * 排版照 UI_REFRESH_SPEC §1：区块标题用共享的 DeepSectionTitle（titleMedium + Bold，
- * 自带上内距，配列表 12dp 间距凑成区块间 24dp）；列表是**一层** DeepCard
- * （McaShape.Sheet + McaHairline + 左右 16dp），行只提供垂直 16dp，不再每行套一张卡。
- * 右侧状态文字与箭头在 SettingsRow / WorkspaceRow 里用同一串固定间隔收边，
- * 所以两类行的右缘严格对齐。
+ * 1. 修复原本 `WorkspaceEntry.iconRes()` 因旧标题字符串失配导致 10/12 行全部回退为太阳图标的严重 Bug；
+ * 2. 引入 8 色低饱和莫兰迪身份底盘 ([AetherIdentityDisc]) 与内缩分割线（Inset Hairline），
+ *    赋予目录页旗舰级视觉韵律；
+ * 3. 行尾采用低饱和胶囊标签 + 光学墨迹右对齐箭头 ([AetherChevron]) + 弹簧按压回弹 ([aetherPressable])。
  */
 
-/**
- * 组标题与首行之间的视觉间距。
- *
- * `DeepSectionTitle` 自己带上内距 12（与列表 12 凑成区块间 24），标题与卡片放在同一个 item 里，
- * 所以这里再补 8 + 行自身的 16 垂直内边距 = 标题到首行文字 24dp；卡片底边到下个标题文字仍是 12+12。
- */
 private val TitleToRows = 8.dp
 
 @Composable
@@ -70,7 +60,7 @@ internal fun MorePage(
         contentPadding = bubbleSafeContentPadding(),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
-        item {
+        item(key = "more_header") {
             Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
                 MobileHeader(status)
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -84,7 +74,7 @@ internal fun MorePage(
         }
         if (searching) {
             if (workspaces.isEmpty() && settings.isEmpty()) {
-                item {
+                item(key = "more_empty") {
                     Column {
                         DeepSectionTitle(text = "搜索结果", trailing = "0 项")
                         Spacer(Modifier.height(TitleToRows))
@@ -97,7 +87,7 @@ internal fun MorePage(
                     }
                 }
             } else {
-                item {
+                item(key = "more_search_results") {
                     Column {
                         DeepSectionTitle(
                             text = "搜索结果",
@@ -105,29 +95,22 @@ internal fun MorePage(
                         )
                         Spacer(Modifier.height(TitleToRows))
                         DeepCard(contentPadding = DeepListCardPadding) {
-                            // 命中时两类行混排：行的左右内边距与外缘都由这一张卡统一给。
                             if (settings.isNotEmpty()) {
-                                SettingsRows(settings, onSettings)
+                                SettingsRows(
+                                    groups = settings,
+                                    onSettings = onSettings,
+                                    showBottomDividerOnLast = workspaces.isNotEmpty(),
+                                )
                             }
-                            WorkspaceRows(workspaces, onWorkspace)
+                            if (workspaces.isNotEmpty()) {
+                                WorkspaceRows(workspaces, onWorkspace)
+                            }
                         }
                     }
                 }
             }
         } else {
-            item {
-                Column {
-                    DeepSectionTitle(
-                        text = "设置分组",
-                        trailing = "${settingsGroups().size} 组",
-                    )
-                    Spacer(Modifier.height(TitleToRows))
-                    DeepCard(contentPadding = DeepListCardPadding) {
-                        SettingsRows(settingsGroups(), onSettings)
-                    }
-                }
-            }
-            item {
+            item(key = "more_workspaces_group") {
                 Column {
                     DeepSectionTitle(
                         text = "全部工作区",
@@ -139,31 +122,35 @@ internal fun MorePage(
                     }
                 }
             }
+            item(key = "more_settings_group") {
+                Column {
+                    DeepSectionTitle(
+                        text = "设置分组",
+                        trailing = "${settingsGroups().size} 组",
+                    )
+                    Spacer(Modifier.height(TitleToRows))
+                    DeepCard(contentPadding = DeepListCardPadding) {
+                        SettingsRows(settingsGroups(), onSettings)
+                    }
+                }
+            }
         }
-        item { CapabilityNote() }
+        item(key = "more_capability_note") { CapabilityNote() }
     }
 }
 
-/**
- * 搜索无结果的空态说明：必须回答「为什么空」+「下一步做什么」。
- *
- * 计数取自 [settingsGroups] / [workspaceEntries]，不是手写的数字——目录哪天变了，这句话不会撒谎。
- */
 internal fun moreSearchEmptyDetail(query: String): String {
     val needle = query.trim()
     val hitScope = "${settingsGroups().size} 个设置分组与 ${workspaceEntries().size} 个工作区"
     if (needle.isEmpty()) {
-        // 理论上进不到这里（空查询会走完整目录），但纯函数不能留一个未定义分支。
         return "目录里共 $hitScope；输入关键词可以按名称或说明过滤。"
     }
     return "「$needle」没有命中 $hitScope 的标题或说明。换个更短的关键词，或清除搜索回到完整目录。"
 }
 
-/** 设置分组行右侧的状态尾标：只有真的能在设置页里找到的组才写「已接入」。 */
 internal fun settingsRowTrailing(group: SettingsGroup): String =
     if (group.available) "已接入" else "后续阶段"
 
-/** 工作区行右侧的去向尾标。与 `WorkspaceAction` 一一对应，不允许兜底成「已接入」。 */
 internal fun workspaceRowTrailing(entry: WorkspaceEntry): String {
     val action = entry.action
     return when (action) {
@@ -180,19 +167,51 @@ internal fun workspaceRowTrailing(entry: WorkspaceEntry): String {
 }
 
 @Composable
-private fun SettingsRows(groups: List<SettingsGroup>, onSettings: (SettingsGroup) -> Unit) {
-    groups.forEach { group ->
+private fun SettingsRows(
+    groups: List<SettingsGroup>,
+    onSettings: (SettingsGroup) -> Unit,
+    showBottomDividerOnLast: Boolean = false,
+) {
+    groups.forEachIndexed { index, group ->
+        val tone = group.identityTone()
+        val pair = AetherColors.identityPair(tone)
         DirectoryRow(
             trailing = settingsRowTrailing(group),
             trailingAccent = group.available,
             onClick = { onSettings(group) },
+            showDivider = index < groups.lastIndex || showBottomDividerOnLast,
             badge = {
-                Text(
-                    text = group.index,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(pair.container, RoundedCornerShape(10.dp))
+                        .drawWithCache {
+                            val strokePx = 0.6.dp.toPx()
+                            val r = 10.dp.toPx()
+                            onDrawWithContent {
+                                drawContent()
+                                drawRoundRect(
+                                    color = pair.border.copy(alpha = 0.55f),
+                                    topLeft = Offset(strokePx * 0.5f, strokePx * 0.5f),
+                                    size = size.copy(
+                                        width = (size.width - strokePx).coerceAtLeast(0f),
+                                        height = (size.height - strokePx).coerceAtLeast(0f),
+                                    ),
+                                    cornerRadius = CornerRadius(r, r),
+                                    style = Stroke(width = strokePx),
+                                )
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = group.index,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = pair.content,
+                    )
+                }
             },
             title = group.title,
             subtitle = group.subtitle,
@@ -202,20 +221,17 @@ private fun SettingsRows(groups: List<SettingsGroup>, onSettings: (SettingsGroup
 
 @Composable
 private fun WorkspaceRows(entries: List<WorkspaceEntry>, onWorkspace: (WorkspaceEntry) -> Unit) {
-    entries.forEach { entry ->
+    entries.forEachIndexed { index, entry ->
         DirectoryRow(
             trailing = workspaceRowTrailing(entry),
-            trailingAccent = !entry.desktopOnly &&
-                (entry.action as? WorkspaceAction.Tab)?.tab == MobileTab.OVERVIEW,
-            // 仅 Windows 的行也可点：点开是**说明为什么做不到**，不是执行动作。
+            trailingAccent = !entry.desktopOnly,
             dimmed = entry.desktopOnly,
             onClick = { onWorkspace(entry) },
+            showDivider = index < entries.lastIndex,
             badge = {
-                Icon(
-                    painter = painterResource(entry.iconRes()),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(McaIconSize.M),
+                AetherIdentityDisc(
+                    iconRes = entry.iconRes(),
+                    tone = entry.identityTone(),
                 )
             },
             title = entry.title,
@@ -225,10 +241,8 @@ private fun WorkspaceRows(entries: List<WorkspaceEntry>, onWorkspace: (Workspace
 }
 
 /**
- * 目录行的唯一形状：32dp 图形底板 + 标题/说明 + 右侧状态 + 箭头。
- *
- * 48dp 触控由整行承担（clickable 在 padding 之前）；右侧「状态 + 4dp + 箭头」是固定收边，
- * 所以同一张卡里所有行的箭头右缘、状态右缘都对齐，不会因为状态文字长短而错位。
+ * 旗舰级目录行：
+ * 34dp 8 色柔和底盘 + 标题/副标 + 低饱和状态胶囊 + 光学右对齐箭头 + 文字起始对齐分割线。
  */
 @Composable
 private fun DirectoryRow(
@@ -239,81 +253,131 @@ private fun DirectoryRow(
     onClick: () -> Unit,
     badge: @Composable () -> Unit,
     dimmed: Boolean = false,
+    showDivider: Boolean = false,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(vertical = DeepRowVertical)
-            .alpha(if (dimmed) 0.75f else 1f),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        McaIconPlate(size = McaPlateSize.Medium, shape = McaShape.Badge) { badge() }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-                // 1.3× 下标题不许被右侧状态挤成竖排单字：最多两行并允许省略。
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aetherPressable(scaleDown = 0.985f, onClick = onClick)
+                .padding(vertical = DeepRowVertical)
+                .alpha(if (dimmed) 0.68f else 1f),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            badge()
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            AetherStatusChip(
+                text = trailing,
+                kind = when {
+                    dimmed -> AetherChipKind.NEUTRAL
+                    trailingAccent -> AetherChipKind.ACCENT
+                    else -> AetherChipKind.NEUTRAL
+                },
             )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+            Spacer(Modifier.width(6.dp))
+            AetherChevron()
+        }
+        if (showDivider) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 48.dp)
+                    .height(0.5.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
             )
         }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = trailing,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (trailingAccent) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            // 状态词与箭头右缘同一条竖线：状态右对齐、单行、不换行；
-            // 最短留 72dp 让「已接入 / 后续阶段 / 仅 Windows」在 1.0× 与 1.3× 都右缘对齐。
-            textAlign = TextAlign.End,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Clip,
-            modifier = Modifier.widthIn(min = 72.dp),
-        )
-        Spacer(Modifier.width(4.dp))
-        Icon(
-            painter = painterResource(R.drawable.ic_chevron),
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(McaIconSize.S),
-        )
     }
 }
 
-/** 页脚口径说明：手机与 PC 的能力/数据边界，一句话讲清，不做成卡片。 */
 @Composable
 private fun CapabilityNote() {
     Text(
         text = "WSL、Windows 客户端扫描与进程控制、PC 隔离实例仅桌面端可用；手机与 PC 的账号、会话和账本不会自动同步。",
         style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = AetherColors.textTertiary(),
+        modifier = Modifier.padding(horizontal = 4.dp),
     )
 }
 
+/**
+ * 12 个工作区入口的精确图标映射（按 `action` + `title` 双保险匹配，彻底修复 10/12 掉入 else 的 Bug）。
+ */
 @DrawableRes
-private fun WorkspaceEntry.iconRes(): Int = when (title) {
-    "概览" -> R.drawable.ic_ws_overview
-    "渠道接入", "路由" -> R.drawable.ic_ws_channels
-    "账号额度", "额度快捷查看" -> R.drawable.ic_bolt
-    "用量" -> R.drawable.ic_ws_usage
-    "任务" -> R.drawable.ic_clock
-    "应用", "网关探针" -> R.drawable.ic_gateway
-    "会话", "请求" -> R.drawable.ic_ws_logs
-    "2FA", "脱敏" -> R.drawable.ic_shield
-    else -> R.drawable.ic_ws_settings
+internal fun WorkspaceEntry.iconRes(): Int = when (action) {
+    WorkspaceAction.Onboard -> R.drawable.ic_ws_onboard
+    WorkspaceAction.Wake -> R.drawable.ic_ws_tasks
+    WorkspaceAction.DesktopOnly -> R.drawable.ic_ws_apps
+    WorkspaceAction.Library -> R.drawable.ic_ws_library
+    WorkspaceAction.Probe -> R.drawable.ic_ws_probe
+    WorkspaceAction.Totp -> R.drawable.ic_ws_2fa
+    WorkspaceAction.Agents -> R.drawable.ic_ws_agents
+    WorkspaceAction.Clients -> R.drawable.ic_ws_clients
+    WorkspaceAction.Routing -> R.drawable.ic_ws_routing
+    WorkspaceAction.Plugins -> R.drawable.ic_ws_plugins
+    WorkspaceAction.Settings -> if (title.contains("脱敏")) {
+        R.drawable.ic_ws_redact
+    } else {
+        R.drawable.ic_ws_settings
+    }
+    is WorkspaceAction.Tab -> when (action.tab) {
+        MobileTab.OVERVIEW -> R.drawable.ic_nav_overview
+        MobileTab.CHANNELS -> R.drawable.ic_ws_channels
+        MobileTab.USAGE -> R.drawable.ic_ws_usage
+        MobileTab.REQUESTS -> R.drawable.ic_ws_logs
+        MobileTab.MORE -> R.drawable.ic_more
+    }
+    is WorkspaceAction.Pending -> R.drawable.ic_ws_settings
+}
+
+private fun WorkspaceEntry.identityTone(): AetherIdentityTone = when (action) {
+    WorkspaceAction.Onboard -> AetherIdentityTone.BLUE
+    WorkspaceAction.Wake -> AetherIdentityTone.AMBER
+    WorkspaceAction.DesktopOnly -> AetherIdentityTone.SLATE
+    WorkspaceAction.Library -> AetherIdentityTone.PURPLE
+    WorkspaceAction.Probe -> AetherIdentityTone.GREEN
+    WorkspaceAction.Totp -> AetherIdentityTone.CYAN
+    WorkspaceAction.Agents -> AetherIdentityTone.INDIGO
+    WorkspaceAction.Clients -> AetherIdentityTone.BLUE
+    WorkspaceAction.Routing -> AetherIdentityTone.PINK
+    WorkspaceAction.Plugins -> AetherIdentityTone.PURPLE
+    WorkspaceAction.Settings -> if (title.contains("脱敏")) {
+        AetherIdentityTone.AMBER
+    } else {
+        AetherIdentityTone.SLATE
+    }
+    is WorkspaceAction.Tab -> AetherIdentityTone.BLUE
+    is WorkspaceAction.Pending -> AetherIdentityTone.SLATE
+}
+
+private fun SettingsGroup.identityTone(): AetherIdentityTone = when (index) {
+    "01" -> AetherIdentityTone.BLUE
+    "02" -> AetherIdentityTone.CYAN
+    "03" -> AetherIdentityTone.PURPLE
+    "04" -> AetherIdentityTone.INDIGO
+    "05" -> AetherIdentityTone.AMBER
+    "06" -> AetherIdentityTone.GREEN
+    "07" -> AetherIdentityTone.PINK
+    "08" -> AetherIdentityTone.CYAN
+    "09" -> AetherIdentityTone.BLUE
+    "10" -> AetherIdentityTone.SLATE
+    else -> AetherIdentityTone.SLATE
 }

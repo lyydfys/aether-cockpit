@@ -3,7 +3,7 @@ package devin
 // 模型名 → 上游 chat_model_uid 的解析。
 //
 // Devin 上游只认 UID（如 swe-2-high / MODEL_PRIVATE_3 / MODEL_GPT_5_2_MEDIUM），
-// 且不同模型的思考档位后缀规则不同。规则移植自 RelayProxy
+// 且不同模型的思考档位后缀规则不同。规则移植自 代理服务进程
 // internal/runtime/executor/helps/devin_models.go；上游动态模型目录未接入，
 // 因此对未知模型退化为「原样透传」，对已知模型按静态档位表归一。
 

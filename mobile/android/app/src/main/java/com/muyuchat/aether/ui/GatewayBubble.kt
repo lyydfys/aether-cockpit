@@ -425,7 +425,9 @@ private fun BubbleMenu(
     onOverlayClick: () -> Unit,
 ) {
     Surface(
-        modifier = Modifier.width(264.dp),
+        modifier = Modifier
+            .width(264.dp)
+            .aetherSpecularRim(McaShape.Sheet),
         shape = McaShape.Sheet,
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),

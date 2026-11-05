@@ -146,14 +146,12 @@ internal fun TotpPage(
         item { MobileHeader(status) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_back,
+                    contentDescription = "返回",
+                    onClick = onBack,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
@@ -161,6 +159,12 @@ internal fun TotpPage(
                         subtitle = "本机 TOTP 验证码，密钥加密存储",
                     )
                 }
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_refresh,
+                    contentDescription = "刷新 2FA",
+                    onClick = onRefresh,
+                    enabled = status.running,
+                )
             }
         }
         when (state) {
@@ -201,7 +205,10 @@ internal fun TotpPage(
                     }
                 } else {
                     val codesById = state.codes.associateBy { it.id }
-                    items(state.entries.size) { index ->
+                    items(
+                        count = state.entries.size,
+                        key = { index -> state.entries[index].id },
+                    ) { index ->
                         val entry = state.entries[index]
                         TotpEntryCard(
                             entry = entry,
@@ -284,16 +291,10 @@ private fun TotpBatchBar(count: Int, canAdd: Boolean, onAdd: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        McaChip(
-            selected = false,
-            onClick = {},
-            label = {
-                Text(
-                    text = "$count 个条目",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            },
+        AetherStatusChip(
+            text = "$count 个条目",
+            containerColor = AetherColors.subSurface(),
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.width(8.dp))
         Text(
@@ -303,12 +304,12 @@ private fun TotpBatchBar(count: Int, canAdd: Boolean, onAdd: () -> Unit) {
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
-        McaButton(
+        AetherPillButton(
+            text = "添加 2FA",
             onClick = onAdd,
-            style = McaButtonStyle.Primary,
-            size = McaButtonSize.CardAction,
+            selected = true,
             enabled = canAdd,
-        ) { Text("添加 2FA") }
+        )
     }
 }
 
@@ -324,18 +325,10 @@ private fun TotpEntryCard(
     val title = entry.issuer.ifBlank { entry.account.ifBlank { "未命名平台" } }
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            McaIconPlate(
-                size = McaPlateSize.Medium,
-                shape = McaShape.Badge,
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-            ) {
-                Text(
-                    text = title.take(1),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
+            AetherMonogramPlate(
+                text = title,
+                size = 38.dp,
+            )
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -357,10 +350,10 @@ private fun TotpEntryCard(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            Text(
+            AetherStatusChip(
                 text = totpAlgoPeriodLabel(entry),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                containerColor = AetherColors.subSurface(),
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -378,63 +371,73 @@ private fun TotpEntryCard(
                 color = MaterialTheme.colorScheme.error,
             )
         } else {
-            // 验证码一行放不下时（1.3× 字体下 8 位码 + 复制按钮会挤出卡片），
-            // 按可用宽度改成两行：码在上、复制按钮在下。唯一允许的差异化是列数随宽度变化。
-            BoxWithConstraints {
-                val narrow = maxWidth < 300.dp
-                if (narrow) {
-                    Column(Modifier.fillMaxWidth()) {
-                        Text(
-                            text = formatTotpCode(code.code),
-                            style = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 2.sp),
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            softWrap = false,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        McaButton(
-                            onClick = { onCopy(code.code) },
-                            style = McaButtonStyle.Outlined,
-                            size = McaButtonSize.CardAction,
-                            enabled = code.code.isNotBlank(),
-                        ) { Text("复制") }
+            AetherSubSurface(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth()) {
+                    // 验证码一行放不下时（1.3× 字体下 8 位码 + 复制按钮会挤出卡片），
+                    // 按可用宽度改成两行：码在上、复制按钮在下。唯一允许的差异化是列数随宽度变化。
+                    BoxWithConstraints {
+                        val narrow = maxWidth < 280.dp
+                        if (narrow) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(
+                                    text = formatTotpCode(code.code),
+                                    style = MaterialTheme.typography.headlineSmall.copy(
+                                        letterSpacing = 2.sp,
+                                        fontFeatureSettings = "tnum",
+                                    ),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                AetherPillButton(
+                                    text = "复制",
+                                    onClick = { onCopy(code.code) },
+                                    iconRes = R.drawable.ic_copy,
+                                    enabled = code.code.isNotBlank(),
+                                )
+                            }
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = formatTotpCode(code.code),
+                                    style = MaterialTheme.typography.headlineSmall.copy(
+                                        letterSpacing = 2.sp,
+                                        fontFeatureSettings = "tnum",
+                                    ),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                AetherPillButton(
+                                    text = "复制",
+                                    onClick = { onCopy(code.code) },
+                                    iconRes = R.drawable.ic_copy,
+                                    enabled = code.code.isNotBlank(),
+                                )
+                            }
+                        }
                     }
-                } else {
+                    Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = formatTotpCode(code.code),
-                            style = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 2.sp),
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier.weight(1f),
+                        LinearProgressIndicator(
+                            progress = { totpRemainingFraction(code.remaining, entry.period) },
+                            modifier = Modifier.weight(1f).height(4.dp),
                         )
                         Spacer(Modifier.width(8.dp))
-                        McaButton(
-                            onClick = { onCopy(code.code) },
-                            style = McaButtonStyle.Outlined,
-                            size = McaButtonSize.CardAction,
-                            enabled = code.code.isNotBlank(),
-                        ) { Text("复制") }
+                        Text(
+                            text = "${code.remaining}s",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                LinearProgressIndicator(
-                    progress = { totpRemainingFraction(code.remaining, entry.period) },
-                    modifier = Modifier.weight(1f).height(4.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = "${code.remaining}s",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
         if (entry.note.isNotBlank()) {

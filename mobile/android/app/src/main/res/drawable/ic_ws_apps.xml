@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 应用启动：24x24 桌面窗口与启动箭头 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M4,6.5C4,5.12 5.12,4 6.5,4H17.5C18.88,4 20,5.12 20,6.5V15.5C20,16.88 18.88,18 17.5,18H6.5C5.12,18 4,16.88 4,15.5V6.5Z"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M8.5,20.5H15.5M12,18V20.5M10.2,9.2L13.8,11L10.2,12.8V9.2Z"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

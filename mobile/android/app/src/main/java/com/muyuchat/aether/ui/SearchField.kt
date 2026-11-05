@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -24,20 +25,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
-import com.muyuchat.core.designsystem.McaHairline
-import com.muyuchat.core.designsystem.McaIconButton
-import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaShape
 
 /**
- * Shared MCA-styled search field used by More and Channels.
- *
- * ⚠ 输入框的可点区必须自己撑到 48dp：`BasicTextField` 不像 `clickable` 那样由 Compose
- * 自动扩展触摸目标，它只吃自己 layout 的高度。之前 Row 固定 48dp、输入框只 wrap 一行字
- * （≈20dp），点行内的上下留白不会聚焦。
- *
- * TalkBack：placeholder 只是 decorationBox 里的装饰文本，不进语义树，所以这里显式给
- * `contentDescription`；否则读屏只会念"编辑框"。
+ * 旗舰级胶囊搜索栏：
+ * - 采用同心跑道胶囊 (`CircleShape`) + Specular Rim 顶边微光；
+ * - 右侧清除按钮采用同心 26dp 软底托 ([AetherCompactIconButton])，
+ *   彻底解决原本塞入 48dp `McaIconButton` 导致图标过小、外框臃肿的比例失衡问题。
  */
 @Composable
 internal fun SearchField(
@@ -45,25 +38,29 @@ internal fun SearchField(
     onQueryChange: (String) -> Unit,
     placeholder: String = "搜索功能名称",
 ) {
+    val dark = isAetherDarkTheme()
     Surface(
-        shape = McaShape.CardAction,
-        color = MaterialTheme.colorScheme.surface,
-        border = McaHairline.stroke(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .aetherSpecularRim(cornerRadius = 24.dp),
+        shape = CircleShape,
+        color = AetherColors.cardSurface(),
+        shadowElevation = if (dark) 0.dp else 0.5.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .padding(horizontal = 12.dp),
+                .heightIn(min = 46.dp)
+                .padding(start = 16.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_search),
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(McaIconSize.Xs),
+                tint = AetherColors.textTertiary(),
+                modifier = Modifier.size(18.dp),
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             BasicTextField(
                 value = query,
                 onValueChange = onQueryChange,
@@ -73,7 +70,7 @@ internal fun SearchField(
                     .wrapContentHeight(Alignment.CenterVertically)
                     .semantics { contentDescription = placeholder },
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall.copy(
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
                     color = MaterialTheme.colorScheme.onSurface,
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -82,8 +79,8 @@ internal fun SearchField(
                         if (query.isEmpty()) {
                             Text(
                                 text = placeholder,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AetherColors.textTertiary(),
                             )
                         }
                         inner()
@@ -91,17 +88,11 @@ internal fun SearchField(
                 },
             )
             if (query.isNotEmpty()) {
-                McaIconButton(
+                AetherCompactIconButton(
+                    iconRes = R.drawable.ic_close,
                     contentDescription = "清除搜索",
                     onClick = { onQueryChange("") },
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_close),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Xs),
-                    )
-                }
+                )
             }
         }
     }

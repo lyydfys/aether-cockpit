@@ -903,7 +903,7 @@ func discoverHomeServers(home string, known map[string]bool) []foundProjectServe
 	if _, servers, err := readJSONServers(filepath.Join(home, ".cursor", "mcp.json"), ".cursor/mcp.json", "mcpServers"); err == nil {
 		add("cursor", "claude", "Cursor", servers)
 	}
-	// 与 Local Provider Switch 的 MCP 面板对齐：这些客户端也各自维护 mcpServers。
+	// 与 本机配置库 的 MCP 面板对齐：这些客户端也各自维护 mcpServers。
 	addJSON(filepath.Join(home, ".gemini", "config", "mcp_config.json"), "mcpServers", "gemini_cli", "claude", "Gemini 配置")
 	addJSON(filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"), "mcpServers", "windsurf", "claude", "Windsurf")
 	addJSON(filepath.Join(home, ".continue", "config.json"), "mcpServers", "continue", "claude", "Continue")

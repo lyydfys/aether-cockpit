@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 网关与探针：24x24 雷达心电探针 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M12,20.5A8.5,8.5 0,1 0,12 3.5A8.5,8.5 0,1 0,12 20.5Z"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M7.2,12.2H9.6L11.1,9.2L13,15L14.5,12.2H16.8"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

@@ -216,14 +216,12 @@ internal fun PluginsPage(
         item { MobileHeader(status) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                McaIconButton(contentDescription = "返回", onClick = onBack) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_back),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_back,
+                    contentDescription = "返回",
+                    onClick = onBack,
+                    tint = MaterialTheme.colorScheme.onBackground,
+                )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     DeepPageTitle(
@@ -231,18 +229,12 @@ internal fun PluginsPage(
                         subtitle = "改写规则与内置能力",
                     )
                 }
-                McaIconButton(
+                AetherHeaderIconButton(
+                    iconRes = R.drawable.ic_refresh,
                     contentDescription = "刷新插件",
                     onClick = viewModel::refresh,
                     enabled = state !is PluginsUiState.Loading,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_refresh),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(McaIconSize.Optical.Action),
-                    )
-                }
+                )
             }
         }
         actionError?.let { message ->
@@ -285,7 +277,7 @@ internal fun PluginsPage(
                 if (snapshot.builtins.isEmpty()) {
                     item { DeepStateCard(title = "没有内置能力", detail = "服务端 builtin 列表为空。") }
                 } else {
-                    items(snapshot.builtins) { builtin -> BuiltinPluginCard(builtin) }
+                    items(snapshot.builtins, key = { it.id }) { builtin -> BuiltinPluginCard(builtin) }
                 }
                 item {
                     DeepSectionTitle(
@@ -304,7 +296,7 @@ internal fun PluginsPage(
                         )
                     }
                 } else {
-                    items(snapshot.rules) { rule ->
+                    items(snapshot.rules, key = { it.id }) { rule ->
                         PluginRuleCard(
                             rule = rule,
                             busy = busyId == rule.id,
@@ -353,17 +345,9 @@ private fun PluginRuleCard(
 ) {
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (rule.enabled) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        },
-                    ),
+            AetherStatusDot(
+                color = if (rule.enabled) AetherColors.success() else AetherColors.textTertiary(),
+                pulse = rule.enabled,
             )
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
@@ -408,12 +392,11 @@ private fun PluginRuleCard(
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.weight(1f))
-            McaButton(
+            AetherPillButton(
+                text = "配置",
                 onClick = onConfigure,
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
                 enabled = !busy,
-            ) { Text("配置") }
+            )
         }
     }
 }

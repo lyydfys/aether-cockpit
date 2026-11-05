@@ -1,10 +1,13 @@
 package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,11 +20,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,11 +34,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -53,10 +60,6 @@ import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
-import com.muyuchat.core.designsystem.McaIconButton
-import com.muyuchat.core.designsystem.McaIconSize
-import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -221,30 +224,73 @@ internal fun requestsKpis(page: RequestsData, period: String): List<RequestsKpi>
 
 @Composable
 private fun RequestsKpiCard(page: RequestsData, period: String) {
+    val kpis = requestsKpis(page, period)
+    val accents = listOf(
+        AetherIdentityTone.BLUE.foreground(),
+        AetherIdentityTone.GREEN.foreground(),
+        AetherIdentityTone.CYAN.foreground(),
+        AetherIdentityTone.PURPLE.foreground(),
+        AetherIdentityTone.AMBER.foreground(),
+    )
+    val columns = if (isLargeFontScale()) 1 else 2
     DeepCard {
-        requestsKpis(page, period).forEachIndexed { index, kpi ->
-            if (index > 0) {
-                Spacer(Modifier.height(10.dp))
-            }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = kpi.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = kpi.detail,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeepCardTitle("概览指标")
+            Spacer(Modifier.weight(1f))
+            AetherStatusChip(
+                text = requestsPeriodLabel(period),
+                tone = DeepTone.Neutral,
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            kpis.chunked(columns).forEachIndexed { rowIndex, rowItems ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    rowItems.forEachIndexed { colIndex, kpi ->
+                        val accent = accents.getOrElse(rowIndex * columns + colIndex) {
+                            MaterialTheme.colorScheme.primary
+                        }
+                        AetherSubSurface(
+                            modifier = Modifier.weight(1f),
+                            padding = PaddingValues(12.dp),
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(accent),
+                                    )
+                                    Text(
+                                        text = kpi.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Text(
+                                    text = kpi.value,
+                                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = kpi.detail,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                    color = AetherColors.textTertiary(),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
                 }
-                Text(
-                    text = kpi.value,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    textAlign = TextAlign.End,
-                )
             }
         }
     }
@@ -399,13 +445,14 @@ private fun RequestsTrendCard(page: RequestsData, period: String) {
     var metric by remember { mutableStateOf(RequestsChartMetric.TOTAL) }
     var form by remember { mutableStateOf(RequestsChartForm.BARS) }
     val scheme = MaterialTheme.colorScheme
+    val dangerColor = AetherColors.danger()
     DeepCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             DeepCardTitle("趋势")
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.weight(1f))
             Text(
                 text = "总计 ${requestsCount(page.calls)} 次 · ${requestsCost(page.cost)}",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 color = scheme.onSurfaceVariant,
             )
         }
@@ -415,15 +462,21 @@ private fun RequestsTrendCard(page: RequestsData, period: String) {
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            RequestsChartMetric.entries.forEach { value ->
-                RequestsTab(value.label, metric == value) { metric = value }
-            }
-            Spacer(Modifier.width(8.dp))
-            RequestsChartForm.entries.forEach { value ->
-                RequestsTab(value.label, form == value) { form = value }
-            }
+            AetherSegmentedPill(
+                options = RequestsChartMetric.entries,
+                selected = metric,
+                onSelect = { metric = it },
+                label = { it.label },
+            )
+            AetherSegmentedPill(
+                options = RequestsChartForm.entries,
+                selected = form,
+                onSelect = { form = it },
+                label = { it.label },
+            )
         }
         if (page.series.isEmpty()) {
             Text(
@@ -444,135 +497,207 @@ private fun RequestsTrendCard(page: RequestsData, period: String) {
             requestsChartPeak(totalCalls)
         }
         val peakCost = requestsChartPeak(totalCost)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "峰值 ${requestsCount(peakCalls.toLong())} 次",
-                style = MaterialTheme.typography.labelSmall,
-                color = scheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = "成本 ${requestsCost(peakCost)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = scheme.onSurfaceVariant,
-                textAlign = TextAlign.End,
-            )
-        }
         val palette = listOf(
-            scheme.primary,
-            scheme.tertiary,
-            scheme.secondary,
-            scheme.primary.copy(alpha = 0.55f),
-            scheme.tertiary.copy(alpha = 0.55f),
-            scheme.outline,
+            AetherIdentityTone.BLUE.foreground(),
+            AetherIdentityTone.PURPLE.foreground(),
+            AetherIdentityTone.GREEN.foreground(),
+            AetherIdentityTone.AMBER.foreground(),
+            AetherIdentityTone.CYAN.foreground(),
+            AetherIdentityTone.PINK.foreground(),
         )
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(TrendChartHeight),
-        ) {
-            val chartWidth = size.width
-            val chartHeight = size.height
-            // 基线：给柱/面积一个落脚点，也让"0"有视觉参照。
-            drawLine(
-                color = scheme.outlineVariant.copy(alpha = 0.6f),
-                start = Offset(0f, chartHeight),
-                end = Offset(chartWidth, chartHeight),
-                strokeWidth = 1f,
-            )
-            if (byModel) {
-                if (form == RequestsChartForm.AREA) {
-                    page.modelSeries.forEachIndexed { index, series ->
-                        val color = palette[index % palette.size]
-                        val dots = requestsAreaDots(
-                            values = series.points.map { it.calls.toDouble() },
-                            max = peakCalls,
-                            width = chartWidth,
-                            height = chartHeight,
-                        )
-                        if (dots.size >= 3) {
-                            val path = Path().apply {
-                                moveTo(dots.first().x, dots.first().y)
-                                dots.drop(1).forEach { lineTo(it.x, it.y) }
-                                close()
-                            }
-                            drawPath(path, color = color.copy(alpha = 0.28f))
-                        }
-                    }
-                } else {
-                    page.modelSeries.forEachIndexed { index, series ->
-                        val color = palette[index % palette.size]
-                        requestsGroupedBarRects(
-                            values = series.points.map { it.calls.toDouble() },
-                            max = peakCalls,
-                            width = chartWidth,
-                            height = chartHeight,
-                            groupCount = page.modelSeries.size,
-                            groupIndex = index,
-                        ).forEach { bar ->
-                            drawRect(
-                                color = color,
-                                topLeft = Offset(bar.left, bar.top),
-                                size = Size(
-                                    width = (bar.right - bar.left).coerceAtLeast(0f),
-                                    height = (bar.bottom - bar.top).coerceAtLeast(0f),
-                                ),
-                            )
-                        }
-                    }
-                }
-            } else {
-                val bars = requestsBarRects(totalCalls, peakCalls, chartWidth, chartHeight)
-                page.series.forEachIndexed { index, point ->
-                    val bar = bars.getOrNull(index) ?: return@forEachIndexed
-                    drawRect(
-                        color = scheme.primary,
-                        topLeft = Offset(bar.left, bar.top),
-                        size = Size(
-                            width = (bar.right - bar.left).coerceAtLeast(0f),
-                            height = (bar.bottom - bar.top).coerceAtLeast(0f),
-                        ),
+        AetherSubSurface(padding = PaddingValues(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "峰值 ${requestsCount(peakCalls.toLong())} 次",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                        color = scheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
                     )
-                    // 失败日：柱顶按失败占比染红（桌面同一语义，不把整天算失败）。
-                    val ratio = requestsFailureRatio(point.calls, point.errors)
-                    if (ratio > 0f) {
-                        val failedHeight = (bar.bottom - bar.top) * ratio
-                        drawRect(
-                            color = scheme.error,
-                            topLeft = Offset(bar.left, bar.top),
-                            size = Size(
-                                width = (bar.right - bar.left).coerceAtLeast(0f),
-                                height = failedHeight.coerceAtLeast(0f),
+                    Text(
+                        text = "成本 ${requestsCost(peakCost)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                        color = scheme.onSurfaceVariant,
+                        textAlign = TextAlign.End,
+                    )
+                }
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(TrendChartHeight),
+                ) {
+                    val chartWidth = size.width
+                    val chartHeight = size.height
+                    val barRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx())
+                    // 基线：给柱/面积一个落脚点，也让"0"有视觉参照。
+                    drawLine(
+                        color = scheme.outlineVariant.copy(alpha = 0.5f),
+                        start = Offset(0f, chartHeight),
+                        end = Offset(chartWidth, chartHeight),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                    if (byModel) {
+                        if (form == RequestsChartForm.AREA) {
+                            page.modelSeries.forEachIndexed { index, series ->
+                                val color = palette[index % palette.size]
+                                val values = series.points.map { it.calls.toDouble() }
+                                val dots = requestsAreaDots(
+                                    values = values,
+                                    max = peakCalls,
+                                    width = chartWidth,
+                                    height = chartHeight,
+                                )
+                                if (dots.size >= 3) {
+                                    val path = Path().apply {
+                                        moveTo(dots.first().x, dots.first().y)
+                                        dots.drop(1).forEach { lineTo(it.x, it.y) }
+                                        close()
+                                    }
+                                    drawPath(
+                                        path = path,
+                                        brush = Brush.verticalGradient(
+                                            colors = listOf(
+                                                color.copy(alpha = 0.34f),
+                                                color.copy(alpha = 0.04f),
+                                            ),
+                                        ),
+                                    )
+                                    val lineDots = requestsLineDots(values, peakCalls, chartWidth, chartHeight)
+                                    if (lineDots.size >= 2) {
+                                        val strokePath = Path().apply {
+                                            moveTo(lineDots.first().x, lineDots.first().y)
+                                            lineDots.drop(1).forEach { lineTo(it.x, it.y) }
+                                        }
+                                        drawPath(
+                                            path = strokePath,
+                                            color = color,
+                                            style = Stroke(
+                                                width = 1.75.dp.toPx(),
+                                                cap = StrokeCap.Round,
+                                                join = StrokeJoin.Round,
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            page.modelSeries.forEachIndexed { index, series ->
+                                val color = palette[index % palette.size]
+                                requestsGroupedBarRects(
+                                    values = series.points.map { it.calls.toDouble() },
+                                    max = peakCalls,
+                                    width = chartWidth,
+                                    height = chartHeight,
+                                    groupCount = page.modelSeries.size,
+                                    groupIndex = index,
+                                ).forEach { bar ->
+                                    val w = (bar.right - bar.left).coerceAtLeast(0f)
+                                    val h = (bar.bottom - bar.top).coerceAtLeast(0f)
+                                    if (w > 0f && h > 0f) {
+                                        drawRoundRect(
+                                            color = color,
+                                            topLeft = Offset(bar.left, bar.top),
+                                            size = Size(width = w, height = h),
+                                            cornerRadius = barRadius,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if (form == RequestsChartForm.AREA) {
+                            val areaDots = requestsAreaDots(totalCalls, peakCalls, chartWidth, chartHeight)
+                            if (areaDots.size >= 3) {
+                                val areaPath = Path().apply {
+                                    moveTo(areaDots.first().x, areaDots.first().y)
+                                    areaDots.drop(1).forEach { lineTo(it.x, it.y) }
+                                    close()
+                                }
+                                drawPath(
+                                    path = areaPath,
+                                    brush = Brush.verticalGradient(
+                                        colors = listOf(
+                                            scheme.primary.copy(alpha = 0.34f),
+                                            scheme.primary.copy(alpha = 0.03f),
+                                        ),
+                                    ),
+                                )
+                            }
+                            val lineDots = requestsLineDots(totalCalls, peakCalls, chartWidth, chartHeight)
+                            if (lineDots.size >= 2) {
+                                val linePath = Path().apply {
+                                    moveTo(lineDots.first().x, lineDots.first().y)
+                                    lineDots.drop(1).forEach { lineTo(it.x, it.y) }
+                                }
+                                drawPath(
+                                    path = linePath,
+                                    color = scheme.primary,
+                                    style = Stroke(
+                                        width = 2.dp.toPx(),
+                                        cap = StrokeCap.Round,
+                                        join = StrokeJoin.Round,
+                                    ),
+                                )
+                            }
+                        } else {
+                            val bars = requestsBarRects(totalCalls, peakCalls, chartWidth, chartHeight)
+                            page.series.forEachIndexed { index, point ->
+                                val bar = bars.getOrNull(index) ?: return@forEachIndexed
+                                val w = (bar.right - bar.left).coerceAtLeast(0f)
+                                val h = (bar.bottom - bar.top).coerceAtLeast(0f)
+                                if (w > 0f && h > 0f) {
+                                    drawRoundRect(
+                                        color = scheme.primary.copy(alpha = 0.88f),
+                                        topLeft = Offset(bar.left, bar.top),
+                                        size = Size(width = w, height = h),
+                                        cornerRadius = barRadius,
+                                    )
+                                    // 失败日：柱顶按失败占比染红（桌面同一语义，不把整天算失败）。
+                                    val ratio = requestsFailureRatio(point.calls, point.errors)
+                                    if (ratio > 0f) {
+                                        val failedHeight = (h * ratio).coerceAtLeast(0f)
+                                        drawRoundRect(
+                                            color = dangerColor,
+                                            topLeft = Offset(bar.left, bar.top),
+                                            size = Size(width = w, height = failedHeight),
+                                            cornerRadius = barRadius,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // 成本右轴折线：与柱子共用 x，但 y 按自己的峰值缩放。
+                    val costDots = requestsLineDots(totalCost, peakCost, chartWidth, chartHeight)
+                    if (costDots.size >= 2) {
+                        val costPath = Path().apply {
+                            moveTo(costDots.first().x, costDots.first().y)
+                            costDots.drop(1).forEach { lineTo(it.x, it.y) }
+                        }
+                        drawPath(
+                            path = costPath,
+                            color = scheme.tertiary,
+                            style = Stroke(
+                                width = 2.dp.toPx(),
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round,
                             ),
                         )
                     }
                 }
-            }
-            // 成本右轴折线：与柱子共用 x，但 y 按自己的峰值缩放。
-            val costDots = requestsLineDots(totalCost, peakCost, chartWidth, chartHeight)
-            if (costDots.size >= 2) {
-                val costPath = Path().apply {
-                    moveTo(costDots.first().x, costDots.first().y)
-                    costDots.drop(1).forEach { lineTo(it.x, it.y) }
-                }
-                drawPath(
-                    path = costPath,
-                    color = scheme.tertiary,
-                    style = Stroke(width = 2f),
-                )
-            }
-        }
-        // x 轴标签：只画稀疏后的下标，1.3× 也不会挤成一片或截断。
-        val indices = requestsChartLabelIndices(labels.size)
-        if (indices.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                indices.forEach { index ->
-                    Text(
-                        text = labels.getOrElse(index) { "" },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = scheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
+                // x 轴标签：只画稀疏后的下标，1.3× 也不会挤成一片或截断。
+                val indices = requestsChartLabelIndices(labels.size)
+                if (indices.isNotEmpty()) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        indices.forEach { index ->
+                            Text(
+                                text = labels.getOrElse(index) { "" },
+                                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                color = AetherColors.textTertiary(),
+                                maxLines = 1,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -587,12 +712,12 @@ private fun RequestsTrendCard(page: RequestsData, period: String) {
             Text(
                 text = if (totalCalls.any { it > 0.0 }) "调用（左轴）" else "调用（左轴）· 本周期无调用",
                 style = MaterialTheme.typography.labelSmall,
-                color = scheme.onSurfaceVariant,
+                color = AetherColors.textTertiary(),
             )
             Text(
                 text = REQUESTS_CHART_COST_LEGEND,
                 style = MaterialTheme.typography.labelSmall,
-                color = scheme.onSurfaceVariant,
+                color = AetherColors.textTertiary(),
             )
             if (byModel) {
                 requestsChartLegendNames(page.modelSeries).forEachIndexed { index, name ->
@@ -608,7 +733,7 @@ private fun RequestsTrendCard(page: RequestsData, period: String) {
             Text(
                 text = "周期未知：趋势按服务端返回的 series 原样画，不推算。",
                 style = MaterialTheme.typography.labelSmall,
-                color = scheme.onSurfaceVariant,
+                color = AetherColors.textTertiary(),
             )
         }
     }
@@ -638,6 +763,7 @@ private fun RequestsDetailCard(
                 .fillMaxWidth()
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
                 text = "请求明细",
@@ -645,35 +771,29 @@ private fun RequestsDetailCard(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.width(8.dp))
-            Text(
+            AetherStatusChip(
                 text = "共 ${page.total} 条",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
+                tone = DeepTone.Neutral,
             )
-            McaButton(
+            Spacer(Modifier.weight(1f))
+            AetherPillButton(
+                text = if (exportState is RequestsExportUiState.Exporting) "导出中…" else "导出",
                 onClick = onExportCsv,
-                style = McaButtonStyle.Outlined,
-                size = McaButtonSize.CardAction,
                 enabled = exportState !is RequestsExportUiState.Exporting,
-            ) { Text(if (exportState is RequestsExportUiState.Exporting) "导出中…" else "导出") }
-            Spacer(Modifier.width(4.dp))
-            McaIconButton(contentDescription = "刷新日志", onClick = onRefresh) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_refresh),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(McaIconSize.Optical.Action),
-                )
-            }
+            )
+            AetherHeaderIconButton(
+                iconRes = R.drawable.ic_refresh,
+                contentDescription = "刷新日志",
+                onClick = onRefresh,
+            )
         }
         // 时间范围（logs.js:161-165）
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            RequestsPeriods.forEach { (id, label) ->
-                RequestsTab(label = label, selected = query.period == id, onClick = { onPeriod(id) })
-            }
-        }
+        AetherSegmentedPill(
+            options = RequestsPeriods,
+            selected = RequestsPeriods.firstOrNull { it.first == query.period } ?: RequestsPeriods.first(),
+            onSelect = { onPeriod(it.first) },
+            label = { it.second },
+        )
         Spacer(Modifier.height(8.dp))
         // 搜索（logs.js:166-168）
         SearchField(
@@ -683,17 +803,28 @@ private fun RequestsDetailCard(
         )
         Spacer(Modifier.height(8.dp))
         // 全部 / 成功 / 失败（logs.js:169-172）+ 自动刷新（:173-185）。
-        // 原来是一个 Row + weight 撑开：1.3× 下第 4 个 chip 被压到只剩一个字宽，
-        // 「自动刷新 · 关」竖排成 6 行，还把空态挤出屏幕。现在固定两行：
-        // 第一行三个状态筛选，第二行「自动刷新」独占——只用现成的 Row，不引入实验性 API。
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            RequestsTab("全部", query.status == RequestsStatus.ALL) { onStatus(RequestsStatus.ALL) }
-            RequestsTab("成功", query.status == RequestsStatus.OK) { onStatus(RequestsStatus.OK) }
-            RequestsTab("失败", query.status == RequestsStatus.ERROR) { onStatus(RequestsStatus.ERROR) }
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            RequestsTab(if (autoRefresh) "自动刷新 · 开" else "自动刷新 · 关", autoRefresh, onAutoRefresh)
+        val statusOptions = listOf(
+            RequestsStatus.ALL to "全部",
+            RequestsStatus.OK to "成功",
+            RequestsStatus.ERROR to "失败",
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AetherSegmentedPill(
+                options = statusOptions,
+                selected = statusOptions.firstOrNull { it.first == query.status } ?: statusOptions.first(),
+                onSelect = { onStatus(it.first) },
+                label = { it.second },
+            )
+            Spacer(Modifier.weight(1f))
+            AetherPillButton(
+                text = if (autoRefresh) "自动刷新 · 开" else "自动刷新 · 关",
+                onClick = onAutoRefresh,
+                primary = autoRefresh,
+            )
         }
         Spacer(Modifier.height(12.dp))
         if (page.rows.isEmpty()) {
@@ -716,16 +847,21 @@ private fun RequestsDetailCard(
             )
             if (failedOnly) {
                 Spacer(Modifier.height(8.dp))
-                McaButton(
+                AetherPillButton(
+                    text = "显示全部",
                     onClick = { onFailedOnly(false) },
-                    style = McaButtonStyle.Outlined,
-                    size = McaButtonSize.CardAction,
-                ) { Text("显示全部") }
+                )
             }
         } else {
             RequestColumnHeader()
-            page.rows.forEach { row ->
+            page.rows.forEachIndexed { index, row ->
                 RequestRowView(row, onClick = { onSelect(row) })
+                if (index < page.rows.lastIndex) {
+                    HorizontalDivider(
+                        thickness = McaHairline.Width,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    )
+                }
             }
         }
     }
@@ -743,18 +879,18 @@ private fun RequestColumnHeader() {
         Text(
             text = "首字节 / 总耗时 · 输入 / 输出 · 输出速率 · 费用",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AetherColors.textTertiary(),
         )
     }
 }
 
 @Composable
 private fun RequestsTab(label: String, selected: Boolean, onClick: () -> Unit) {
-    McaButton(
+    AetherPillButton(
+        text = label,
         onClick = onClick,
-        style = if (selected) McaButtonStyle.Primary else McaButtonStyle.Outlined,
-        size = McaButtonSize.CardAction,
-    ) { Text(label) }
+        primary = selected,
+    )
 }
 
 /* ---------------- 行 ---------------- */
@@ -764,83 +900,99 @@ private fun RequestRowView(row: RequestRow, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .aetherPressable()
             .clickable(role = Role.Button, onClick = onClick)
             .padding(vertical = DeepRowVertical),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             Text(
                 text = formatRowTime(row.timeMs),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                color = AetherColors.textTertiary(),
             )
-            Spacer(Modifier.width(8.dp))
-            Text(
+            AetherStatusChip(
                 text = protocolLabel(row.kind),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                tone = DeepTone.Neutral,
             )
             if (row.stream) {
-                Spacer(Modifier.width(6.dp))
-                Text(
+                AetherStatusChip(
                     text = "流式",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tone = DeepTone.Neutral,
                 )
             }
             if (row.upstreamTruncated) {
-                Spacer(Modifier.width(6.dp))
-                Text(
+                AetherStatusChip(
                     text = "上游截断",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.tertiary,
+                    tone = DeepTone.Warning,
                 )
             }
+            Spacer(Modifier.weight(1f))
+            AetherStatusChip(
+                text = requestStatusText(row),
+                tone = when {
+                    row.status == 0 -> DeepTone.Neutral
+                    row.ok -> DeepTone.Info
+                    else -> DeepTone.Danger
+                },
+            )
         }
         Text(
             text = row.model,
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        Text(
-            text = requestProviderLine(row),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (row.providerId.isNotBlank() || row.providerName.isNotBlank()) {
+                ProviderBrandPlate(
+                    providerId = row.providerId,
+                    providerName = row.providerName.ifBlank { row.providerId },
+                    size = 20.dp,
+                )
+            }
+            Text(
+                text = requestProviderLine(row),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         requestErrorExplanation(row)?.let { explanation ->
             Text(
                 text = if (row.errorType.isBlank()) explanation else "$explanation · ${row.errorType}",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
+                color = AetherColors.danger(),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RequestMetric("首字节 / 总耗时", requestTtftText(row), Modifier.weight(1f))
-            RequestMetric("输入 / 输出", requestTokenPairText(row), Modifier.weight(1f))
-        }
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            RequestMetric("输出速率", requestSpeedText(row), Modifier.weight(1f))
-            RequestMetric("费用", requestCostText(row), Modifier.weight(1f))
-            Text(
-                text = requestStatusText(row),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium,
-                color = when {
-                    row.status == 0 -> MaterialTheme.colorScheme.onSurfaceVariant
-                    row.ok -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.error
-                },
-            )
+        AetherSubSurface(padding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RequestMetric("首字节 / 总耗时", requestTtftText(row), Modifier.weight(1f))
+                    RequestMetric("输入 / 输出", requestTokenPairText(row), Modifier.weight(1f))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RequestMetric("输出速率", requestSpeedText(row), Modifier.weight(1f))
+                    RequestMetric("费用", requestCostText(row), Modifier.weight(1f))
+                }
+            }
         }
     }
 }
@@ -851,11 +1003,12 @@ private fun RequestMetric(label: String, value: String, modifier: Modifier = Mod
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AetherColors.textTertiary(),
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+            fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
         )
     }
@@ -879,13 +1032,13 @@ private fun RequestsPager(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "显示 $start–$end / 共 ${page.total} 条",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
             Text(
                 text = "第 $current / $pages 页",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -1096,45 +1249,38 @@ private fun RequestDetailDialog(row: RequestRow, onDismiss: () -> Unit) {
                 modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AetherStatusChip(
                         text = if (row.status != 0 && !row.ok) "失败" else "成功",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = if (row.status != 0 && !row.ok) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        },
+                        tone = if (row.status != 0 && !row.ok) DeepTone.Danger else DeepTone.Info,
                     )
-                    Text(
+                    AetherStatusChip(
                         text = "HTTP ${if (row.status == 0) "—" else row.status}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tone = DeepTone.Neutral,
                     )
-                    Text(
+                    AetherStatusChip(
                         text = row.kind.ifBlank { "http" },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tone = DeepTone.Neutral,
                     )
-                    Text(
+                    AetherStatusChip(
                         text = if (row.stream) "流式" else "一次性",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tone = DeepTone.Neutral,
                     )
                 }
                 if (err != null) {
-                    Surface(
-                        shape = McaShape.CardAction,
-                        color = McaTonal.fill(),
-                        border = McaHairline.stroke(),
+                    AetherSubSurface(
+                        color = AetherColors.dangerContainer(),
+                        padding = PaddingValues(12.dp),
                     ) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Column(Modifier.fillMaxWidth()) {
                             Text(
                                 text = err,
                                 style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.SemiBold,
+                                color = AetherColors.danger(),
                             )
                             if (row.errorMessage.isNotBlank()) {
                                 Spacer(Modifier.height(6.dp))
@@ -1148,33 +1294,37 @@ private fun RequestDetailDialog(row: RequestRow, onDismiss: () -> Unit) {
                     }
                 }
                 requestDetailSections(row).forEach { section ->
-                    Text(
-                        text = section.title,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    section.fields.forEach { field ->
-                        Row(Modifier.fillMaxWidth()) {
+                    AetherSubSurface(padding = PaddingValues(12.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = field.label,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.widthIn(min = 72.dp),
-                            )
-                            Text(
-                                text = field.value,
-                                style = MaterialTheme.typography.bodySmall,
+                                text = section.title,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f),
                             )
+                            section.fields.forEach { field ->
+                                Row(Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = field.label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.widthIn(min = 72.dp),
+                                    )
+                                    Text(
+                                        text = field.value,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
                 Text(
                     text = "只读：不包含请求正文；错误正文来自上游，分享前请先脱敏。",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = AetherColors.textTertiary(),
                 )
             }
         },

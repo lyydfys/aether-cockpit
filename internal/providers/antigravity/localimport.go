@@ -17,7 +17,7 @@ import (
 // Windows 上官方客户端把 token 写在凭据管理器 target=gemini:antigravity；
 // 其他平台暂不支持读取，返回可执行的提示。
 func (p *Provider) DiscoverLocalAccounts(ctx context.Context) ([]*provider.CredentialDraft, error) {
-	// 两个来源，与 local-vault / relay-panel 一致：
+	// 两个来源，与 local-vault / 高并发网关 一致：
 	//  1. 官方客户端的系统凭据（Windows 凭据管理器 target=gemini:antigravity）；
 	//  2. 独立版（Standalone 2.x）在 Keyring 不可用时的回退文件
 	//     ~/.gemini/jetski-standalone-oauth-token。

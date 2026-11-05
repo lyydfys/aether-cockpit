@@ -45,6 +45,9 @@ elif [ "$avail_kb" -lt 3145728 ]; then
   echo "~~ C 盘可用不足 3 GB：能跑，但峰值余量不宽（实测 2.8 GB 可通过）"
 fi
 
+echo "== 1b. 禁止外部项目名硬锁 =="
+bash scripts/check-no-external-project-names.sh || { echo "!! 外部项目名硬锁失败"; fail=1; }
+
 echo "== 2. go vet =="
 go vet ./... || { echo "!! vet 失败"; fail=1; }
 

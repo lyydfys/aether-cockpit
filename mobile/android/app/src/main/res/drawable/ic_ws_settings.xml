@@ -2,13 +2,21 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="20"
-    android:viewportHeight="20">
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 24x24 精密六角圆角齿轮（告别圆圈加 8 根直线的“太阳简笔画”） -->
     <path
-        android:pathData="M7.4,10 A2.6,2.6 0 1 1 12.6,10 A2.6,2.6 0 1 1 7.4,10 Z M10,2.8 V4.8 M10,15.2 V17.2 M2.8,10 H4.8 M15.2,10 H17.2 M4.9,4.9 L6.3,6.3 M13.7,13.7 L15.1,15.1 M15.1,4.9 L13.7,6.3 M6.3,13.7 L4.9,15.1"
         android:fillColor="@android:color/transparent"
+        android:pathData="M12,15A3,3 0,1 0,12 9A3,3 0,1 0,12 15Z"
+        android:strokeWidth="1.85"
         android:strokeColor="#FF000000"
-        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M19.4,15a1.65,1.65 0,0 0,0.33 1.82l0.06,0.06a2,2 0,0 1,-2.83 2.83l-0.06,-0.06a1.65,1.65 0,0 0,-1.82 -0.33,1.65 1.65,0 0,0 -1,1.51V21a2,2 0,0 1,-4 0v-0.09A1.65,1.65 0,0 0,9 19.4a1.65,1.65 0,0 0,-1.82 0.33l-0.06,0.06a2,2 0,0 1,-2.83 -2.83l0.06,-0.06a1.65,1.65 0,0 0,0.33 -1.82,1.65 1.65,0 0,0 -1.51,-1H3a2,2 0,0 1,0 -4h0.09A1.65,1.65 0,0 0,4.6 9a1.65,1.65 0,0 0,-0.33 -1.82l-0.06,-0.06a2,2 0,0 1,2.83 -2.83l0.06,0.06a1.65,1.65 0,0 0,1.82 0.33H9a1.65,1.65 0,0 0,1 -1.51V3a2,2 0,0 1,4 0v0.09a1.65,1.65 0,0 0,1 1.51,1.65 1.65,0 0,0 1.82,-0.33l0.06,-0.06a2,2 0,0 1,2.83 2.83l-0.06,0.06a1.65,1.65 0,0 0,-0.33 1.82V9a1.65,1.65 0,0 0,1.51 1H21a2,2 0,0 1,0 4h-0.09a1.65,1.65 0,0 0,-1.51 1Z"
+        android:strokeWidth="1.75"
+        android:strokeColor="#FF000000"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 </vector>

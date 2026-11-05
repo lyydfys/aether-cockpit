@@ -233,14 +233,12 @@ internal fun clientKindLine(entry: ClientEntry): String = buildList {
 @Composable
 private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabled: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        McaIconButton(contentDescription = "返回", onClick = onBack) {
-            Icon(
-                painter = painterResource(R.drawable.ic_back),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_back,
+            contentDescription = "返回",
+            onClick = onBack,
+            tint = MaterialTheme.colorScheme.onBackground,
+        )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
@@ -248,18 +246,12 @@ private fun PageHeadline(onBack: () -> Unit, onRefresh: () -> Unit, refreshEnabl
                 subtitle = "接入片段 · 只读",
             )
         }
-        McaIconButton(
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_refresh,
             contentDescription = "刷新客户端",
             onClick = onRefresh,
             enabled = refreshEnabled,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_refresh),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        )
     }
 }
 
@@ -274,7 +266,7 @@ private fun ClientRow(entry: ClientEntry) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = DeepRowVertical),
-        verticalAlignment = Alignment.Top,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(
@@ -300,15 +292,10 @@ private fun ClientRow(entry: ClientEntry) {
             }
         }
         Spacer(Modifier.width(8.dp))
-        Text(
+        AetherStatusChip(
             text = clientDetectedLabel(entry.detected),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (entry.detected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.padding(top = 4.dp),
+            containerColor = if (entry.detected) MaterialTheme.colorScheme.primaryContainer else AetherColors.subSurface(),
+            contentColor = if (entry.detected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

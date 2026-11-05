@@ -95,7 +95,7 @@ func TestLocalVaultImport(t *testing.T) {
 	if strings.Contains(body, "anti-access") || strings.Contains(body, "codex-access") {
 		t.Fatal("importapps 泄漏了 local-vault 凭证")
 	}
-	if !strings.Contains(body, "Local Vault") || !strings.Contains(body, "ant@example.com") {
+	if !strings.Contains(body, "本机加密凭据库") || !strings.Contains(body, "ant@example.com") {
 		t.Fatalf("importapps 没有列出 local-vault 账号: %s", body[:min(500, len(body))])
 	}
 

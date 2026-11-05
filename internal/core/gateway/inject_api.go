@@ -67,7 +67,7 @@ export AETHER_API_KEY=%s`, origin, apiKey),
 			ID:      "openai_env",
 			Name:    "OpenAI 兼容客户端",
 			Kind:    "env",
-			Comment: "Cursor / ChatDesktop / 任意 OpenAI 兼容客户端都适用。",
+			Comment: "任意 OpenAI 兼容客户端都适用（桌面客户端、IDE 插件、CLI 均可）。",
 			Snippet: fmt.Sprintf("export OPENAI_BASE_URL=%s/v1\nexport OPENAI_API_KEY=%s", origin, apiKey),
 		},
 		{

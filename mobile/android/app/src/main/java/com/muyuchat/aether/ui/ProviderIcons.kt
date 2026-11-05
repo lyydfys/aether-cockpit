@@ -1,44 +1,56 @@
 package com.muyuchat.aether.ui
 
 import androidx.annotation.DrawableRes
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.muyuchat.aether.R
 
 /**
- * 渠道品牌图标：桌面端 `internal/web/ui2/js/brandicons.js` 的 `ICONS` 映射，原样搬到手机端。
+ * 渠道品牌图标映射与旗舰级底盘组件。
  *
- * 图标来源：`internal/web/ui2/assets/icons` 里的 svg → `res/drawable/ic_brand_*.xml`
- * （由 `VectorDrawable` 转换，见汇报里的转换说明）。桌面端取不到图时会回退成
- * 「品牌色 + 首字母」，手机端没有这一套，统一回退到通用渠道图标 [FALLBACK_PROVIDER_ICON]。
- *
- * @property res 图标资源；`mono = true` 的是单色标（桌面 `brandicons.js` 的 `MONO`
- *   集合里那些纯黑/`currentColor` 的标），在深色主题下要按主题色 tint，否则会整块消失。
+ * 1. [providerIcon] 保持与桌面端 `brandicons.js` 的 100% 映射合同；
+ * 2. 将 `cline` 纳入单色自适应染色集合，彻底解决深色模式下 `#18181B` 隐身问题；
+ * 3. 新增 [ProviderBrandPlate]：有专属矢量标时渲染带微光倒角的精致底盘，
+ *    属于跳过集（antigravity / azure / workbuddy 等）或自定义渠道时自动渲染
+ *    8 色莫兰迪首字母徽章 ([AetherMonogramPlate])，并支持右下角在线状态呼吸点。
  */
 internal data class ProviderIcon(
     @DrawableRes val res: Int,
     val mono: Boolean,
 )
 
-/** 未知渠道的兜底：桌面端"回退为品牌色字母块"，手机端用通用渠道图标（不编造品牌）。 */
+/** 未知渠道的兜底图标资源（保持单测合同）。 */
 internal val FALLBACK_PROVIDER_ICON: ProviderIcon =
     ProviderIcon(R.drawable.ic_ws_channels, mono = true)
 
 /**
- * 单色标（需要 tint）。前 15 个与桌面 `brandicons.js:MONO` 一一对应；
- * `kiro`/`windsurf` 是纯白/近黑填充，同样必须 tint 才能在两种主题下都看得见。
+ * 单色标（需要按主题色 tint）。
+ * 包含桌面 `brandicons.js:MONO` 集合，以及 `kiro`、`windsurf`、`cline` 等近黑/纯白图标。
  */
 private val MONO_BRANDS: Set<String> = setOf(
     "claude", "cursor", "devin", "githubcopilot", "kimi", "lmstudio", "moonshot",
     "ollama", "openai", "open-design", "opencode", "siliconflow", "stepfun",
-    "tencentcloud", "xai", "kiro", "windsurf",
+    "tencentcloud", "xai", "kiro", "windsurf", "cline",
 )
 
-/**
- * provider_id → 品牌图标。键与 `brandicons.js` 的 `ICONS` 完全一致（含所有别名）。
- *
- * 已跳过（图标含渐变/遮罩，无法转 VectorDrawable）：`antigravity`(mask+filter+use)、
- * `azure`(linearGradient)、`workbuddy`(linearGradient+filter+clipPath)；另有
- * `typesafe`、`commandcode` 在桌面端本来就是 PNG 位图。这 5 个品牌回落到通用图标。
- */
 internal fun providerIcon(providerId: String?): ProviderIcon {
     val key = providerId?.trim()?.lowercase().orEmpty()
     return when (key) {
@@ -78,7 +90,6 @@ internal fun providerIcon(providerId: String?): ProviderIcon {
         "stepfun" -> brand("stepfun")
         "devin" -> brand("devin")
         "open-design" -> brand("open-design")
-        // 未转换（渐变/遮罩/位图）与未知 id 一律回落，绝不手绘
         else -> FALLBACK_PROVIDER_ICON
     }
 }
@@ -129,12 +140,6 @@ private fun drawableForBrand(name: String): Int = when (name) {
     else -> FALLBACK_PROVIDER_ICON.res
 }
 
-/**
- * 桌面 `brandicons.js` 里**有专属图标**的 provider_id 全集（含别名）。
- *
- * 用于单测校验"桌面的映射一个都没漏"；不含 `antigravity`/`azure`/`workbuddy`/
- * `typesafe`/`commandcode`（这 5 个的回退在 [providerIcon] 的 else 分支里，另有单测断言）。
- */
 internal val BRANDED_PROVIDER_IDS: Set<String> = setOf(
     "claude-sub",
     "openai", "openai-compat", "codex",
@@ -174,8 +179,107 @@ internal val BRANDED_PROVIDER_IDS: Set<String> = setOf(
     "open-design",
 )
 
-/** 桌面有映射但图标无法转换（渐变/遮罩/位图）的 id：必须回落到通用图标。 */
 internal val SKIPPED_PROVIDER_IDS: Set<String> = setOf(
     "antigravity", "antigravity-ide", "azure", "typesafe", "commandcode",
     "workbuddy-cn", "workbuddy-intl",
 )
+
+/**
+ * 旗舰级渠道品牌底盘：
+ * - 若有专属品牌矢量图，渲染在带微光边框的 36dp 圆角底盘中；
+ * - 若为跳过品牌或未知/自定义渠道，自动渲染 8 色莫兰迪首字徽章 ([AetherMonogramPlate])；
+ * - 可选右下角在线状态小圆点（带实体描边防混色）。
+ */
+@Composable
+internal fun ProviderBrandPlate(
+    providerId: String?,
+    modifier: Modifier = Modifier,
+    providerName: String? = null,
+    name: String? = providerName,
+    plateSize: Dp = 36.dp,
+    size: Dp = plateSize,
+    glyphSize: Dp = 20.dp,
+    online: Boolean? = null,
+) {
+    val spec = providerIcon(providerId)
+    val dark = isAetherDarkTheme()
+    val corner = RoundedCornerShape(10.dp)
+    val resolvedName = name ?: providerName
+    val resolvedSize = size
+
+    Box(modifier = modifier.size(resolvedSize), contentAlignment = Alignment.Center) {
+        if (spec.res == FALLBACK_PROVIDER_ICON.res) {
+            val display = resolvedName?.takeIf { it.isNotBlank() }
+                ?: providerId?.takeIf { it.isNotBlank() }
+                ?: "A"
+            AetherMonogramPlate(
+                label = display,
+                toneKey = providerId ?: display,
+                size = resolvedSize,
+                shape = corner,
+            )
+        } else {
+            val isFullBleedLogo = spec.res == R.drawable.ic_brand_qoder || spec.res == R.drawable.ic_brand_zai
+            Box(
+                modifier = Modifier
+                    .size(resolvedSize)
+                    .clip(corner)
+                    .background(AetherColors.subSurface(), corner)
+                    .drawWithCache {
+                        val strokePx = 0.6.dp.toPx()
+                        val r = 10.dp.toPx()
+                        val rimColor = if (dark) {
+                            Color.White.copy(alpha = 0.10f)
+                        } else {
+                            Color(200, 210, 226).copy(alpha = 0.60f)
+                        }
+                        onDrawWithContent {
+                            drawContent()
+                            drawRoundRect(
+                                color = rimColor,
+                                topLeft = Offset(strokePx * 0.5f, strokePx * 0.5f),
+                                size = this.size.copy(
+                                    width = (this.size.width - strokePx).coerceAtLeast(0f),
+                                    height = (this.size.height - strokePx).coerceAtLeast(0f),
+                                ),
+                                cornerRadius = CornerRadius(r, r),
+                                style = Stroke(width = strokePx),
+                            )
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(spec.res),
+                    contentDescription = null,
+                    tint = if (spec.mono) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        Color.Unspecified
+                    },
+                    modifier = Modifier.size(if (isFullBleedLogo) (glyphSize + 4.dp) else glyphSize),
+                )
+            }
+        }
+
+        if (online != null) {
+            val dotColor = if (online) AetherColors.success() else AetherColors.textTertiary()
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 2.dp, y = 2.dp)
+                    .size(11.dp)
+                    .clip(CircleShape)
+                    .background(AetherColors.cardSurface(), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(dotColor, CircleShape),
+                )
+            }
+        }
+    }
+}

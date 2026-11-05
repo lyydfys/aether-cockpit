@@ -98,7 +98,7 @@ type Profile struct {
 	OfficialBinding func(credentials map[string]string) *provider.OfficialBinding
 
 	// QuotaKind 声明用量读取方式：
-	//   - "relay"：relay-panel/relay-panel 一类中继面板的账单接口（剩余美元）；
+	//   - "relay"：通用中转面板 一类中继面板的账单接口（剩余美元）；
 	//   - "opencode_go"：OpenCode Go 订阅的滚动窗口。
 	// 留空表示该渠道没有已知的用量接口，用量页不会为它发起读取。
 	QuotaKind string

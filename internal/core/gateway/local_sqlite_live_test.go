@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-// TestLiveLocalProviderSwitchRead 读取本机真实的 local-provider-switch.db（只读、不打印任何 Key），
+// TestLiveLocalSQLiteRead 读取本机真实的 provider-switch.db（只读、不打印任何 Key），
 // 确认解析规则对实际数据成立。默认跳过；CC_LIVE=1 才跑。
-func TestLiveLocalProviderSwitchRead(t *testing.T) {
+func TestLiveLocalSQLiteRead(t *testing.T) {
 	if os.Getenv("CC_LIVE") != "1" {
-		t.Skip("设置 CC_LIVE=1 才读取本机 Local Provider Switch 数据库")
+		t.Skip("设置 CC_LIVE=1 才读取本机 本机配置库 数据库")
 	}
-	entries, err := readLocalProviderSwitchEntries()
+	entries, err := readLocalSQLiteEntries()
 	if err != nil {
 		t.Fatalf("读取失败: %v", err)
 	}

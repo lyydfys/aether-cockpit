@@ -71,10 +71,6 @@ docs/internal/
 
 # 竞品对标材料永不入库：含对第三方项目的实现级分析，只作本机参考。
 # 明确列出文件名，避免将来有人把 docs/internal/ 挪回 docs/ 后顺带提交。
-docs/AETHER_DEEP_ANALYSIS.md
-docs/**/vs-aether/
-docs/**/AETHER_*.md
-docs/**/*aether*-analysis*.md
 
 # 云同步的运行时状态与锁（正常落在 data/ 下，这里兜底防止落到仓库任意位置）
 sync-state.json

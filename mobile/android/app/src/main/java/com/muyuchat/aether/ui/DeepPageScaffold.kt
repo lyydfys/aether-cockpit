@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,91 +17,63 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
-import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaShape
-import com.muyuchat.core.designsystem.McaTonal
 
 /* ============================================================================
- * 深层页面共享排版原语：全站唯一定义处
+ * 深层页面共享排版与旗舰级表面原语
  *
- * 这些原语原先是寄居在 RequestsPage.kt 顶部的（当时写集不允许新建文件），
- * 结果 Requests / Settings / Library / Sessions / Wake / Plugins / More /
- * GatewayProbe / Routing / Clients / DesktopOnly / Diagnose / Drift 十多个页面
- * 都反向依赖"请求页"这个语义上无关的文件。现在单独成文件，谁都不欠谁。
- *
- * 改签名时要一次改完所有调用点；**不要**在页面里就地复制一份。
- *
- * 规格（UI_REFRESH_SPEC §1.2，第二轮密度收敛）：卡片水平内边距 16、垂直 20（上下各 +4，内容不贴边）；
- * 卡片之间 16；区块之间 24（标题上内距 = 24 - 16 = 8）；
- * 区块标题 titleMedium + Bold（**Bold 只允许出现在标题上**，正文级文字不加 Bold）；
- * 列表行垂直 16dp（触控下限）；一个卡片内最多一条分隔线。
+ * 保持所有布局节奏常量（16 / 24 / 88）与单测合同 100% 兼容，
+ * 同时将底层视觉材质升级为：
+ *  - 浅色模式：纯净白实体卡（与微光冷调背板形成通透对比）+ 顶边高光倒角 + 柔和微阴影
+ *  - 深色模式：微亮石墨层 + 顶部 13% 受光白边向下渐隐为 3% 环境轮廓线
  * ========================================================================== */
 
 /** 卡片水平内边距：统一 16dp。 */
 internal val DeepCardPadding: Dp = 16.dp
 
-/** 卡片垂直内边距：**16**（与水平一致）。
- *
- * 曾经为了让 1.3× 下内容不贴边抬到 20；但验收口径是「1.0× 与 1.3× 同等对待」，
- * 20 在 1.0× 下明显偏松（一屏少一条）。两档都用 16。
- */
+/** 卡片垂直内边距：16dp（与水平一致）。 */
 internal val DeepCardVerticalPadding: Dp = 16.dp
 
-/** 列表卡片内边距：水平 16、垂直 0。
- *
- * 行自己带 [DeepRowVertical] 的垂直内边距，卡片再给 4 就是重复留白（首行外缘 24）。
- * 归零后首末行外缘正好等于 [DeepCardVerticalPadding]。
- */
+/** 列表卡片内边距：水平 16、垂直 0。 */
 internal val DeepListCardPadding: PaddingValues =
     PaddingValues(horizontal = DeepCardPadding, vertical = 0.dp)
 
-/**
- * 卡片之间的间距：**16dp**（Lead 裁决，以 16 为准）。
- *
- * 为什么不回到 12：用户这轮的核心反馈是"过于密集拥挤"，块与块之间需要呼吸感；
- * 密度靠**卡内**收紧（垂直内边距 20→16、列表卡垂直 4→0）实现，块间保持 16。
- * 1.3× 下这条尤其重要：字大了若块间只有 12，相邻卡片会视觉粘连。
- */
+/** 卡片之间的间距：16dp。 */
 internal val DeepCardGap: Dp = 16.dp
 
 /** 区块之间的间距：统一 24dp（由「列表 16dp + 标题上内距 8dp」组成）。 */
 internal val DeepBlockGap: Dp = 24.dp
 
-/** 列表行的垂直内边距：统一 16dp（行高约 52dp，顺带满足 48dp 触控下限）。 */
+/** 列表行的垂直内边距：统一 16dp（行高约 52dp，满足 48dp 触控下限）。 */
 internal val DeepRowVertical: Dp = 16.dp
 
-/**
- * 页面主标题到首个内容块的间距：**与 [DeepCardGap] 同一个数**（当前 16dp）。
- *
- * 两者刻意共用同一个常量：一个变量只有一种含义，避免"标题间距"和"卡间"各自漂移。
- * 页面级 LazyColumn 用 `spacedBy(DeepCardGap)` 时天然一致。
- */
+/** 页面主标题到首个内容块的间距：与 [DeepCardGap] 同一个数（16dp）。 */
 internal val DeepPageTitleGap: Dp = DeepCardGap
 
 /**
- * 页面级标题：**全站唯一实现**，不要在页面里自己写 `Text(style = headlineXxx)`。
+ * 页面级标题：全站唯一实现。
  *
- * 字阶：`titleLarge`（22sp）+ Bold —— 比原来的 headlineSmall/headlineMedium 再降一档，
- * 因为 28sp 标题会把首屏吃掉约 1/3 屏。
- * 副标题：`labelSmall` + onSurfaceVariant，**放在标题同一行右侧**而不是单独一行，
- * 这样每页少一行（约 20dp）；太长会自动省略号，不会把标题挤走。
- *
- * 卡片内标题请用 [DeepCardTitle]，本组件只用于页面级。
+ * 主标题使用 `titleLarge` + Bold，副标题采用低饱和度胶囊徽章或第三级墨色展示在一侧，
+ * 让顶栏既有旗舰级仪表盘的精致感，又保持极高的首屏信息密度。
  */
 @Composable
 internal fun DeepPageTitle(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleLarge,
@@ -108,35 +81,31 @@ internal fun DeepPageTitle(
             color = MaterialTheme.colorScheme.onBackground,
         )
         if (!subtitle.isNullOrBlank()) {
-            Spacer(Modifier.width(8.dp))
-            Text(
+            Spacer(Modifier.width(10.dp))
+            AetherStatusChip(
                 text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                kind = AetherChipKind.NEUTRAL,
                 modifier = Modifier.weight(1f, fill = false),
+            )
+        }
+        if (trailing != null) {
+            Spacer(Modifier.weight(1f))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = trailing,
             )
         }
     }
 }
 
-/**
- * 页面可滚动内容底部给悬浮球预留的空间：球 64 + 边距 8 + 余量 16 = 88。
- *
- * 只作为 LazyColumn 的 `contentPadding` 使用；不要给页面根容器加常驻 padding，
- * 否则每页底部会永久出现一条空白带。
- */
+/** 页面可滚动内容底部给悬浮球预留的空间：88dp。 */
 internal val BubbleSafeBottom: Dp = 88.dp
 
-/**
- * 深层页面 LazyColumn 的统一 contentPadding：底部滚出悬浮球的安全区。
- *
- * 页面正常滚动时看不到这块空间，只有滚到末尾才多出 88dp，最后一张卡不会被球压住。
- */
+/** 深层页面 LazyColumn 的统一 contentPadding。 */
 internal fun bubbleSafeContentPadding(
     horizontal: Dp = 20.dp,
-    top: Dp = 8.dp,
+    top: Dp = 10.dp,
     bottom: Dp = BubbleSafeBottom,
 ): PaddingValues = PaddingValues(
     start = horizontal,
@@ -145,24 +114,16 @@ internal fun bubbleSafeContentPadding(
     bottom = bottom,
 )
 
-/** 卡片色调。只在这三档里选，避免每页各发明一种底色。 */
-internal enum class DeepTone { Neutral, Info, Danger }
+/** 卡片色调。 */
+internal enum class DeepTone { Neutral, Info, Danger, Warning, Success }
 
-/**
- * 1.3× 档的判定口径：系统字体缩放 ≥ 1.25。
- *
- * 全站**只允许一种**两档差异：列数（2 列 ↔ 1 列、横向滚动 ↔ 换行）。
- * 需要按档位切列数的地方调它；不要用它去改字号、字重或内边距。
- */
+/** 1.3× 档的判定口径：系统字体缩放 ≥ 1.25。 */
 @Composable
 internal fun isLargeFontScale(threshold: Float = 1.25f): Boolean =
     LocalDensity.current.fontScale >= threshold
 
 /**
- * 区块标题：`titleMedium + Bold`，右侧可选计数或动作。
- *
- * 上内距 = 24 - 16，配合 LazyColumn 的 16dp 列表间距凑出「区块间 24dp」；
- * 因此页面不要自己再给标题加 Spacer。
+ * 区块标题：`titleMedium + Bold`，右侧可选计数徽章或动作。
  */
 @Composable
 internal fun DeepSectionTitle(
@@ -174,7 +135,6 @@ internal fun DeepSectionTitle(
     val base = modifier
         .fillMaxWidth()
         .padding(top = DeepBlockGap - DeepCardGap)
-    // 1.3× 下标题与计数挤一行会把标题压成两行：计数降到标题下一行（允许的"换行"差异）。
     if (isLargeFontScale() && !trailing.isNullOrBlank()) {
         Column(modifier = base, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -193,7 +153,7 @@ internal fun DeepSectionTitle(
             Text(
                 text = trailing,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = AetherColors.textTertiary(),
             )
         }
         return
@@ -210,10 +170,9 @@ internal fun DeepSectionTitle(
             modifier = Modifier.weight(1f),
         )
         if (!trailing.isNullOrBlank()) {
-            Text(
+            AetherStatusChip(
                 text = trailing,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                kind = AetherChipKind.NEUTRAL,
             )
         }
         if (action != null) {
@@ -224,10 +183,7 @@ internal fun DeepSectionTitle(
 }
 
 /**
- * 一层卡片：`McaShape.Sheet` + `McaHairline` + 水平 16 / 垂直 20 内边距。不嵌套第二层卡片。
- *
- * 列表卡片传 `contentPadding = DeepListCardPadding`（水平 16 + 垂直 4），
- * 由行自己提供 16dp 垂直内边距，这样首行/末行的外缘也正好是 20dp。
+ * 旗舰级一层卡片：`McaShape.Sheet` (20dp) + Specular Rim 顶边受光微描边 + 柔和实体填充。
  */
 @Composable
 internal fun DeepCard(
@@ -239,21 +195,31 @@ internal fun DeepCard(
     ),
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val dark = isAetherDarkTheme()
+    val containerColor = when (tone) {
+        DeepTone.Neutral -> AetherColors.cardSurface()
+        DeepTone.Info -> if (dark) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+        } else {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+        }
+        DeepTone.Danger -> AetherColors.dangerContainer()
+        DeepTone.Warning -> AetherColors.warningContainer()
+        DeepTone.Success -> AetherColors.successContainer()
+    }
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .aetherSpecularRim(cornerRadius = 20.dp, tone = tone),
         shape = McaShape.Sheet,
-        color = when (tone) {
-            DeepTone.Neutral -> McaTonal.fill()
-            DeepTone.Info -> MaterialTheme.colorScheme.primaryContainer
-            DeepTone.Danger -> MaterialTheme.colorScheme.errorContainer
-        },
-        border = McaHairline.stroke(),
+        color = containerColor,
+        shadowElevation = if (dark || tone != DeepTone.Neutral) 0.dp else 1.dp,
     ) {
         Column(Modifier.fillMaxWidth().padding(contentPadding), content = content)
     }
 }
 
-/** 卡片标题：`titleMedium + Bold`；正文 `bodySmall + onSurfaceVariant`。 */
+/** 卡片标题：`titleMedium + Bold`。 */
 @Composable
 internal fun DeepCardTitle(text: String, tone: DeepTone = DeepTone.Neutral) {
     Text(
@@ -263,12 +229,14 @@ internal fun DeepCardTitle(text: String, tone: DeepTone = DeepTone.Neutral) {
         color = when (tone) {
             DeepTone.Neutral -> MaterialTheme.colorScheme.onSurface
             DeepTone.Info -> MaterialTheme.colorScheme.onPrimaryContainer
-            DeepTone.Danger -> MaterialTheme.colorScheme.onErrorContainer
+            DeepTone.Danger -> AetherColors.danger()
+            DeepTone.Warning -> AetherColors.warning()
+            DeepTone.Success -> AetherColors.success()
         },
     )
 }
 
-/** 卡片正文：`bodySmall + onSurfaceVariant`（Info/Danger 卡自动跟随容器前景色）。 */
+/** 卡片正文：`bodySmall + onSurfaceVariant`。 */
 @Composable
 internal fun DeepCardBody(text: String, tone: DeepTone = DeepTone.Neutral) {
     Text(
@@ -276,16 +244,16 @@ internal fun DeepCardBody(text: String, tone: DeepTone = DeepTone.Neutral) {
         style = MaterialTheme.typography.bodySmall,
         color = when (tone) {
             DeepTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
-            DeepTone.Info -> MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f)
-            DeepTone.Danger -> MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+            DeepTone.Info -> MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+            DeepTone.Danger -> AetherColors.danger().copy(alpha = 0.90f)
+            DeepTone.Warning -> AetherColors.warning().copy(alpha = 0.90f)
+            DeepTone.Success -> AetherColors.success().copy(alpha = 0.90f)
         },
     )
 }
 
 /**
- * 状态 / 空态卡：**一句话说清为什么空** + 最多一个下一步动作。
- *
- * 全站只有这一个形状：不许写成「暂无数据」，也不许堆两个以上按钮。
+ * 状态 / 空态卡：一句话说清为什么空 + 最多一个下一步动作。
  */
 @Composable
 internal fun DeepStateCard(
@@ -300,26 +268,38 @@ internal fun DeepStateCard(
         Spacer(Modifier.height(6.dp))
         DeepCardBody(detail, tone)
         if (actionLabel != null && onAction != null) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(14.dp))
             McaButton(onClick = onAction, style = McaButtonStyle.Primary) { Text(actionLabel) }
         }
     }
 }
 
-/** 一次性提示（操作回执 / 错误）：一行文案 + 一个「知道了」。 */
+/** 一次性提示（操作回执 / 错误）：一行文案 + 柔和胶囊关闭键。 */
 @Composable
 internal fun DeepNotice(text: String, isError: Boolean = false, onDismiss: () -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        AetherStatusDot(
+            color = if (isError) AetherColors.danger() else MaterialTheme.colorScheme.primary,
+            pulsing = false,
+            dotSize = 8.dp,
+        )
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall,
             color = if (isError) {
-                MaterialTheme.colorScheme.error
+                AetherColors.danger()
             } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
+                MaterialTheme.colorScheme.onSurface
             },
+            modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.height(12.dp))
-        McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("知道了") }
+        AetherPillButton(
+            text = "知道了",
+            onClick = onDismiss,
+        )
     }
 }

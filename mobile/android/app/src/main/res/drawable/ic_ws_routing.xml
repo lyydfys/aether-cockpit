@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 路由：24x24 拓扑分流树 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M6,6.5A2.2,2.2 0,1 0,6 10.9A2.2,2.2 0,1 0,6 6.5Z M18,4.2A2.2,2.2 0,1 0,18 8.6A2.2,2.2 0,1 0,18 4.2Z M18,15.4A2.2,2.2 0,1 0,18 19.8A2.2,2.2 0,1 0,18 15.4Z"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M8.2,8.7H11.2C12.8,8.7 13.4,6.4 15.8,6.4M11.2,8.7C13.2,8.7 12.8,17.6 15.8,17.6"
+        android:strokeWidth="1.85"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

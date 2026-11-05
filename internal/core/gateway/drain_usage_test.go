@@ -15,7 +15,7 @@ import (
 	"aether-cockpit/internal/provider"
 )
 
-// 客户端在流中途断开后，网关仍要把上游读完并记下末尾的 usage（relay-panel ③）。
+// 客户端在流中途断开后，网关仍要把上游读完并记下末尾的 usage（高并发网关 ③）。
 func TestStreamDrainCapturesUsageAfterClientGone(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

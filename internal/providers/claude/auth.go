@@ -25,9 +25,8 @@ const (
 	anthropicVersion = "2023-06-01"
 
 	// oauthBetaHeader 是订阅 token 必须携带的 beta 标记。
-	// 来源：Claude Code 订阅流量抓包与社区代理实现（RelayPanel / eval-suite /
-	// agent-router 文档）均确认：OAuth token 只有带上
-	// `anthropic-beta: oauth-2025-04-20` 才能调用 /v1/messages，
+	// 来源：Claude Code 订阅流量抓包与多个社区代理实现均确认：OAuth token
+	// 只有带上 `anthropic-beta: oauth-2025-04-20` 才能调用 /v1/messages，
 	// 缺失时上游返回 401。可用凭证里的 anthropic_beta 字段覆盖。
 	// 它是 chat.go 里 defaultBetaHeader 的组成部分之一。
 	oauthBetaHeader = "oauth-2025-04-20"

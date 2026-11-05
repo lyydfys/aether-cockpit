@@ -83,7 +83,7 @@ internal fun AgentsPage(
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = BubbleSafeBottom),
         verticalArrangement = Arrangement.spacedBy(DeepCardGap),
     ) {
         item {
@@ -353,6 +353,7 @@ private fun AgentRow(agent: AgentSummary, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .aetherPressable()
             .clickable(role = Role.Button, onClick = onClick)
             .padding(vertical = DeepRowVertical),
         verticalAlignment = Alignment.CenterVertically,
@@ -392,16 +393,14 @@ private fun AgentRow(agent: AgentSummary, onClick: () -> Unit) {
             }
         }
         Spacer(Modifier.width(8.dp))
-        Text(
+        val active = agent.wired || agent.detected
+        AetherStatusChip(
             text = agentStatusLabel(agent),
-            style = MaterialTheme.typography.labelMedium,
-            color = when {
-                agent.wired || agent.detected -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            textAlign = TextAlign.End,
-            maxLines = 1,
+            containerColor = if (active) MaterialTheme.colorScheme.primaryContainer else AetherColors.subSurface(),
+            contentColor = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(Modifier.width(6.dp))
+        AetherChevron()
     }
 }
 
@@ -525,14 +524,12 @@ private fun AgentsHeadline(
     refreshEnabled: Boolean,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        McaIconButton(contentDescription = "返回", onClick = onBack) {
-            Icon(
-                painter = painterResource(R.drawable.ic_back),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_back,
+            contentDescription = "返回",
+            onClick = onBack,
+            tint = MaterialTheme.colorScheme.onBackground,
+        )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             DeepPageTitle(
@@ -540,17 +537,11 @@ private fun AgentsHeadline(
                 subtitle = "本机 Agent 只读",
             )
         }
-        McaIconButton(
+        AetherHeaderIconButton(
+            iconRes = R.drawable.ic_refresh,
             contentDescription = "刷新 Agent 清单",
             onClick = onRefresh,
             enabled = refreshEnabled,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_refresh),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(McaIconSize.Optical.Action),
-            )
-        }
+        )
     }
 }

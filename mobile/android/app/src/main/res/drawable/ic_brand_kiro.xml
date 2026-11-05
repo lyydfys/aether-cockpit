@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 由 internal/web/ui2/assets/icons/kiro.svg 转换（brandicons.js 的品牌图标） -->
+<!-- 由 internal/web/ui2/assets/icons/kiro.svg 转换（1:1 画布居中 + evenOdd 镂空双目，解决 SrcIn 染色抹平眼睛 Bug） -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="256"
+    android:viewportWidth="312"
     android:viewportHeight="312">
-            <path
-                android:fillColor="#FFFFFFFF"
-                android:pathData="M49.4 241.2c-32.2 71.3 36.3 89.2 86.9 47.4 14.8 46.9 70.6 12 90.6-24.3 44-80 26.3-161.5 21.7-178.3-31.3-114.7-188-114.8-214.9.6-6.3 20.2-6.4 43.1-10 67-1.7 12-3 19.7-7.7 32.3-2.6 7.3-6.3 13.8-12.1 24.6-9 17-5.2 49.6 41.1 32.7z" />
-            <path
-                android:fillColor="#FF191919"
-                android:pathData="M142.4 135.6c-12.9 0-14.8-15.3-14.8-24.5q0-12.5 4.3-19 3.8-5.4 10.5-5.5c6.7 0 8.3 1.9 11 5.6a32 32 0 0 1 4.8 19c0 15.3-6 24.4-15.8 24.4m52.9 0c-12.9 0-14.8-15.3-14.8-24.5q0-12.5 4.3-19 3.7-5.4 10.5-5.5c6.8 0 8.3 1.9 11 5.6a32 32 0 0 1 4.8 19c0 15.3-6 24.4-15.8 24.4" />
+    <group android:translateX="28.0">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M49.4 241.2c-32.2 71.3 36.3 89.2 86.9 47.4 14.8 46.9 70.6 12 90.6-24.3 44-80 26.3-161.5 21.7-178.3-31.3-114.7-188-114.8-214.9.6-6.3 20.2-6.4 43.1-10 67-1.7 12-3 19.7-7.7 32.3-2.6 7.3-6.3 13.8-12.1 24.6-9 17-5.2 49.6 41.1 32.7z M142.4 135.6c-12.9 0-14.8-15.3-14.8-24.5q0-12.5 4.3-19 3.8-5.4 10.5-5.5c6.7 0 8.3 1.9 11 5.6a32 32 0 0 1 4.8 19c0 15.3-6 24.4-15.8 24.4z M195.3 135.6c-12.9 0-14.8-15.3-14.8-24.5q0-12.5 4.3-19 3.7-5.4 10.5-5.5c6.8 0 8.3 1.9 11 5.6a32 32 0 0 1 4.8 19c0 15.3-6 24.4-15.8 24.4z" />
+    </group>
 </vector>

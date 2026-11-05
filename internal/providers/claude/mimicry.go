@@ -8,7 +8,7 @@ package claude
 //   - system 首块的 x-anthropic-billing-header，且 cc_version 后缀指纹
 //     与 UA 版本、首条 user 文本强绑定。
 //
-// 指纹算法取自 relay-panel / Parrot 对真实 CLI 抓包的复刻；只用于 OAuth
+// 指纹算法取自 高并发网关 / 标准套件 对真实 CLI 抓包的复刻；只用于 OAuth
 // 订阅模式，API Key 模式保持原样。
 
 import (
