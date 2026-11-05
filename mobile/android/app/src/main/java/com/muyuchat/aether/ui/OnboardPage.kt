@@ -1,6 +1,7 @@
 package com.muyuchat.aether.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -110,10 +113,11 @@ internal fun OnboardPage(
     val connect by viewModel.connect.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    var showFilterPanel by remember { mutableStateOf(false) }
+    // 侧边字母索引拖动时，屏幕中央浮出的大字母。
+    var indexBubble by remember { mutableStateOf<String?>(null) }
 
     val filtered = applyOnboardQuery(providers, accounts, query, filters)
-    // 与 MCA 推荐页一致：名称排序按字母分组（目录顺序），显式排序则平铺比较列表。
+    // 名称排序按字母分组（目录顺序）；筛选/排序入口已按用户要求移除，默认即此形态。
     val grouped = filters.sort == OnboardSort.NAME
     val groups = if (grouped) groupOnboardProviders(filtered) else emptyList()
     val rows: List<OnboardListRow> = if (grouped) {
@@ -126,16 +130,19 @@ internal fun OnboardPage(
     } else {
         filtered.map { OnboardListRow.Provider(it) }
     }
-    // 字母条点击跳转：前 7 个 item 固定（MobileHeader / 页头 / 搜索 / 筛选工具行 /
-    // 自定义入口 / 区块标题 / 字母条）。
+    // 字母索引点击跳转：前 5 个 item 固定（MobileHeader / 页头 / 搜索 / 自定义入口 / 区块标题）。
+    // 筛选工具行与横排字母条已移除，所以基数是 5（原 7）。
     val rowIndexByLetter: Map<String, Int> = rows.withIndex()
         .filter { it.value is OnboardListRow.Letter }
         .associate { (rows[it.index] as OnboardListRow.Letter).letter to (OnboardRowsBase + it.index) }
+    // 有渠道的字母（其余字母在侧边栏里置灰但仍显示）。
+    val lettersWithData: Set<String> = groups.map { it.letter }.toSet()
 
+    Box(modifier = modifier.fillMaxSize()) {
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 28.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { MobileHeader(status) }
@@ -179,13 +186,6 @@ internal fun OnboardPage(
             )
         }
         item {
-            OnboardFilterToolbar(
-                state = filters,
-                onOpenPanel = { showFilterPanel = true },
-                onClearFilters = viewModel::clearFilters,
-            )
-        }
-        item {
             OnboardCustomProviderCard(
                 notice = notice,
                 canAdd = status.running,
@@ -216,27 +216,14 @@ internal fun OnboardPage(
             item {
                 DeepStateCard(
                     title = "没有匹配的渠道",
-                    detail = "搜索只匹配渠道名、描述与 id；筛选按「接入方式」和「接入状态」收窄列表。" +
-                        "清掉条件就能看到全部渠道。",
-                    actionLabel = "清除条件",
+                    detail = "搜索只匹配渠道名、描述与 id。清掉搜索词就能看到全部渠道。",
+                    actionLabel = "清除搜索",
                     onAction = {
                         viewModel.setQuery("")
-                        viewModel.setFilters(OnboardQuery(sort = filters.sort))
                     },
                 )
             }
         } else {
-            if (grouped) {
-                item {
-                    OnboardLetterBar(
-                        letters = groups.map { it.letter },
-                        onJump = { letter ->
-                            val target = rowIndexByLetter[letter] ?: return@OnboardLetterBar
-                            scope.launch { listState.animateScrollToItem(target) }
-                        },
-                    )
-                }
-            }
             items(rows.size) { index ->
                 when (val row = rows[index]) {
                     is OnboardListRow.Letter -> OnboardLetterHeader(row.letter)
@@ -277,17 +264,45 @@ internal fun OnboardPage(
         item { AccountExportSection(status = status) }
     }
 
-    if (showFilterPanel) {
-        OnboardFilterPanel(
-            applied = filters,
-            previewCount = { draftQuery -> applyOnboardQuery(providers, accounts, query, draftQuery).size },
-            onApply = {
-                viewModel.setFilters(it)
-                showFilterPanel = false
+    // 右侧竖排字母索引：完整 A–Z + #，无数据的字母置灰；支持点击与拖动连续跳转。
+    if (grouped && rows.isNotEmpty()) {
+        OnboardLetterIndex(
+            available = lettersWithData,
+            onJump = { letter ->
+                indexBubble = letter
+                rowIndexByLetter[letter]?.let { target ->
+                    scope.launch { listState.animateScrollToItem(target) }
+                }
             },
-            onDismiss = { showFilterPanel = false },
+            onRelease = { indexBubble = null },
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 2.dp),
         )
     }
+    // 拖动时屏幕中央的大字母气泡。
+    indexBubble?.let { letter ->
+        Surface(
+            modifier = Modifier.align(Alignment.Center),
+            shape = McaShape.Card,
+            color = MaterialTheme.colorScheme.surface,
+            border = McaHairline.stroke(),
+        ) {
+            Box(
+                modifier = Modifier.size(72.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = letter,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+    }
+
     connect?.let { current ->
         OnboardConnectDialog(
             state = current,
@@ -351,8 +366,9 @@ internal fun OnboardPage(
     bundleHost()
 }
 
-/** 固定 item 数：MobileHeader / 页头 / 搜索 / 筛选工具行 / 自定义入口 / 区块标题 / 字母条。 */
-private const val OnboardRowsBase = 7
+/** 固定 item 数：MobileHeader / 页头 / 搜索 / 自定义入口 / 区块标题。
+ *  筛选工具行与横排字母条已按用户要求移除（原值 7 → 5）。 */
+private const val OnboardRowsBase = 5
 
 /** 列表行：字母分组头 或 渠道卡。 */
 internal sealed interface OnboardListRow {
@@ -435,43 +451,85 @@ private fun OnboardLetterHeader(letter: String) {
     )
 }
 
+/** 侧边索引的字母表：完整 A–Z + `#`（无数据的字母置灰，但仍参与拖动定位）。 */
+internal val OnboardIndexLetters: List<String> = ('A'..'Z').map { it.toString() } + "#"
+
 /**
- * 字母条：横向可滚动的 A–Z（+ #）。
+ * 右侧竖排字母索引（通讯录式）。
  *
- * 1.3× 字号下的两条硬约束：
- *  - 每个字母 maxLines = 1，绝不换行；字号放大只会让格子变宽，横向滚动吃掉；
- *  - 条是列表里的普通 item（不是浮层），因此不会遮挡下面的卡片。
+ * - 完整 A–Z + `#`：没数据的字母**置灰而不是隐藏**，避免条子长度随搜索结果跳动；
+ * - 支持**点击**与**按住上下滑动**连续跳转；拖动时由调用方在中央浮出大字母；
+ * - 每格高度固定 [OnboardIndexCellHeight]，索引总高 ≈ 27×16dp，一屏放得下；
+ *   1.3× 字号下只压缩行高，不换行、不出现单字竖排。
  */
+private val OnboardIndexCellHeight = 16.dp
+/** 索引条宽度：比字母本身宽一点，方便点按；列表右侧要留出等量的空档，避免压住卡片文字。 */
+private val OnboardIndexWidth = 24.dp
+
 @Composable
-private fun OnboardLetterBar(letters: List<String>, onJump: (String) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun OnboardLetterIndex(
+    available: Set<String>,
+    onJump: (String) -> Unit,
+    onRelease: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val letters = OnboardIndexLetters
+    var barHeightPx by remember { mutableStateOf(0f) }
+    var lastLetter by remember { mutableStateOf<String?>(null) }
+
+    // 按 y 比例换算成字母下标：不依赖每格的实际像素高度，1.3× 下也准。
+    fun letterAt(y: Float): String {
+        if (barHeightPx <= 0f) return letters.first()
+        val ratio = (y / barHeightPx).coerceIn(0f, 0.9999f)
+        return letters[(ratio * letters.size).toInt().coerceIn(0, letters.lastIndex)]
+    }
+
+    fun emit(letter: String, force: Boolean = false) {
+        if (!force && letter == lastLetter) return
+        lastLetter = letter
+        if (letter in available) onJump(letter)
+    }
+
+    Column(
+        modifier = modifier
+            .width(OnboardIndexWidth)
+            .onSizeChanged { barHeightPx = it.height.toFloat() }
+            .pointerInput(available) {
+                detectVerticalDragGestures(
+                    onDragStart = { offset -> emit(letterAt(offset.y), force = true) },
+                    onDragEnd = {
+                        lastLetter = null
+                        onRelease()
+                    },
+                    onDragCancel = {
+                        lastLetter = null
+                        onRelease()
+                    },
+                ) { change, _ ->
+                    emit(letterAt(change.position.y))
+                }
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         letters.forEach { letter ->
-            Surface(
-                shape = McaShape.CardAction,
-                color = MaterialTheme.colorScheme.surface,
-                border = McaHairline.stroke(),
-                modifier = Modifier.clickable { onJump(letter) },
+            val hasData = letter in available
+            Box(
+                modifier = Modifier
+                    .width(OnboardIndexWidth)
+                    .height(OnboardIndexCellHeight)
+                    .clickable(enabled = hasData) { onJump(letter) },
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    modifier = Modifier
-                        .widthIn(min = 30.dp)
-                        .heightIn(min = 34.dp)
-                        .padding(horizontal = 6.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = letter,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                    )
-                }
+                Text(
+                    text = letter,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (hasData) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                    },
+                    maxLines = 1,
+                )
             }
         }
     }
