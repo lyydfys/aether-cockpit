@@ -846,6 +846,22 @@ export default {
       };
       const c = card('请求预设', { chips: [chip(p.presets.length + ' 个', 'plain')] });
       c.head.append(h('span', { style: 'flex:1' }));
+      // 酒馆预设导入：文件只在本地读，解析交给网关（POST /api/presets/import/preview，只读）。
+      const importInput = h('input', {
+        type: 'file', accept: 'application/json,.json', style: 'display:none',
+        onchange: async (e) => {
+          const file = e.target.files && e.target.files[0];
+          e.target.value = '';
+          if (!file) return;
+          try {
+            const text = await file.text();
+            const preview = await api.post('presets/import/preview', { format: 'auto', json: text });
+            presetImportDialog(preview, file.name);
+          } catch (err) { toast('导入失败：' + (err.message || err)); }
+        },
+      });
+      c.head.append(importInput);
+      c.head.append(btn('导入预设', { ghost: true, onClick: () => importInput.click() }));
       c.head.append(btn('新建预设', { primary: true, icon: 'plus', onClick: () => presetDialog(null) }));
       if (!p.presets.length) {
         c.el.append(empty('还没有预设', '新建一个 Body / Headers 预设，然后在渠道或路由组里勾选。'));
@@ -927,6 +943,69 @@ export default {
                 render();
               } catch (e) { toast('保存失败：' + (e.message || e)); }
             } })));
+      });
+    }
+
+    /* 酒馆预设导入预览：列出将写入的采样参数与将丢弃的字段（分组 + 原因），
+       提示词可单独开关；超过 32KB 上限时只允许导入采样参数。 */
+    function presetImportDialog(preview, fileName) {
+      const overflow = !!preview.prompt_overflow;
+      const promptText = (preview.system_prompt || '').trim();
+      const hasPrompt = promptText.length > 0;
+      let includePrompt = hasPrompt && !overflow;
+      const includeBtn = toggle(includePrompt, (on) => { includePrompt = on; }, { label: '导入提示词' });
+      const mapped = Array.isArray(preview.mapped) ? preview.mapped : [];
+      const dropped = Array.isArray(preview.dropped) ? preview.dropped : [];
+      const groups = [
+        ['upstream', '上游不通用（发了会 400 或被忽略）'],
+        ['client', '客户端行为（不是请求参数）'],
+        ['gateway', '网关自管（写进预设会被拒绝）'],
+        ['unknown', '未识别字段'],
+      ];
+      const promptLine = !hasPrompt
+        ? h('div', { class: 'meta' }, '该文件没有可导入的提示词（prompts 里没有启用且有内容的段落）。')
+        : overflow
+          ? h('div', { class: 'meta', style: 'color:var(--danger,#c0392b)' },
+            '提示词 ' + (preview.prompt_chars || 0) + ' 字超过预设 32KB 上限，本次只能导入采样参数（不截断）。')
+          : h('div', { class: 'inline' }, includeBtn,
+            h('span', { class: 'meta' },
+              '将写入 system_prompt：' + (preview.prompt_segments || 0) + ' 段（共 ' + (preview.prompt_chars || 0) + ' 字）'));
+      const box = h('div', { style: 'display:flex;flex-direction:column;gap:6px' },
+        h('div', { class: 'meta' }, '来源格式：' + (preview.format === 'chat' ? 'Chat Completion 预设'
+          : preview.format === 'text' ? 'Text Generation 预设' : '未识别格式')),
+        promptLine,
+        mapped.length ? h('div', { class: 'meta' }, '将写入采样参数（' + mapped.length + '）') : null,
+        ...mapped.map((item) => h('div', { class: 'meta' }, '· ' + item.key + ' ← ' + (item.source || item.key))),
+        ...groups.flatMap((group) => {
+          const items = dropped.filter((item) => (item.group || 'unknown') === group[0]);
+          if (!items.length) return [];
+          return [
+            h('div', { class: 'meta', style: 'margin-top:4px' }, group[1] + '（' + items.length + '）'),
+            ...items.map((item) => h('div', { class: 'meta' }, '· ' + item.key + ' — ' + (item.reason || '未说明'))),
+          ];
+        }),
+        h('div', { class: 'meta' }, '导入后可以在列表里继续编辑；Body 里不会包含提示词。'));
+      const d = drawer('导入预设 · ' + (preview.name || fileName || '未命名'), (content) => {
+        content.append(box);
+        content.append(h('div', { class: 'inline', style: 'justify-content:flex-end' },
+          btn('取消', { onClick: () => d.close() }),
+          btn('导入', { primary: true, onClick: async () => {
+            const payload = {
+              name: (preview.name || fileName || '导入的预设').replace(/\.json$/i, ''),
+              description: '从酒馆预设导入（' + (preview.format || 'unknown') + '）',
+              enabled: true,
+              body: preview.body || {},
+              headers: {},
+              system_prompt: includePrompt && !overflow ? promptText : '',
+              concat_system: false,
+            };
+            try {
+              state.p = await api.post('presets/save', payload);
+              d.close();
+              toast('预设已导入');
+              render();
+            } catch (e) { toast('保存失败：' + (e.message || e)); }
+          } })));
       });
     }
 
@@ -1132,9 +1211,12 @@ export default {
       if (state.updateBusy) return h('div', { class: 'meta about-status' }, '正在检查 GitHub Releases…');
       if (!u) return h('div', { class: 'meta about-status' }, '更新源：GitHub · ' + repo);
       if (u.available) {
+        // 与手机端同一套口径：把"这个 Release 有没有本平台安装包"说清楚。
+        // u.downloadable 由 Go 侧 pickGitHubAsset(runtime.GOOS) 给出（update_api.go:258）。
+        const pkg = u.downloadable === false ? ' · 本平台无安装包' : ' · 含本平台安装包';
         return h('div', { class: 'inline about-status' },
           chip('可更新 v' + u.latest, 'green'),
-          h('span', { class: 'meta' }, '当前 v' + (u.current || v.version || 'dev')));
+          h('span', { class: 'meta' }, '当前 v' + (u.current || v.version || 'dev') + pkg));
       }
       if (u.reason) return h('div', { class: 'meta about-status' }, u.reason);
       return h('div', { class: 'meta about-status' }, '已是最新 v' + (u.latest || u.current || v.version || '—'));
