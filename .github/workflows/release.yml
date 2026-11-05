@@ -289,19 +289,29 @@ jobs:
         run: |
           $version = $env:RELEASE_TAG.TrimStart('v')
           $artifactRoot = Join-Path $env:RUNNER_TEMP "release-assets"
-          $zip = Get-ChildItem $artifactRoot -Filter "aether-cockpit-*-windows-amd64.zip" -File | Select-Object -First 1
+          $zip = Get-ChildItem $artifactRoot -Filter "AetherCockpit-*-windows-amd64.zip" -File | Select-Object -First 1
           $apk = Get-ChildItem $artifactRoot -Filter "AetherCockpit-*-android-arm64-v8a.apk" -File | Select-Object -First 1
           if ($null -eq $zip -or $null -eq $apk) {
             throw "missing release binary(s): zip=$($zip -ne $null) apk=$($apk -ne $null)"
           }
-          $notes = @"
-          Android APK 使用 CI 配置的 release keystore 签名，并已通过 apksigner verify；不是 debug 签名。
-          Windows 包保持原有 zip；两个平台各自提供独立产物与 SHA256SUMS。
-          "@
+          # Release notes 必须来自 CHANGELOG 的对应版本段：缺了就让发布失败，
+          # 避免出现「只有产物、没有更新说明」的版本。
+          $changelog = Join-Path $env:GITHUB_WORKSPACE "CHANGELOG.md"
+          if (-not (Test-Path $changelog)) { throw "缺少 CHANGELOG.md，无法生成 Release notes" }
+          $text = Get-Content $changelog -Raw
+          $pattern = "(?s)##\s+$([regex]::Escape($version)).*?(?=\r?\n##\s+|\z)"
+          $section = [regex]::Match($text, $pattern)
+          if (-not $section.Success) {
+            throw "CHANGELOG.md 中没有 $version 的条目；发版前请先补更新说明"
+          }
+          $notesFile = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          $header = "## 下载`n`n| 平台 | 文件 |`n|---|---|`n| Windows x64 | ``AetherCockpit-$version-windows-amd64.zip`` |`n| Android arm64 | ``AetherCockpit-$version-android-arm64-v8a.apk``（正式签名，apksigner 校验通过） |`n`n校验：``SHA256SUMS.txt```n`n---`n`n"
+          Set-Content -Path $notesFile -Value ($header + $section.Value.Trim()) -Encoding utf8
+
           gh release create $env:RELEASE_TAG `
             $zip.FullName `
             $apk.FullName `
             (Join-Path $artifactRoot "SHA256SUMS.txt") `
             --title "Aether Cockpit $version" `
-            --notes $notes `
+            --notes-file $notesFile `
             --verify-tag
