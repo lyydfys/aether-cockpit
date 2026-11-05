@@ -18,14 +18,28 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.invisibleToUser
+import androidx.compose.ui.semantics.semantics
 
 /**
  * 系统级预测性返回（Android 13+）的跟手容器。
@@ -66,6 +80,19 @@ internal const val BackOverlayScrimAlpha = 0.25f
  */
 internal const val BackSettleOutMs = 180
 
+/** 返回目标页在手势起点时的缩放（0.96，比正常略小，读起来"在后景"）。 */
+internal const val PreviousLayerRestScale = 0.96f
+
+/** 返回目标页在手势起点时的压暗强度（0.32）；进度走到 1 时归零。 */
+internal const val PreviousLayerRestDim = 0.32f
+
+/**
+ * 没有真实底层时（根页/没有上一页）纯色遮罩的终值（0.40）。
+ *
+ * 比有真实内容时更暗：底下什么都没有，露出半透明灰只会显得更廉价。
+ */
+internal const val BackScrimAlphaNoPrevious = 0.40f
+
 /**
  * 把系统给的 progress 夹到 0..1。
  *
@@ -100,6 +127,33 @@ internal fun backScrimAlpha(progress: Float): Float {
 }
 
 /**
+ * 底层（返回目标页）的缩放：progress=0 → [PreviousLayerRestScale]（略小，显得"在后景"）；
+ * progress=1 → 1（手势走到哪，上一页就长到正常大小）。
+ *
+ * 注意与 [backOverlayScale] 方向相反：那一层是被推走的当前页（1 → 0.92），
+ * 这一层是要露出来的上一页（0.96 → 1）。两层都向 1 靠拢会产生"双放大"的廉价感。
+ */
+internal fun previousBackScale(progress: Float): Float {
+    val p = sanitizeBackProgress(progress)
+    return PreviousLayerRestScale + (1f - PreviousLayerRestScale) * p
+}
+
+/**
+ * 底层压暗：progress=0 → [PreviousLayerRestDim]（最暗，表示它还在后景）；
+ * progress=1 → 0（完全露出）。
+ */
+internal fun previousBackDim(progress: Float): Float {
+    val p = sanitizeBackProgress(progress)
+    return PreviousLayerRestDim * (1f - p)
+}
+
+/** 没有真实底层时的纯色遮罩 alpha（progress=0 → 0，progress=1 → [BackScrimAlphaNoPrevious]）。 */
+internal fun backScrimAlphaNoPrevious(progress: Float): Float {
+    val p = sanitizeBackProgress(progress)
+    return BackScrimAlphaNoPrevious * p
+}
+
+/**
  * 本组件是否接管这次返回。
  *
  * 与 MCA 的 `enabled = visible && !imeVisible`（`BackMotion.kt` 调用方）同一条规则：
@@ -129,6 +183,7 @@ internal fun backSettleOutSpec(): AnimationSpec<Float> = tween(durationMillis = 
  * @param enabled 为 false 时完全不接管返回（例如当前没有覆盖页可关）。
  * @param imeBlocksBack 键盘可见时是否让出返回（默认 true，见 [predictiveBackEnabled]）。
  * @param onBack 手势**滑到底**且滑出动画播完后调用；中途松手不会调。
+ * @param previous 返回目标页的真实内容（静态、不可交互）。为空时退回纯色遮罩。
  * @param content 收到实时 progress（0..1），内容本身按需要再决定要不要用。
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -139,15 +194,62 @@ internal fun PredictiveBackHost(
     // 注意顺序：`imeBlocksBack` 必须排在 `content` 之前，否则尾随 lambda 会绑到它身上
     // （Kotlin 的尾随 lambda 永远给最后一个参数）。
     imeBlocksBack: Boolean = true,
-    content: @Composable (progress: Float) -> Unit,
+    /** 覆盖页当前是否仍打开。返回手势提交后由 false 触发"归零"，而不是动画一结束就归零。 */
+    open: Boolean = true,
+    previous: (@Composable () -> Unit)? = null,
+    // 传**提供者**而不是值：值在组合阶段读会让整个覆盖页每帧重组（快滑掉帧→看起来像闪）。
+    content: @Composable (progress: () -> Float) -> Unit,
 ) {
     // 用 Animatable 而不是普通 state：取消手势时 animateTo(0f) 天然带 spring 回弹，
     // 直接写 0f 会"瞬间跳回"，那正是要避免的廉价感。
     val motion = remember { Animatable(0f) }
+    // 收尾动画必须跑在**独立作用域**里：
+    //   - 手势取消时，PredictiveBackHandler 的协程已经处于 cancelled 状态，
+    //     在它里面再调 animateTo 会立刻再抛 CancellationException，回弹一帧都不跑，
+    //     进度就停在手指松开的位置——真机上表现为「页面卡在半屏」。
+    //   - 完成分支同理：确认返回时系统会取消该协程，滑出动效会被吃掉。
+    val settleScope = rememberCoroutineScope()
+    var settling by remember { mutableStateOf(false) }
     val scrimColor = MaterialTheme.colorScheme.scrim
+    // 冻结手势开始那一刻的 previous：提交时 onBack() 会立刻改 anySubpageOpen/snapshot，
+    // 若底层跟着变成 null，动画中间会"图片 → 纯灰"闪一下。
+    // 只在 progress 归零且动画结束（settling=false）后才释放，避免下一次手势用旧帧。
+    var frozenPrevious by remember { mutableStateOf<(@Composable () -> Unit)?>(null) }
     // isImeVisible 是 @Composable 读的窗口状态：键盘收起时本组件自动恢复接管返回。
     val imeVisible = WindowInsets.isImeVisible
     val handleBack = predictiveBackEnabled(enabled, imeVisible, imeBlocksBack)
+    // 不接管返回时（根页）保证进度恒为 0：否则残留进度会让遮罩/位移卡在半途。
+    LaunchedEffect(handleBack) {
+        if (!handleBack) {
+            runCatching { motion.stop() }
+            motion.snapTo(0f)
+            frozenPrevious = null
+        }
+    }
+    val openState = rememberUpdatedState(open)
+    LaunchedEffect(open) {
+        if (!open) {
+            // 内容已经换掉（覆盖页关闭）→ 现在归零不会有一帧旧内容回归。
+            motion.snapTo(0f)
+            settling = false
+            frozenPrevious = null
+        }
+    }
+    val previousNow = previous
+    // **关键**：底层只在手势进行中（motion > 0）才组合。
+    // 之前只要 enabled 为真就长期挂着上一页 → 两份页面同时绘制 → 重影/透底。
+    // 用 derivedStateOf：只在 true/false 翻转时触发一次重组，不随每帧进度变化。
+    val gestureActive by remember { derivedStateOf { motion.value > 0f } }
+    LaunchedEffect(previousNow) {
+        snapshotFlow { motion.value }.collect { value ->
+            if (value > 0f && frozenPrevious == null && previousNow != null) {
+                frozenPrevious = previousNow
+            } else if (value <= 0f && !settling) {
+                frozenPrevious = null
+            }
+        }
+    }
+    val activePrevious = frozenPrevious ?: previousNow
 
     if (Build.VERSION.SDK_INT >= PredictiveBackSupportedSdk) {
         PredictiveBackHandler(enabled = handleBack) { events ->
@@ -157,22 +259,43 @@ internal fun PredictiveBackHost(
                     motion.snapTo(sanitizeBackProgress(event.progress))
                 }
                 // 流正常结束 = 手势完成（滑到底）。
-                // 与 MCA `closeAnimated()` 对齐：确认之后先把页面**滑出去**（180ms tween），
-                // 再通知调用方关闭；直接 onBack() 会让页面瞬间消失，观感是"啪"地一下。
-                motion.animateTo(targetValue = 1f, animationSpec = backSettleOutSpec())
-                onBack()
-                // 滑出之后把进度复位：onBack() 通常立刻换掉内容（组合里这一帧就看不到旧页面），
-                // 但如果调用方没关掉（比如只是弹了个提示），页面不能永远停在屏幕外。
-                motion.snapTo(0f)
+                // 先滑出去再 onBack()，否则页面会"啪"地消失；但动效放在独立作用域里跑，
+                // 避免被系统在手势提交时取消。
+                settling = true
+                settleScope.launch {
+                    try {
+                        // 快滑时 motion 已经接近 1：从当前值补到 1，不会再"弹回原位再滑出"。
+                        motion.animateTo(targetValue = 1f, animationSpec = backSettleOutSpec())
+                        onBack()
+                        // onBack() 只是改状态，真正换内容要等下一帧；等两帧更稳。
+                        repeat(2) { withFrameNanos { } }
+                    } finally {
+                        settling = false
+                        // 归零**只在一处**做（下面的 LaunchedEffect(open)）：两处都 snapTo 会互相取消
+                        // 正在跑的动画，主线程每帧都在取消/重启 → 真机上表现为"卡死"。
+                        if (openState.value) {
+                            // 调用方没关掉页面时给一个非挂起的兜底：直接 stop，不排队新的动画。
+                            runCatching { motion.stop() }
+                            runCatching { motion.snapTo(0f) }
+                        }
+                    }
+                }
             } catch (e: CancellationException) {
-                // 中途松手：回弹到 0 再让异常继续冒泡（协程取消语义不能吞）。
-                motion.animateTo(
-                    targetValue = 0f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    ),
-                )
+                // 中途松手：回到原位。同样不能在被取消的协程里做动画。
+                settling = true
+                settleScope.launch {
+                    try {
+                        motion.animateTo(
+                            targetValue = 0f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                        )
+                    } finally {
+                        settling = false
+                    }
+                }
                 throw e
             }
         }
@@ -181,28 +304,68 @@ internal fun PredictiveBackHost(
         BackHandler(enabled = handleBack, onBack = onBack)
     }
 
-    val progress = motion.value
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
-        // 遮罩在最底层：被推走的页面后面露出的是它，而不是上一页的真实内容。
+        // 底层 1：返回目标页的**真实内容**（若调用方给了）。静态、不接收点击，
+        // 只做 0.96→1.0 的轻微放大 + 压暗回收，读起来"在后景里"但不抢焦点。
+        if (gestureActive && activePrevious != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val p = motion.value
+                        val scale = previousBackScale(p)
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    // 手势期间底层不能吃掉点击/滑动：整块吞掉指针事件。
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent().changes.forEach { it.consume() }
+                            }
+                        }
+                    }
+                    .semantics { invisibleToUser() },
+            ) {
+                activePrevious()
+            }
+        }
+        // 底层 2：遮罩。没给 previous 时它是唯一底层（原有行为）；
+        // 给了 previous 时它仍叠在上面，用于统一压暗、制造层次。
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(scrimColor.copy(alpha = backScrimAlpha(progress))),
+                .drawBehind {
+                    drawRect(
+                        scrimColor.copy(
+                            // 没接管返回（根页）时全透明：根页不允许出现任何灰块。
+                            alpha = if (!gestureActive) {
+                                0f
+                            } else if (activePrevious == null) {
+                                backScrimAlphaNoPrevious(motion.value)
+                            } else {
+                                previousBackDim(motion.value)
+                            },
+                        ),
+                    )
+                },
         )
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .offset { IntOffset(backOverlayOffset(progress, widthPx).roundToInt(), 0) }
+                // offset / graphicsLayer 的 lambda 在布局/绘制阶段求值，
+                // 这里读 motion.value 属于「延迟读取」，不会触发重组。
+                .offset { IntOffset(backOverlayOffset(motion.value, widthPx).roundToInt(), 0) }
                 .graphicsLayer {
-                    val scale = backOverlayScale(progress)
+                    val scale = backOverlayScale(motion.value)
                     scaleX = scale
                     scaleY = scale
                     // 以左缘为锚点缩放：页面被推向右时右边缘不会缩成一条。
                     transformOrigin = TransformOrigin(0f, 0.5f)
                 },
         ) {
-            content(progress)
+            content { motion.value }
         }
     }
 }

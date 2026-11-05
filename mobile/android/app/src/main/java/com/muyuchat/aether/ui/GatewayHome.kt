@@ -40,12 +40,14 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +63,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -84,13 +87,15 @@ import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHaptics
 import com.muyuchat.core.designsystem.McaShape
 import kotlinx.coroutines.delay
+import androidx.compose.ui.layout.ContentScale
 
 internal data class NotReadyNotice(
     val title: String,
     val detail: String,
 )
 
-private const val SETTINGS_ABOUT_GROUP_ID = "10"
+/** 「10 关于」的分区号：更多页的「关于」行与设置直达都必须用它，别按标题匹配。 */
+internal const val SETTINGS_ABOUT_GROUP_ID = "10"
 
 internal data class OverlayFlags(
     val routing: Boolean = false,
@@ -130,11 +135,20 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    // 返回手势的底层快照：进下一层之前抓当前屏，只保留最近一帧（见 BackSnapshot）。
+    val rootView = LocalView.current
+    val backSnapshot = remember { BackSnapshot() }
+    // App 内网页（关于页的链接、Release 页等）：不走任何 Intent。
+    var inAppUrl by remember { mutableStateOf<String?>(null) }
     var selectedTab by rememberSaveable { mutableStateOf(MobileTab.OVERVIEW) }
     var notReady by remember { mutableStateOf<NotReadyNotice?>(null) }
     var showRouting by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var settingsInitialGroup by remember { mutableStateOf<String?>(null) }
+    // 设置页当前是否停在某个分组（二级页）。由 SettingsPage.onLevelChange 上报，
+    // 用于两件事：① 返回手势的底层渲染"设置首页"；② handleBack 先弹回设置首页而不是直接退出。
+    var settingsInGroup by remember { mutableStateOf(false) }
+    var settingsPopSignal by remember { mutableIntStateOf(0) }
     var showProbe by remember { mutableStateOf(false) }
     var showTotp by remember { mutableStateOf(false) }
     var showWake by remember { mutableStateOf(false) }
@@ -149,6 +163,10 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     var copied by remember { mutableStateOf(false) }
     val overlayVisible by GatewayOverlayController.visible.collectAsStateWithLifecycle()
     val tabStateHolder = rememberSaveableStateHolder()
+    // 「上一页」快照层用**独立**的 saveable 命名空间：它和当前层可能在同一帧里渲染
+    // 同一个 tab（AnimatedContent 切换时新旧内容并存），共用一个 holder 会直接抛
+    // `Key OVERVIEW was used multiple times` 并让 App 崩溃（真机复现：点 Tab 即闪退）。
+    val previousTabStateHolder = rememberSaveableStateHolder()
 
     val overlayColors = OverlayColors(
         primary = MaterialTheme.colorScheme.primary.toArgb(),
@@ -250,10 +268,21 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         } else if (showRouting) {
             showRouting = false
         } else if (showSettings) {
+            // 与返回手势露出的那一页一致：先回设置首页，再退到 tab 层。
+            // - 从外部直达某组（settingsInitialGroup != null）：清掉它 → 设置首页；
+            // - 在设置页内部进了分组（settingsInGroup=true，initialGroup 为 null）：
+            //   用 popSignal 让 SettingsPage 弹回首页。
+            // 直达优先：从更多页点「关于/预设」进来时 initialGroup 非空，
+            // 返回应关掉整个设置覆盖层回到来源页（更多），而不是先弹设置首页。
             if (settingsInitialGroup != null) {
                 settingsInitialGroup = null
+                showSettings = false
+            } else if (settingsInGroup) {
+                settingsPopSignal++
             } else {
                 showSettings = false
+                // 已退到 tab 层：快照没用了，立刻释放（只留一帧，且不留到下次导航）。
+                backSnapshot.clear()
             }
         } else if (showProbe) {
             showProbe = false
@@ -276,10 +305,44 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         } else if (showDesktopOnly) {
             showDesktopOnly = false
         } else {
-            selectedTab = MobileTab.OVERVIEW
+            // 覆盖层都关完了：非概览 tab 一律回概览；停在概览时不会走到这里（enabled=false）。
+            RootBackPolicy.targetTab(selectedTab)?.let { selectedTab = it }
         }
     }
 
+    // App 内浏览器：独占整页（不套 Scaffold，避免出现底栏/悬浮球与网页并存）。
+    // 用顶层 if + return，而不是在 Scaffold 的 content lambda 里 `return@Scaffold`
+    // （Scaffold 的内容 lambda 非内联，标号返回会被编译器拒绝）。
+    //
+    // 打开浏览器前记住当时聚焦的设置分组：浏览器关闭后要回到**同一页**（关于页），
+    // 而不是回落设置首页——覆盖期间 SettingsPage 被卸载，内部 activeGroup 会丢。
+    var settingsGroupBeforeBrowser by remember { mutableStateOf<String?>(null) }
+    android.util.Log.d("AetherBrowser", "early return check, inAppUrl=$inAppUrl")
+    if (inAppUrl != null) {
+        InAppBrowserDialog(
+            initialUrl = inAppUrl.orEmpty(),
+            onDismiss = { inAppUrl = null },
+        )
+        return
+    }
+    LaunchedEffect(inAppUrl) {
+        if (inAppUrl == null && settingsInitialGroup == null && settingsGroupBeforeBrowser != null) {
+            settingsInitialGroup = settingsGroupBeforeBrowser
+            settingsGroupBeforeBrowser = null
+        }
+    }
+
+    CompositionLocalProvider(
+        LocalInAppBrowser provides { url: String ->
+            android.util.Log.d("AetherBrowser", "open requested: $url")
+            settingsGroupBeforeBrowser = settingsInitialGroup
+            inAppUrl = url
+        },
+    ) {
+    // 观测：根页是否渲染 + 当前 tab / 覆盖页（只打日志，不改布局）。
+    LaunchedEffect(selectedTab, activeSubpage) {
+        android.util.Log.d("AetherHome", "root rendered, tab=$selectedTab, subpage=$activeSubpage")
+    }
     AetherBackdrop {
         Scaffold(
             containerColor = Color.Transparent,
@@ -325,11 +388,13 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 modifier = Modifier.fillMaxSize(),
                 contentInsets = innerPadding,
             ) {
-                // 预测性返回只包裹页面内容层（不再连带把底栏和悬浮球一起拖走）
-                PredictiveBackHost(
-                    enabled = notReady != null || anySubpageOpen || selectedTab != MobileTab.OVERVIEW,
-                    onBack = handleBack,
-                ) { _ ->
+                // 底层 Tab 栈抽成独立 lambda：它既是本页内容，也能作为返回手势的"上一页"。
+                // 纯结构搬移——状态读取、viewModel 调用、装饰（recede 缩放/透明度）全部原样。
+                // 关键：**任何时刻只组合一份**——
+                //   anySubpageOpen = true  → previous 渲染它，content 只渲染覆盖层；
+                //   anySubpageOpen = false → previous 为 null，content 渲染它。
+                // 这样手势期间底层是真实页面，而不是纯色遮罩。
+                val tabLayer: @Composable (asPrevious: Boolean, tab: MobileTab) -> Unit = { asPrevious, tab ->
                     val recedeScale by animateFloatAsState(
                         targetValue = if (anySubpageOpen) 0.965f else 1f,
                         animationSpec = spring(
@@ -350,13 +415,16 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
-                                    scaleX = recedeScale
-                                    scaleY = recedeScale
-                                    alpha = recedeAlpha
+                                    // 作为"返回目标页"渲染时不要叠加 recede：
+                                    // 缩放交给 PredictiveBackHost 的 0.96→1.0，压暗交给它的 0.32→0，
+                                    // 否则会和 0.965 / 0.55 叠成"双重退化"，露出的一页比真实页面更淡。
+                                    scaleX = if (asPrevious) 1f else recedeScale
+                                    scaleY = if (asPrevious) 1f else recedeScale
+                                    alpha = if (asPrevious) 1f else recedeAlpha
                                 },
                         ) {
                             AnimatedContent(
-                                targetState = selectedTab,
+                                targetState = tab,
                                 transitionSpec = {
                                     fadeIn(tween(180, easing = FastOutSlowInEasing)) togetherWith
                                         fadeOut(tween(130, easing = FastOutSlowInEasing)) using
@@ -364,11 +432,17 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                                 },
                                 label = "primaryTabTransition",
                             ) { currentTab ->
-                                tabStateHolder.SaveableStateProvider(currentTab.name) {
+                                // 快照层与当前层各用各的 holder，避免同一 key 注册两次。
+                                val holder = if (asPrevious) previousTabStateHolder else tabStateHolder
+                                holder.SaveableStateProvider(currentTab.name) {
                                     when (currentTab) {
                                         MobileTab.OVERVIEW -> {
                                             val overviewStats by viewModel.stats.collectAsStateWithLifecycle()
                                             val overviewLatest by viewModel.latest.collectAsStateWithLifecycle()
+                                            // 局域网共享：意图（持久化）与真实绑定结果（status.lanEnabled）分开取，
+                                            // 切换会重启网关，所以地址以 status 为准、开关位置以意图为准。
+                                            val lanSharing by viewModel.lanSharing.collectAsStateWithLifecycle()
+                                            val lanError by viewModel.lanError.collectAsStateWithLifecycle()
                                             LaunchedEffect(Unit) { viewModel.refreshStats() }
                                             OverviewPage(
                                                 state = state,
@@ -387,6 +461,9 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                                                 onGotoSettings = { showSettings = true },
                                                 onGotoOnboard = { showOnboard = true },
                                                 onGotoProbe = { showProbe = true },
+                                                lanSharing = lanSharing,
+                                                onToggleLanSharing = viewModel::setLanSharing,
+                                                lanError = lanError,
                                                 modifier = modifier,
                                             )
                                         }
@@ -548,11 +625,58 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                                                     }
                                                 }
                                             },
+                                            // 「设置」行进设置首页（导航列表），不落到「01 常规」
+                                            onOpenSettingsHome = {
+                                                settingsInitialGroup = null
+                                                showSettings = true
+                                            },
+                                            // 「关于」行直达「10 关于」，不经过设置首页
+                                            onOpenAbout = {
+                                                settingsInitialGroup = SETTINGS_ABOUT_GROUP_ID
+                                                showSettings = true
+                                            },
                                             modifier = modifier,
                                         )
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // 预测性返回只包裹页面内容层（不再连带把底栏和悬浮球一起拖走）。
+                // previous = 真实上一页：设置内进组时用抓到的「设置首页」帧，
+                // 其它覆盖页用真实 Tab 栈；两者都没有才退回纯色遮罩。
+                val snapshotForGesture = if (showSettings && settingsInGroup) backSnapshot.image else null
+                PredictiveBackHost(
+                    // 概览是唯一根部：概览时交系统退出；其它 tab 一律回概览。
+                    enabled = RootBackPolicy.shouldHandleBack(
+                        anySubpageOpen = anySubpageOpen,
+                        selectedTab = selectedTab,
+                    ),
+                    onBack = handleBack,
+                    // 覆盖页真的关掉之后才归零（不是动画一结束就归零）。
+                    open = anySubpageOpen,
+                    previous = when {
+                        snapshotForGesture != null -> ({
+                            Image(
+                                bitmap = snapshotForGesture,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        })
+                        anySubpageOpen -> ({ tabLayer(true, selectedTab) })
+                        selectedTab != MobileTab.OVERVIEW -> ({
+                            tabLayer(true, MobileTab.OVERVIEW)
+                        })
+                        else -> null
+                    },
+                ) { _ ->
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        // 根页（没有覆盖页）时由 content 渲染 Tab 栈，保证有内容可看。
+                        if (!anySubpageOpen) {
+                            tabLayer(false, selectedTab)
                         }
 
                         // 顶层：二级深度页面平滑右进右出转场
@@ -576,7 +700,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                             label = "subpageTransition",
                         ) { subpage ->
                             if (subpage != ActiveSubpage.NONE) {
-                                AetherBackdrop(modifier = Modifier.fillMaxSize()) {
+                                Box(modifier = Modifier.fillMaxSize()) {
                                     when (subpage) {
                                         ActiveSubpage.BACKUP -> {
                                             val backupViewModel: BackupViewModel = viewModel()
@@ -866,12 +990,20 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                                                 state = settingsState,
                                                 onRefresh = settingsViewModel::refresh,
                                                 initialGroup = settingsInitialGroup,
-                                                onBack = {
-                                                    if (settingsInitialGroup != null) {
-                                                        settingsInitialGroup = null
-                                                    } else {
-                                                        showSettings = false
+                                                // 上报层级：返回手势据此决定底层渲染"设置首页"还是 tab 层。
+                                                // 停在设置首页时立刻抓一帧——它就是"下一个二级页"的上一页。
+                                                onLevelChange = { inGroup ->
+                                                    settingsInGroup = inGroup
+                                                    if (!inGroup) {
+                                                        backSnapshot.capture(rootView)
                                                     }
+                                                },
+                                                popSignal = settingsPopSignal,
+                                                onBack = {
+                                                    // 用户口径：从更多页直达的组（关于/预设）按返回**直接回更多**，
+                                                    // 不先弹设置首页；设置首页/组内返回仍走 handleBack 的两段式。
+                                                    settingsInitialGroup = null
+                                                    showSettings = false
                                                 },
                                                 onOpenOverview = {
                                                     showSettings = false
@@ -1004,6 +1136,7 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 }
             }
         }
+    }
     }
 }
 
