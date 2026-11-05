@@ -184,8 +184,11 @@ func profiles() []Profile {
 			// 所以沿用同一套判定：官方优先、自部署兜底。
 			OfficialFirst:   true,
 			OfficialAccount: opencodeIsOfficial,
-			ModelListPath:   "/models",
-			QuotaKind:       "opencode_go",
+			// 模型目录不在 canonical chat 前缀下：/inference/go/openai/v1/models
+			// 会 404（实测）。目录走绝对 URL，命中 /inference/go/v1/models
+			// （该路径实测 200，且带模型元数据）。chat 仍然走 canonical。
+			ModelListPath: "https://opencode.ai/inference/go/v1/models",
+			QuotaKind:     "opencode_go",
 			DefaultModels: []string{
 				"deepseek-v4.1-flash",
 				"deepseek-v4-pro",

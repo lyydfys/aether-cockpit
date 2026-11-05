@@ -39,6 +39,14 @@ func TestOpencodeGoUsesCanonicalEndpoint(t *testing.T) {
 	if p.SessionHeader != "x-opencode-session" {
 		t.Fatalf("session 头 = %q", p.SessionHeader)
 	}
+	// 模型目录不在 canonical chat 前缀下：/inference/go/openai/v1/models 会 404。
+	// 目录必须用可用的绝对 URL，否则渠道会"没有模型"（实测刷新失败）。
+	if !strings.HasPrefix(p.ModelListPath, "https://opencode.ai/") {
+		t.Fatalf("模型目录应走绝对 URL，得到 %q", p.ModelListPath)
+	}
+	if strings.Contains(p.ModelListPath, "/openai/v1/models") {
+		t.Fatalf("该路径实测 404，不该用：%q", p.ModelListPath)
+	}
 }
 
 // Zen（按量付费）与 Go（订阅）是两条独立端点，别互相串。
