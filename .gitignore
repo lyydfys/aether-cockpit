@@ -82,3 +82,8 @@ mobile/android/build-verify/
 
 # 隔离构建目录与本地证据图（不入库）
 docs/assets/
+
+# Android 发布签名材料绝不入库：keystore、properties、临时文件。
+*.jks
+*.keystore
+signing.properties

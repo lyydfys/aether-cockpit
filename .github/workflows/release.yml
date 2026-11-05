@@ -127,9 +127,122 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  android-apk:
+    name: Build Android arm64 release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Android SDK components
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          export ANDROID_HOME="$SDK_ROOT"
+          export ANDROID_SDK_ROOT="$SDK_ROOT"
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager | head -1)"
+          fi
+          test -n "$SDKMANAGER" || { echo "sdkmanager not found under $SDK_ROOT"; exit 1; }
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13113456"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/29.0.13113456" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_VERSION=29.0.13113456" >> "$GITHUB_ENV"
+
+      - name: Make scripts executable
+        run: |
+          chmod +x mobile/android/gradlew scripts/build-android-mobilebridge.sh
+
+      - name: Build Android native bridge
+        run: bash scripts/build-android-mobilebridge.sh
+
+      - name: Decode release keystore
+        env:
+          AETHER_RELEASE_KEYSTORE_BASE64: ${{ secrets.AETHER_RELEASE_KEYSTORE_BASE64 }}
+          AETHER_RELEASE_STORE_PASSWORD: ${{ secrets.AETHER_RELEASE_STORE_PASSWORD }}
+          AETHER_RELEASE_KEY_ALIAS: ${{ secrets.AETHER_RELEASE_KEY_ALIAS }}
+          AETHER_RELEASE_KEY_PASSWORD: ${{ secrets.AETHER_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in AETHER_RELEASE_KEYSTORE_BASE64 AETHER_RELEASE_STORE_PASSWORD AETHER_RELEASE_KEY_ALIAS AETHER_RELEASE_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is not configured"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$AETHER_RELEASE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          test -s "$RUNNER_TEMP/release.keystore"
+
+      - name: Build release APK (release signed)
+        working-directory: mobile/android
+        env:
+          AETHER_RELEASE_STORE_FILE: ${{ runner.temp }}/release.keystore
+          AETHER_RELEASE_STORE_PASSWORD: ${{ secrets.AETHER_RELEASE_STORE_PASSWORD }}
+          AETHER_RELEASE_KEY_ALIAS: ${{ secrets.AETHER_RELEASE_KEY_ALIAS }}
+          AETHER_RELEASE_KEY_PASSWORD: ${{ secrets.AETHER_RELEASE_KEY_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon --no-build-cache :app:assembleRelease
+          APK_DIR="app/build/outputs/apk/release"
+          test -f "$APK_DIR/app-release.apk"
+          test ! -f "$APK_DIR/app-release-unsigned.apk"
+
+      - name: Remove release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+
+      - name: Verify release APK signature
+        working-directory: mobile/android
+        run: |
+          set -euo pipefail
+          APK_DIR="app/build/outputs/apk/release"
+          APK="$APK_DIR/app-release.apk"
+          test -f "$APK"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner | sort -V | tail -1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
+          "$APKSIGNER" verify --print-certs "$APK" | sed -n '1,5p'
+          VERSION="$(grep -E '^versionName=' version.properties | tail -n 1 | cut -d= -f2 | tr -d '[:space:]')"
+          test -n "$VERSION"
+          OUT_DIR="${RUNNER_TEMP}/release-assets-android"
+          mkdir -p "$OUT_DIR"
+          cp "$APK" "$OUT_DIR/AetherCockpit-${VERSION}-android-arm64-v8a.apk"
+
+      - name: Upload Android release asset
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release-assets-android
+          path: ${{ runner.temp }}/release-assets-android/*
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
     name: Publish GitHub Release
-    needs: windows-amd64
+    needs: [windows-amd64, android-apk]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -139,11 +252,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download release assets
+      - name: Download Windows release assets
         uses: actions/download-artifact@v8.0.2
         with:
           name: release-assets
           path: ${{ runner.temp }}/release-assets
+
+      - name: Download Android release assets
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: release-assets-android
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Generate combined SHA256SUMS
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "release-assets"
+          $assets = Get-ChildItem $artifactRoot -File | Where-Object {
+            $_.Extension -in @(".zip", ".apk")
+          } | Sort-Object Name
+          if ($assets.Count -ne 2) {
+            throw "expected exactly 2 release binaries (zip + apk), got $($assets.Count)"
+          }
+          $lines = $assets | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $lines | Set-Content -Encoding ascii (Join-Path $artifactRoot "SHA256SUMS.txt")
 
       - name: Publish GitHub Release
         shell: pwsh
@@ -153,10 +288,19 @@ jobs:
         run: |
           $version = $env:RELEASE_TAG.TrimStart('v')
           $artifactRoot = Join-Path $env:RUNNER_TEMP "release-assets"
-          $packageName = "aether-cockpit-$version-windows-amd64"
+          $zip = Get-ChildItem $artifactRoot -Filter "aether-cockpit-*-windows-amd64.zip" -File | Select-Object -First 1
+          $apk = Get-ChildItem $artifactRoot -Filter "AetherCockpit-*-android-arm64-v8a.apk" -File | Select-Object -First 1
+          if ($null -eq $zip -or $null -eq $apk) {
+            throw "missing release binary(s): zip=$($zip -ne $null) apk=$($apk -ne $null)"
+          }
+          $notes = @"
+          Android APK 使用 CI 配置的 release keystore 签名，并已通过 apksigner verify；不是 debug 签名。
+          Windows 包保持原有 zip；两个平台各自提供独立产物与 SHA256SUMS。
+          "@
           gh release create $env:RELEASE_TAG `
-            (Join-Path $artifactRoot "$packageName.zip") `
+            $zip.FullName `
+            $apk.FullName `
             (Join-Path $artifactRoot "SHA256SUMS.txt") `
             --title "Aether Cockpit $version" `
-            --generate-notes `
+            --notes $notes `
             --verify-tag

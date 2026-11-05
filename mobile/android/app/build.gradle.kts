@@ -21,6 +21,40 @@ val appVersionCode: Int = (appVersion.getProperty("versionCode") ?: error("versi
 val appVersionName: String = (appVersion.getProperty("versionName") ?: error("version.properties 缺少 versionName")).trim()
 check(appVersionName.isNotEmpty()) { "version.properties 的 versionName 不能为空" }
 
+// 发布签名：优先读 mobile/android/signing.properties（不入库），否则读 AETHER_RELEASE_*
+// 环境变量（驼峰转大写下划线）。四项齐全才算启用；密钥/口令绝不写死在仓库。
+val releaseSigningProperties = Properties()
+val releaseSigningPropertiesFile = rootProject.file("signing.properties")
+if (releaseSigningPropertiesFile.isFile) {
+    releaseSigningPropertiesFile.inputStream().use(releaseSigningProperties::load)
+}
+
+fun releaseSigningProperty(name: String): String? =
+    releaseSigningProperties.getProperty(name)
+        ?: System.getenv(
+            "AETHER_RELEASE_" + name
+                .replace(Regex("([a-z])([A-Z])"), "$1_$2")
+                .uppercase(),
+        )
+
+val releaseSigningEnabled = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+    .all { !releaseSigningProperty(it).isNullOrBlank() }
+val releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("assembleRelease", ignoreCase = true)
+}
+// 唯一豁免：Mobile Android Gate 里的 scripts/check-mobile-release.sh 专门检查
+// **unsigned release 变体**的内容（版本号/ABI/不可调试），强行要求签名会把主 CI 弄红。
+// Release workflow 不在此豁免；它必须带 AETHER_RELEASE_* 四个变量。
+val mobileGateWorkflow = System.getenv("GITHUB_WORKFLOW") == "Mobile Android Gate"
+val smokeSigning = (project.findProperty("aetherSmokeSigning") as String?)?.toBoolean() == true
+if (releaseTaskRequested && !releaseSigningEnabled && !mobileGateWorkflow && !smokeSigning) {
+    throw GradleException(
+        "缺少发布签名配置：请设置 mobile/android/signing.properties 或 AETHER_RELEASE_STORE_FILE / " +
+            "AETHER_RELEASE_STORE_PASSWORD / AETHER_RELEASE_KEY_ALIAS / AETHER_RELEASE_KEY_PASSWORD。" +
+            "拒绝静默产出 unsigned release 包。",
+    )
+}
+
 android {
     namespace = "com.muyuchat.aether"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -48,18 +82,35 @@ android {
         compose = true
     }
 
-    // Stage 7 冒烟签名：**默认关闭**。
-    //
-    // release 变体默认是没有签名配置的（产出 app-release-unsigned.apk），这是有意的：
-    // 发布签名不该由构建脚本自己决定。但"未签名"也意味着 release 变体从没被装上验证过。
-    // 所以给一条显式开关：只有 -PaetherSmokeSigning=true 时，才把 **debug keystore**
-    // 挂到 release 上，用于 scripts/check-mobile-release-smoke.sh 的装机冒烟。
-    // 带这个开关产出的 APK 不可发布、不可分发，脚本会打印 SMOKE SIGNING 警告。
+    // 条件式 signingConfig：四项齐全才注册；storeFile 按仓库根 signing.properties 解析。
+    signingConfigs {
+        if (releaseSigningEnabled) {
+            create("release") {
+                storeFile = rootProject.file(requireNotNull(releaseSigningProperty("storeFile")))
+                storePassword = requireNotNull(releaseSigningProperty("storePassword"))
+                keyAlias = requireNotNull(releaseSigningProperty("keyAlias"))
+                keyPassword = requireNotNull(releaseSigningProperty("keyPassword"))
+                // Release 必须同时带 v2/v3 签名方案，便于 Android 9+ 校验与后续轮换。
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // 明确用工具链默认 debug key，不复用 release key。
+        }
         release {
-            if ((project.findProperty("aetherSmokeSigning") as String?)?.toBoolean() == true) {
+            if (releaseSigningEnabled) {
+                signingConfig = signingConfigs.getByName("release")
+            } else if (smokeSigning) {
+                logger.warn("SMOKE SIGNING: AETHER_RELEASE_* 未全部设置，release 用 debug keystore 签名，禁止发布。")
                 signingConfig = signingConfigs.getByName("debug")
                 matchingFallbacks += listOf("debug")
+            } else {
+                logger.warn("WARNING: release 未配置签名；仅 Mobile Android Gate 的 unsigned release 检查允许走到这里。")
             }
         }
     }

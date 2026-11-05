@@ -162,3 +162,13 @@ Aether Cockpit 是本机网关，不是托管代理服务。默认只绑定回�
 ## 许可证
 
 本项目使用 [Apache License 2.0](LICENSE)。第三方组件的归属信息见 [NOTICE](NOTICE)。
+
+## 发布签名
+
+Android 正式包使用独立 release keystore 签名，构建时从 mobile/android/signing.properties（不入库）或 AETHER_RELEASE_* 环境变量读取。CI 通过以下仓库 Secrets 提供：
+
+AETHER_RELEASE_KEYSTORE_BASE64、AETHER_RELEASE_STORE_PASSWORD、AETHER_RELEASE_KEY_ALIAS、AETHER_RELEASE_KEY_PASSWORD
+
+本地可用 scripts/gen-android-keystore.sh 生成密钥并打印 base64。
+
+> **务必在仓库外备份生成的 keystore**。密钥一旦丢失，后续版本无法覆盖安装，用户必须先卸载（会丢数据）。仅存放在 CI Secrets 中不够——Secrets 删除后无法恢复。
