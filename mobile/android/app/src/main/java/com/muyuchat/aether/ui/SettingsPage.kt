@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -542,14 +543,48 @@ internal fun settingsPartitionAccent(partition: SettingsPartition, running: Bool
 /** 一组一卡后不再需要「同区其它分组」入口，这里保留空实现只为兼容旧调用点。 */
 internal fun settingsPartitionSiblings(id: String): List<SettingsGroup> = emptyList()
 
-/** 深色 Hero 卡：深蓝近黑底 + 文字层 + 三个状态胶囊。 */
+/**
+ * Hero 卡：语义是「深色品牌块」，两档主题都必须保持深底浅字。
+ *
+ * 所以不用 `inverseSurface` 一把梭——它在深色主题下会翻转成浅底。
+ * 浅色主题用 `inverse*`（本身就是深底浅字），深色主题用 `surfaceVariant`/`onSurfaceVariant`
+ * （深色主题里仍是深灰底 + 浅字），强调色同理用 `inversePrimary` / `primary`。
+ */
 @Composable
 private fun SettingsHeroCard(status: GatewayStatus) {
+    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    val heroBg = if (dark) {
+        MaterialTheme.colorScheme.surfaceVariant
+    } else {
+        MaterialTheme.colorScheme.inverseSurface
+    }
+    val heroOnBg = if (dark) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.inverseOnSurface
+    }
+    val heroAccent = if (dark) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.inversePrimary
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp))
-            .background(androidx.compose.ui.graphics.Color(0xFF0C1422))
+            // 深色主题下 Hero 底色（surfaceVariant）与页底明度接近，用一条 hairline 把
+            // "品牌块"的边界显式画出来；浅色档对比本来就很强，不加。
+            .then(
+                if (dark) {
+                    Modifier.border(
+                        McaHairline.stroke(),
+                        androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+                    )
+                } else {
+                    Modifier
+                },
+            )
+            .background(heroBg)
             .padding(DeepCardPadding),
     ) {
         Column {
@@ -557,7 +592,7 @@ private fun SettingsHeroCard(status: GatewayStatus) {
             Text(
                 text = "AETHER COCKPIT",
                 style = MaterialTheme.typography.labelSmall,
-                color = androidx.compose.ui.graphics.Color(0xFF7F8DA6),
+                color = heroOnBg.copy(alpha = 0.7f),
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
@@ -567,7 +602,7 @@ private fun SettingsHeroCard(status: GatewayStatus) {
                 text = "此处即边界",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-                color = androidx.compose.ui.graphics.Color(0xFFF2F5FA),
+                color = heroOnBg,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
@@ -576,7 +611,7 @@ private fun SettingsHeroCard(status: GatewayStatus) {
             Text(
                 text = "渠道、模型与脱敏规则在此落地生根，一寸都不外流。",
                 style = MaterialTheme.typography.bodySmall,
-                color = androidx.compose.ui.graphics.Color(0xB3FFFFFF),
+                color = heroOnBg.copy(alpha = 0.7f),
                 maxLines = 3,
             )
             Spacer(Modifier.height(12.dp))
@@ -586,19 +621,19 @@ private fun SettingsHeroCard(status: GatewayStatus) {
             ) {
                 // 只保留能读到真实数据的胶囊：「模型」「检索」没有可读来源，
                 // 写死「未加载 / 已停用」会被读成"功能被关掉"，因此不渲染（有数据时再加回）。
-                HeroPill("状态", if (status.running) "运行中" else "待机")
+                HeroPill(label = "状态", value = if (status.running) "运行中" else "待机", onBg = heroOnBg, accent = heroAccent)
             }
         }
     }
 }
 
-/** Hero 里的半透明描边胶囊：小圆点 + 「标签 · 值」。 */
+/** Hero 里的半透明胶囊：底色/文字/圆点都由调用方按当前主题传入，保证深浅两档都压在深色底上。 */
 @Composable
-private fun HeroPill(label: String, value: String) {
+private fun HeroPill(label: String, value: String, onBg: androidx.compose.ui.graphics.Color, accent: androidx.compose.ui.graphics.Color) {
     Row(
         modifier = Modifier
             .clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
-            .background(androidx.compose.ui.graphics.Color(0x33FFFFFF))
+            .background(onBg.copy(alpha = 0.12f))
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -606,13 +641,13 @@ private fun HeroPill(label: String, value: String) {
             Modifier
                 .size(6.dp)
                 .clip(androidx.compose.foundation.shape.CircleShape)
-                .background(androidx.compose.ui.graphics.Color(0xFF8FB6FF)),
+                .background(accent),
         )
         Spacer(Modifier.width(6.dp))
         Text(
             text = "$label · $value",
             style = MaterialTheme.typography.labelSmall,
-            color = androidx.compose.ui.graphics.Color(0xFFE6ECF5),
+            color = onBg,
             maxLines = 1,
             softWrap = false,
         )
