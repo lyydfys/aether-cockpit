@@ -68,6 +68,16 @@ export default {
     const isActive = (pid) => (providerOf(pid)?.agents || []).some((a) => a.current);
     // 官转率统计：{ providers: { <provider_id>: {total, official, relay, unknown, share} } }
     const routingOf = (pid) => ((state.routing && state.routing.providers) || {})[pid];
+    // 官转率只统计 DeepSeek V4.1 Flash：上游 id 是 deepseek-v4.1-flash，
+    // 界面显示名可能写成 DeepSeek-Flash / DeepSeek V4.1 Flash，两种都认。
+    function isFlashModel(p, upstream) {
+      const norm = (s) => String(s || '').toLowerCase().replace(/[\s_]+/g, '-');
+      const id = norm(upstream);
+      if (id === 'deepseek-v4.1-flash' || id === 'deepseek-flash') return true;
+      if (id.endsWith('/deepseek-v4.1-flash') || id.endsWith('/deepseek-flash')) return true;
+      const label = norm(modelLabel(p, upstream)).replace(/-/g, '');
+      return label === 'deepseekflash' || label === 'deepseekv41flash';
+    }
     // 把上游模型名（deepseek-v4.1-flash）映射成渠道里配置的显示名
     // （DeepSeek V4.1 Flash）；找不到就原样返回，保证徽章永远有字可显示。
     function modelLabel(p, upstream) {
@@ -258,6 +268,9 @@ export default {
         const models = rs.models || {};
         const rows = Object.keys(models)
           .map((m) => ({ model: m, ...models[m] }))
+          // 只展示 DeepSeek V4.1 Flash 的官转率：它和 pro 落在不同后端，
+          // 混在一起看没有意义；用户只关心这个模型到底走没走官方。
+          .filter((x) => isFlashModel(p, x.model))
           .filter((x) => x.total >= 10)
           .sort((x, y) => y.total - x.total);
         const top = rows[0];
@@ -271,15 +284,9 @@ export default {
             title: '官转率（推定，按模型统计）\n' + detail +
               '\n口径：按上游响应 id 前缀推定，chatcmpl-/纯数字=官方，gw-=中转；仅作趋势参考',
           }, chip(label + ' 官转 ' + pct + '%', pct >= 90 ? 'green' : pct >= 60 ? 'amber' : 'plain')));
-        } else if (rs.total >= 10 && typeof rs.share === 'number') {
-          // 老数据（只有渠道级计数）：退化成渠道级展示。
-          const pct = Math.round(rs.share * 100);
-          head.append(h('span', {
-            title: '官转率（推定）' + pct + '%\n官方 ' + rs.official + ' · 中转 ' + rs.relay +
-              ' · 未知 ' + rs.unknown + '（共 ' + rs.total + ' 次）\n' +
-              '口径：按上游响应 id 前缀推定，chatcmpl-/纯数字=官方，gw-=中转；仅作趋势参考',
-          }, chip('官转 ' + pct + '%', pct >= 90 ? 'green' : pct >= 60 ? 'amber' : 'plain')));
         }
+        // 只统计 DeepSeek V4.1 Flash：其它模型或只有渠道级老数据时一律不显示，
+        // 避免用一个混合口径的百分比误导判断。
       }
       head.append(h('span', { class: 'grow' }));
       head.append(btn(a.note ? '备注' : '加备注', { ghost: true, class: 'sm acct-note-btn', icon: 'edit', title: a.note || '给这个账号加一条备注', onClick: () => noteDialog(a) }));
