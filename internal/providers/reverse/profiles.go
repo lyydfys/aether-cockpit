@@ -180,6 +180,11 @@ func profiles() []Profile {
 			DefaultBaseURL:  "https://opencode.ai/inference/go/openai/v1",
 			DefaultChatPath: "/chat/completions",
 			SessionHeader:   "x-opencode-session",
+			// Go 的 Key 只认 x-api-key：发 Authorization: Bearer 会被上游
+			// 回 401 Invalid credential（实测；同一把 Key 用 x-api-key 访问
+			// 模型列表是 200）。这是头名问题，不是凭证问题。
+			AuthHeader:   "x-api-key",
+			AuthNoPrefix: true,
 			// Go 订阅本身就是官方端点；同样允许用户把它指到自部署上，
 			// 所以沿用同一套判定：官方优先、自部署兜底。
 			OfficialFirst:   true,

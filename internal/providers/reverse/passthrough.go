@@ -69,8 +69,7 @@ func (p *Provider) ResponsesPassthrough(ctx context.Context, env *provider.Accou
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	cfg := chatConfig(sp)
-	if err := applyAuth(httpReq, env, cfg.Auth); err != nil {
+	if err := applyAuth(httpReq, env, authFor(sp, &p.profile)); err != nil {
 		return nil, err.WithProvider(p.profile.ID)
 	}
 	if sp != nil {

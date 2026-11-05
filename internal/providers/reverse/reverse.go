@@ -62,6 +62,17 @@ type Profile struct {
 	// 的 x-opencode-session）。值取网关已算好的 req.SessionKey，跨轮稳定。
 	SessionHeader string
 
+	// AuthHeader 覆盖默认鉴权头名（默认 Authorization: Bearer）。
+	//
+	// 有些渠道的 Key 只认特定头：OpenCode Go 用 x-api-key，
+	// 发 Bearer 会被回 401 Invalid credential。spec 里显式配了鉴权头时以
+	// spec 为准，这里只是"没有 spec 时的渠道默认值"。
+	AuthHeader string
+
+	// AuthNoPrefix 表示鉴权头里直接放原始 Key，不加 "Bearer " 前缀
+	// （x-api-key 这类头就是如此）。
+	AuthNoPrefix bool
+
 	// ModelListPath 是上游模型列表端点（如 "/models"）；空表示该渠道
 	// 没有可用的模型列表接口，实时目录不会尝试刷新它。
 	ModelListPath string
