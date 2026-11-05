@@ -8,17 +8,20 @@ import (
 
 func TestClassifyID(t *testing.T) {
 	cases := map[string]Family{
-		"chatcmpl-abc123":  FamilyOfficial,
-		"msg_01H8XYZ":      FamilyOfficial,
-		"resp_abc":         FamilyOfficial,
-		"0217931234567890": FamilyOfficial,
-		"gw-7f3a2b":        FamilyRelay,
-		"GW-UPPER":         FamilyRelay,
-		"req-cell-42":      FamilyRelay,
-		"":                 FamilyUnknown,
-		"weird-id-123":     FamilyUnknown,
-		"chatcmpl":         FamilyUnknown, // 没有分隔符，不算官方前缀
-		"  02179  ":        FamilyOfficial,
+		"chatcmpl-abc123": FamilyOfficial,
+		"msg_01H8XYZ":     FamilyOfficial,
+		"resp_abc":        FamilyOfficial,
+		// 实测样本：v4-pro（官方校验 400）的正常响应 id。
+		"021793875375521904c389cfd819598df3df498c1c52189bed0d3": FamilyOfficial,
+		"  021793875375521904c389cfd819  ":                      FamilyOfficial,
+		// 实测样本：flash（参数被夹）的正常响应 id —— 32 位纯十六进制。
+		"344c99fe870e61a0feed687f0ee8dcd7": FamilyRelay,
+		"gw-7f3a2b":                        FamilyRelay,
+		"GW-UPPER":                         FamilyRelay,
+		"req-cell-42":                      FamilyRelay,
+		"":                                 FamilyUnknown,
+		"weird-id-123":                     FamilyUnknown,
+		"chatcmpl":                         FamilyUnknown, // 没有分隔符，不算官方前缀
 	}
 	for id, want := range cases {
 		if got := classifyID(id); got != want {
@@ -50,11 +53,11 @@ func TestExtractID(t *testing.T) {
 }
 
 func TestRecordCounts(t *testing.T) {
-	s := &Store{data: map[string]*Counters{}}
-	s.record("opencode-go", "chatcmpl-a")
-	s.record("opencode-go", "chatcmpl-b")
-	s.record("opencode-go", "gw-1")
-	s.record("opencode-go", "weird")
+	s := &Store{data: map[string]*Counters{}, models: map[string]map[string]*Counters{}}
+	s.record("opencode-go", "deepseek-v4.1-flash", "chatcmpl-a")
+	s.record("opencode-go", "deepseek-v4.1-flash", "chatcmpl-b")
+	s.record("opencode-go", "deepseek-v4.1-flash", "gw-1")
+	s.record("opencode-go", "deepseek-v4.1-flash", "weird")
 	if c := s.data["opencode-go"]; c.Total != 4 || c.Official != 2 || c.Relay != 1 || c.Unknown != 1 {
 		t.Fatalf("计数不对：%+v", c)
 	}
@@ -62,7 +65,7 @@ func TestRecordCounts(t *testing.T) {
 		t.Fatalf("官方占比 = %v，want 0.5", share)
 	}
 	// 不同渠道互不影响。
-	s.record("other", "gw-2")
+	s.record("other", "m2", "gw-2")
 	if c := s.data["other"]; c.Relay != 1 || c.Total != 1 {
 		t.Fatalf("其它渠道计数不对：%+v", c)
 	}
@@ -71,12 +74,12 @@ func TestRecordCounts(t *testing.T) {
 // Sniff 必须原样透传字节：统计不能改变上游响应内容。
 func TestSniffPassesThrough(t *testing.T) {
 	payload := `{"id":"chatcmpl-xyz","choices":[]}` + strings.Repeat("x", 5000)
-	s := &Store{data: map[string]*Counters{}}
+	s := &Store{data: map[string]*Counters{}, models: map[string]map[string]*Counters{}}
 	old := global
 	global = s
 	defer func() { global = old }()
 
-	body := Sniff(io.NopCloser(strings.NewReader(payload)), "p1")
+	body := Sniff(io.NopCloser(strings.NewReader(payload)), "p1", "m1")
 	got, err := io.ReadAll(body)
 	if err != nil {
 		t.Fatalf("读取失败：%v", err)
@@ -91,11 +94,11 @@ func TestSniffPassesThrough(t *testing.T) {
 
 // 空体/无 id 时不能 panic，也不能凭空计数。
 func TestSniffNoID(t *testing.T) {
-	s := &Store{data: map[string]*Counters{}}
+	s := &Store{data: map[string]*Counters{}, models: map[string]map[string]*Counters{}}
 	old := global
 	global = s
 	defer func() { global = old }()
-	body := Sniff(io.NopCloser(strings.NewReader("data: keepalive\n\n")), "p2")
+	body := Sniff(io.NopCloser(strings.NewReader("data: keepalive\n\n")), "p2", "m2")
 	_, _ = io.ReadAll(body)
 	if len(s.data) != 0 {
 		t.Fatalf("无 id 不该计数：%+v", s.data)

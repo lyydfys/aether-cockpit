@@ -6,9 +6,9 @@ import "strings"
 //
 // 这里只做"找第一处 \"id\": 取值"，不解析 JSON：流式 SSE 的每一帧是独立的
 // data: 行，整体并不是合法 JSON；而且我们只要 id 这一个字段。
-func recordFromPrefix(providerID string, prefix []byte) {
+func recordFromPrefix(providerID, model string, prefix []byte) {
 	if id := extractID(string(prefix)); id != "" {
-		Record(providerID, id)
+		Record(providerID, model, id)
 	}
 }
 

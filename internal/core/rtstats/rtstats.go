@@ -67,16 +67,14 @@ func classifyID(id string) Family {
 		return FamilyOfficial
 	case strings.HasPrefix(v, "resp_"): // OpenAI Responses 原生形态
 		return FamilyOfficial
+	case isHex32(v):
+		// 32 位十六进制：实测与"参数被夹/中转后端"同时出现，
+		// 同账号下官方后端给的是 021793… 这种数字前缀长 id。
+		return FamilyRelay
 	}
-	// 纯数字 id（例如 021793…）：实测出现在官方路径上。
-	numeric := true
-	for _, r := range v {
-		if r < '0' || r > '9' {
-			numeric = false
-			break
-		}
-	}
-	if numeric {
+	// 纯数字或"数字前缀 + 十六进制尾巴"（如 0217938753…）：
+	// 实测出现在官方路径上（v4-pro 与官方探测均在用）。
+	if looksOfficialNumeric(v) {
 		return FamilyOfficial
 	}
 	return FamilyUnknown
@@ -86,12 +84,15 @@ func classifyID(id string) Family {
 type Store struct {
 	mu   sync.Mutex
 	data map[string]*Counters
-	path string
+	// models 是"渠道 → 模型 → 计数"的二级表：官转率其实是按模型分的
+	// （实测同一渠道 flash 与 pro 落在完全不同的后端），渠道级聚合只作总览。
+	models map[string]map[string]*Counters
+	path   string
 	// lastFlush 用于节流，避免每个响应都写盘。
 	lastFlush time.Time
 }
 
-var global = &Store{data: map[string]*Counters{}}
+var global = &Store{data: map[string]*Counters{}, models: map[string]map[string]*Counters{}}
 
 // SetPath 设置落盘路径并尝试加载已有统计。
 //
@@ -120,16 +121,17 @@ func SetPath(path string) {
 	global.mu.Unlock()
 }
 
-// Record 记录一次响应 id。
-func Record(providerID, id string) {
-	global.record(providerID, id)
+// Record 记录一次响应 id（渠道级 + 模型级各记一笔）。
+func Record(providerID, model, id string) {
+	global.record(providerID, model, id)
 }
 
-func (s *Store) record(providerID, id string) {
+func (s *Store) record(providerID, model, id string) {
 	providerID = strings.TrimSpace(providerID)
 	if providerID == "" {
 		return
 	}
+	model = strings.TrimSpace(model)
 	fam := classifyID(id)
 	s.mu.Lock()
 	c := s.data[providerID]
@@ -137,16 +139,32 @@ func (s *Store) record(providerID, id string) {
 		c = &Counters{}
 		s.data[providerID] = c
 	}
-	c.Total++
-	switch fam {
-	case FamilyOfficial:
-		c.Official++
-	case FamilyRelay:
-		c.Relay++
-	default:
-		c.Unknown++
+	bump := func(x *Counters) {
+		x.Total++
+		switch fam {
+		case FamilyOfficial:
+			x.Official++
+		case FamilyRelay:
+			x.Relay++
+		default:
+			x.Unknown++
+		}
+		x.UpdatedAt = time.Now().Unix()
 	}
-	c.UpdatedAt = time.Now().Unix()
+	bump(c)
+	if model != "" {
+		byModel := s.models[providerID]
+		if byModel == nil {
+			byModel = map[string]*Counters{}
+			s.models[providerID] = byModel
+		}
+		mc := byModel[model]
+		if mc == nil {
+			mc = &Counters{}
+			byModel[model] = mc
+		}
+		bump(mc)
+	}
 	shouldFlush := s.path != "" && time.Since(s.lastFlush) > 3*time.Second
 	if shouldFlush {
 		s.lastFlush = time.Now()
@@ -221,4 +239,68 @@ func Flush() {
 	path := global.path
 	global.mu.Unlock()
 	writeFile(path, snap)
+}
+
+// ModelsSnapshot 返回某渠道下各模型的计数副本。
+func ModelsSnapshot(providerID string) map[string]Counters {
+	global.mu.Lock()
+	defer global.mu.Unlock()
+	out := map[string]Counters{}
+	for m, c := range global.models[providerID] {
+		out[m] = *c
+	}
+	return out
+}
+
+// AllModels 返回"渠道 → 模型 → 计数"的完整副本（供 API 一次性取走）。
+func AllModels() map[string]map[string]Counters {
+	global.mu.Lock()
+	defer global.mu.Unlock()
+	out := make(map[string]map[string]Counters, len(global.models))
+	for pid, byModel := range global.models {
+		cp := make(map[string]Counters, len(byModel))
+		for m, c := range byModel {
+			cp[m] = *c
+		}
+		out[pid] = cp
+	}
+	return out
+}
+
+// isHex32 判断是否为 32 位纯十六进制（实测对应"参数被夹"的中转后端）。
+func isHex32(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// looksOfficialNumeric 判断"数字前缀 + 十六进制尾巴"的官方 id 形态
+// （观测样本如 021793875375521904c389cfd819598df3df498c1c52189bed0d3）。
+// 要求至少 6 位数字开头且总长 >= 24，避免把普通 id 误判成官方。
+func looksOfficialNumeric(s string) bool {
+	if len(s) < 24 {
+		return false
+	}
+	digits := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			break
+		}
+		digits++
+	}
+	if digits < 6 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }

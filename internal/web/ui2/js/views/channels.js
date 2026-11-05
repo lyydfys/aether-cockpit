@@ -68,6 +68,20 @@ export default {
     const isActive = (pid) => (providerOf(pid)?.agents || []).some((a) => a.current);
     // 官转率统计：{ providers: { <provider_id>: {total, official, relay, unknown, share} } }
     const routingOf = (pid) => ((state.routing && state.routing.providers) || {})[pid];
+    // 把上游模型名（deepseek-v4.1-flash）映射成渠道里配置的显示名
+    // （DeepSeek V4.1 Flash）；找不到就原样返回，保证徽章永远有字可显示。
+    function modelLabel(p, upstream) {
+      const list = (p && p.models) || [];
+      for (const m of list) {
+        const id = String(m.id || '');
+        const up = String(m.upstream_model || m.upstream || '');
+        if (up === upstream || id === upstream ||
+            id === (p.id + '/' + upstream) || id.endsWith('/' + upstream)) {
+          return m.name || m.display_name || upstream;
+        }
+      }
+      return upstream;
+    }
 
     function remaining(w) { return 100 - usedPct(w); }
     // 可用积分：优先 total/balance 原始数值；只有窗口时按 limit×(1-used%) 折算。
@@ -237,13 +251,35 @@ export default {
       // 官转率：按响应 id 前缀推定的后端族群占比（点开有口径说明）。
       // 样本太少不显示，避免 1 次请求就宣布"100% 官方"。
       const rs = routingOf(a.provider_id);
-      if (rs && rs.total >= 10 && typeof rs.share === 'number') {
-        const pct = Math.round(rs.share * 100);
-        head.append(h('span', {
-          title: '官转率（推定）' + pct + '%\n官方 ' + rs.official + ' · 中转 ' + rs.relay +
-            ' · 未知 ' + rs.unknown + '（共 ' + rs.total + ' 次）\n' +
-            '口径：按上游响应 id 前缀推定，chatcmpl-/纯数字=官方，gw-=中转；仅作趋势参考',
-        }, chip('官转 ' + pct + '%', pct >= 90 ? 'green' : pct >= 60 ? 'amber' : 'plain')));
+      if (rs) {
+        // 官转率是**按模型**统计的：同一渠道里 flash 和 pro 会落在完全不同的
+        // 后端，渠道级平均会变成没意义的数字。优先展示样本最多的那个模型，
+        // 徽章上带模型名，避免误读成整个渠道的比例。
+        const models = rs.models || {};
+        const rows = Object.keys(models)
+          .map((m) => ({ model: m, ...models[m] }))
+          .filter((x) => x.total >= 10)
+          .sort((x, y) => y.total - x.total);
+        const top = rows[0];
+        if (top) {
+          const pct = Math.round((top.share || 0) * 100);
+          const label = modelLabel(p, top.model);
+          const detail = rows.map((x) => modelLabel(p, x.model) + ' ' +
+            Math.round((x.share || 0) * 100) + '%（官方 ' + x.official + ' · 中转 ' + x.relay +
+            ' · 未知 ' + x.unknown + '）').join('\n');
+          head.append(h('span', {
+            title: '官转率（推定，按模型统计）\n' + detail +
+              '\n口径：按上游响应 id 前缀推定，chatcmpl-/纯数字=官方，gw-=中转；仅作趋势参考',
+          }, chip(label + ' 官转 ' + pct + '%', pct >= 90 ? 'green' : pct >= 60 ? 'amber' : 'plain')));
+        } else if (rs.total >= 10 && typeof rs.share === 'number') {
+          // 老数据（只有渠道级计数）：退化成渠道级展示。
+          const pct = Math.round(rs.share * 100);
+          head.append(h('span', {
+            title: '官转率（推定）' + pct + '%\n官方 ' + rs.official + ' · 中转 ' + rs.relay +
+              ' · 未知 ' + rs.unknown + '（共 ' + rs.total + ' 次）\n' +
+              '口径：按上游响应 id 前缀推定，chatcmpl-/纯数字=官方，gw-=中转；仅作趋势参考',
+          }, chip('官转 ' + pct + '%', pct >= 90 ? 'green' : pct >= 60 ? 'amber' : 'plain')));
+        }
       }
       head.append(h('span', { class: 'grow' }));
       head.append(btn(a.note ? '备注' : '加备注', { ghost: true, class: 'sm acct-note-btn', icon: 'edit', title: a.note || '给这个账号加一条备注', onClick: () => noteDialog(a) }));

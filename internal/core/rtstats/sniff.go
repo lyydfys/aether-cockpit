@@ -14,16 +14,17 @@ const sniffLimit = 12 << 10
 // 放在这一层而不是解析器里，是因为流式/非流式/json/ndjson 四种形态都要统计，
 // 而它们的解析器各写各的；在 HTTP body 层统一嗅探最省事，也不会让统计逻辑
 // 掺进协议转换。
-func Sniff(body io.ReadCloser, providerID string) io.ReadCloser {
+func Sniff(body io.ReadCloser, providerID, model string) io.ReadCloser {
 	if body == nil {
 		return body
 	}
-	return &sniffReader{inner: body, providerID: providerID}
+	return &sniffReader{inner: body, providerID: providerID, model: model}
 }
 
 type sniffReader struct {
 	inner      io.ReadCloser
 	providerID string
+	model      string
 	done       bool
 	// pending 是第一次读取时多读出来的字节（已读过、还没交给调用方）。
 	pending []byte
@@ -43,7 +44,7 @@ func (r *sniffReader) Read(p []byte) (int, error) {
 	buf := make([]byte, sniffLimit)
 	n, err := r.inner.Read(buf)
 	if n > 0 {
-		recordFromPrefix(r.providerID, buf[:n])
+		recordFromPrefix(r.providerID, r.model, buf[:n])
 		r.pending = append(r.pending, buf[:n]...)
 	}
 	if n > 0 {
