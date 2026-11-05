@@ -151,5 +151,5 @@ Aether Cockpit
   开源项目。这些项目的代码未被复制或链接进本仓库，此处按 MIT / LGPL-3.0 的署名
   要求保留其版权与出处：
 
-  aether — MIT — https://github.com/aether/aether
-  relay-panel — LGPL-3.0 — https://github.com/Aether/relay-panel
+  magpie — MIT — https://github.com/yetone/magpie
+  sub2api — LGPL-3.0 — https://github.com/Wei-Shaw/sub2api

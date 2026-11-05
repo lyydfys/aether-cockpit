@@ -121,7 +121,7 @@ Bug reports, focused feature requests, and pull requests are welcome. Please rea
 
 ## Design references and credits
 
-The channel catalog, routing strategies, and usage views were informed by [aether](https://github.com/aether/aether) (MIT) and [relay-panel](https://github.com/Aether/relay-panel) (LGPL-3.0). Thanks to their authors and contributors. No code from those projects is copied into or linked against this repository; attribution and license details are listed in [NOTICE](NOTICE).
+The channel catalog, routing strategies, and usage views were informed by [magpie](https://github.com/yetone/magpie) (MIT) and [sub2api](https://github.com/Wei-Shaw/sub2api) (LGPL-3.0). Thanks to their authors and contributors. No code from those projects is copied into or linked against this repository; attribution and license details are listed in [NOTICE](NOTICE).
 
 ## License
 

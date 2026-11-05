@@ -157,7 +157,7 @@ Aether Cockpit 是本机网关，不是托管代理服务。默认只绑定回�
 
 ## 设计参考与致谢
 
-渠道目录、路由策略与用量视图的设计参考了 [aether](https://github.com/aether/aether)（MIT）与 [relay-panel](https://github.com/Aether/relay-panel)（LGPL-3.0）。感谢两个项目的作者与贡献者。这些项目的代码未被复制或链接进本仓库，署名与许可信息见 [NOTICE](NOTICE)。
+渠道目录、路由策略与用量视图的设计参考了 [magpie](https://github.com/yetone/magpie)（MIT）与 [sub2api](https://github.com/Wei-Shaw/sub2api)（LGPL-3.0）。感谢两个项目的作者与贡献者。这些项目的代码未被复制或链接进本仓库，署名与许可信息见 [NOTICE](NOTICE)。
 
 ## 许可证
 
