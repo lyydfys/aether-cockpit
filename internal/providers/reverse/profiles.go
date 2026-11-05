@@ -1,6 +1,39 @@
 package reverse
 
-import "aether-cockpit/internal/provider"
+import (
+	"net/url"
+	"strings"
+
+	"aether-cockpit/internal/provider"
+)
+
+// opencodeIsOfficial 判断一份 OpenCode 凭证是不是官方端点。
+//
+// OpenCode 这一类渠道天然是"官转 + 自部署"混装的：同一个渠道里既有官方
+// Zen / Go 的 Key，也有用户自己（或第三方）搭的兼容端点。两者的差别只在
+// base_url —— 官方端点是 *.opencode.ai，自部署是别的主机。
+//
+// 判定规则（宁可把判断做窄，也别把中转误判成官方）：
+//   - 没有 base_url：走渠道默认端点，即官方；
+//   - 有 base_url 且主机是 opencode.ai / *.opencode.ai：官方；
+//   - 其它主机：自部署/中转。
+//
+// 主机比较必须按域名边界，不能简单 strings.Contains："opencode.ai.evil.com"
+// 和 "notopencode.ai" 都含这个子串，但它们显然不是官方。
+func opencodeIsOfficial(creds map[string]string) bool {
+	base := strings.ToLower(strings.TrimSpace(creds["base_url"]))
+	if base == "" {
+		return true
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		// base_url 写坏了不该被当成官方：保守地当作自部署、排序靠后。
+		// 账号本身仍可用（请求会直接失败并给出真实错误），不会因此丢号。
+		return false
+	}
+	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
+	return host == "opencode.ai" || strings.HasSuffix(host, ".opencode.ai")
+}
 
 // init 注册全部逆向渠道骨架。
 //
@@ -100,6 +133,11 @@ func profiles() []Profile {
 			Middlewares:     []string{"stateful_session"},
 			DefaultBaseURL:  "https://opencode.ai/zen/v1",
 			DefaultChatPath: "/chat/completions",
+			// 官转优先：同一个渠道里常常既有官方 Zen 的 Key、又有自部署/中转
+			// 端点。官方端点先走，等它限流/超额时再落到中转上——这就是"尽量
+			// 走官方，但别把可用性打死"。
+			OfficialFirst:   true,
+			OfficialAccount: opencodeIsOfficial,
 			ModelListPath:   "/models",
 			DefaultModels: []string{
 				"big-pickle",
@@ -132,6 +170,10 @@ func profiles() []Profile {
 			DefaultBaseURL:  "https://opencode.ai/zen/go/v1",
 			DefaultChatPath: "/chat/completions",
 			SessionHeader:   "x-opencode-session",
+			// Go 订阅本身就是官方端点；同样允许用户把它指到自部署上，
+			// 所以沿用同一套判定：官方优先、自部署兜底。
+			OfficialFirst:   true,
+			OfficialAccount: opencodeIsOfficial,
 			ModelListPath:   "/models",
 			QuotaKind:       "opencode_go",
 			DefaultModels: []string{

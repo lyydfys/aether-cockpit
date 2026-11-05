@@ -53,16 +53,28 @@ PATTERN="(${T_DSH1}|${T_DSH2}|${T_DSH_AUTH}|${T_MAG}|${T_MAG_AUTH}|${T_SUB}|${T_
 run_scan() {
   local target_dir="$1"
   local failed=0
+  local in_repo=0
+  if git -C "$target_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    in_repo=1
+  fi
 
   # 1. Check file & directory paths
+  #
+  # 在 git 仓库里只查**受版本控制**的路径：硬锁要守的是"仓库里有什么"，而不是
+  # 开发者本机的临时目录（.smoke-data/、build-verify/、抓包脚本…）。那些地方
+  # 出现参考项目的名字是正常的，算作违规只会让锁被无视。
   local path_hits
-  path_hits="$(find "$target_dir" \
-    -path "$target_dir/.git" -prune -o \
-    -path "*/node_modules" -prune -o \
-    -path "*/.gradle" -prune -o \
-    -path "*/build" -prune -o \
-    -path "$target_dir/bin" -prune -o \
-    -print | grep -E -i "$PATTERN" || true)"
+  if [[ "$in_repo" == "1" ]]; then
+    path_hits="$(git -C "$target_dir" ls-files | grep -E -i "$PATTERN" || true)"
+  else
+    path_hits="$(find "$target_dir" \
+      -path "$target_dir/.git" -prune -o \
+      -path "*/node_modules" -prune -o \
+      -path "*/.gradle" -prune -o \
+      -path "*/build" -prune -o \
+      -path "$target_dir/bin" -prune -o \
+      -print | grep -E -i "$PATTERN" || true)"
+  fi
 
   if [[ -n "$path_hits" ]]; then
     echo "FAIL [no-external-project-names]: forbidden project name found in file/directory path:" >&2
@@ -77,13 +89,18 @@ run_scan() {
   # 零外部项目名，而不是抹掉法律要求的致谢——所以这些文件只做路径检查、不做内容检查。
   # 反过来：任何 .go/.kt/.js/.css/.yml… 里出现禁词仍然会失败，不受影响。
   local content_hits
-  content_hits="$(grep -R -I -n -E -i \
-    --exclude-dir=.git \
-    --exclude-dir=node_modules \
-    --exclude-dir=.gradle \
-    --exclude-dir=build \
-    --exclude-dir=bin \
-    "$PATTERN" "$target_dir" || true)"
+  if [[ "$in_repo" == "1" ]]; then
+    # git grep 只搜受版本控制的文件，正好符合上面的口径。
+    content_hits="$(git -C "$target_dir" grep -I -n -E -i "$PATTERN" -- . || true)"
+  else
+    content_hits="$(grep -R -I -n -E -i \
+      --exclude-dir=.git \
+      --exclude-dir=node_modules \
+      --exclude-dir=.gradle \
+      --exclude-dir=build \
+      --exclude-dir=bin \
+      "$PATTERN" "$target_dir" || true)"
+  fi
 
   local filtered_hits="" line
   while IFS= read -r line; do
@@ -91,6 +108,8 @@ run_scan() {
     case "$line" in
       */NOTICE:* | */NOTICE.md:* | */LICENSE:* | */LICENSE.md:* | \
         */CHANGELOG.md:* | */README.md:* | */README.en.md:*) continue ;;
+      NOTICE:* | NOTICE.md:* | LICENSE:* | LICENSE.md:* | \
+        CHANGELOG.md:* | README.md:* | README.en.md:*) continue ;;
     esac
     filtered_hits+="$line"$'\n'
   done <<< "$content_hits"
