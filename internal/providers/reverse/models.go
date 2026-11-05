@@ -52,7 +52,7 @@ func (p *Provider) ListModels(ctx context.Context, env *provider.AccountEnv) ([]
 		return nil, ir.NewAPIError(ir.ErrCodeInternal, "构造模型列表请求失败").WithCause(err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if err := applyAuth(req, env, authFor(sp, &p.profile)); err != nil {
+	if err := applyAuth(req, env, modelListAuth(sp, &p.profile)); err != nil {
 		return nil, err.WithProvider(p.profile.ID)
 	}
 	if sp != nil && sp.ClientVersion != "" {

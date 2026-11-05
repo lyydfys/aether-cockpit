@@ -84,17 +84,17 @@ type ResponseMapping struct {
 	DoneMarkers []string `json:"done_markers,omitempty"`
 }
 
-// authFor 返回该渠道真正生效的鉴权配置。
+// modelListAuth 返回"模型列表"请求使用的鉴权配置。
 //
 // spec 里配了就不动；没配（逆向渠道大多没有 spec 文件）时，允许渠道自己
 // 声明默认头名。典型例子：OpenCode Go 的 Key 只认 x-api-key，
 // 发 Authorization: Bearer 会被上游回 401 Invalid credential——
 // 这不是"凭证错"，而是头名错，必须由渠道纠正。
-func authFor(sp *spec.Spec, prof *Profile) AuthMapping {
+func modelListAuth(sp *spec.Spec, prof *Profile) AuthMapping {
 	a := chatConfig(sp).Auth
-	if prof != nil && prof.AuthHeader != "" && a.Header == "Authorization" {
-		a.Header = prof.AuthHeader
-		if prof.AuthNoPrefix {
+	if prof != nil && prof.ModelListAuthHeader != "" && a.Header == "Authorization" {
+		a.Header = prof.ModelListAuthHeader
+		if prof.ModelListAuthNoPrefix {
 			a.NoPrefix = true
 		}
 	}
@@ -102,7 +102,8 @@ func authFor(sp *spec.Spec, prof *Profile) AuthMapping {
 }
 
 // chatConfig 从 spec.Extra 里解析映射，并补齐默认值。
-func chatConfig(sp *spec.Spec) ChatConfig {	var cfg ChatConfig
+func chatConfig(sp *spec.Spec) ChatConfig {
+	var cfg ChatConfig
 	if sp != nil && len(sp.Extra) > 0 {
 		var extra struct {
 			Chat ChatConfig `json:"chat"`

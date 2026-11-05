@@ -99,7 +99,7 @@ func (p *Provider) ResponsesWebSocketStream(ctx context.Context, env *provider.A
 		// 通用渠道：鉴权与固定头复用 HTTP 管线的同一套规则
 		// （spec.chat.auth 决定头名/前缀，HeadersTemplate 可覆盖）。
 		dummy, _ := http.NewRequest(http.MethodPost, wsURL, nil)
-		if aerr := applyAuth(dummy, env, authFor(sp, &p.profile)); aerr != nil {
+		if aerr := applyAuth(dummy, env, modelListAuth(sp, &p.profile)); aerr != nil {
 			return false, aerr
 		}
 		if len(p.profile.Headers) > 0 {
