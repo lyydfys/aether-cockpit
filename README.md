@@ -4,7 +4,7 @@
 
 把分散在 CLI、IDE 和 API 配置里的 AI 编程渠道，收拢到一个本机入口。Aether Cockpit 将你有权使用的订阅账号与模型 API 接入统一网关，让 Claude Code、Codex CLI、Gemini CLI、OpenCode 等客户端使用熟悉的接口调用不同渠道；账号池、模型路由、故障转移、额度和用量也能在同一处查看。
 
-典型请求路径是「客户端 → 本机网关 → 账号与模型路由 → 你配置的上游服务」。Aether Cockpit 负责本地接入、协议适配与运维视图，不托管上游账号，也不替代你选择的 AI 客户端。凭证、请求记录和运行数据默认保存在本机；网关默认只监听回环地址。
+典型请求路径是「客户端 → 本机网关 → 账号与模型路由 → 你配置的上游服务」。Aether Cockpit 负责本地接入、协议适配与运维视图，不托管上游账号，也不替代你选择的 AI 客户端。凭证、请求记录和运行数据默认保存在本机；网关默认只监听回环地址，需要时可在概览页开启局域网共享（管理接口仍要求 App 内会话凭据）。Android 端提供同一网关的本地运行版本，渠道接入、额度和运维视图都在手机上进行。
 
 你可以从 [Windows x64 下载包](https://github.com/lyydfys/aether-cockpit/releases/latest)开始，或先看[快速上手](docs/QUICKSTART.md)与[能力说明](docs/FEATURES.md)。
 
