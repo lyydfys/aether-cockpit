@@ -60,6 +60,16 @@
 3. **codebuddy 补 `X-Client-Platform: web`**，与开源参考实现（codebuddy2api）对齐，
    并在测试里断言 CLI 身份三件套（`X-IDE-Name`/`X-Agent-Intent`/`X-Client-Platform`）。
 
+## 第四轮补充（2026-11-06）
+
+1. **githubcopilot 客户端版本对齐真实扩展**：`GitHubCopilotChat/0.35.0`、
+   `Editor-Version: vscode/1.107.0`、补 `Editor-Plugin-Version: copilot-chat/0.35.0`
+   （旧值 0.26.7 / 1.99.0 落后多个版本）。
+2. **`X-Initiator` 改为按请求动态判定**：用户提问 → `user`，工具/助手续轮 → `agent`；
+   带图请求补 `Copilot-Vision-Request: true`。为此给 reverse 引擎加了
+   `Profile.DynamicHeaders` 钩子（静态 Headers 无法表达这类随请求变化的头）。
+3. **token 交换与对话用同一组版本头**，避免同一账号两套客户端版本。
+
 ## 下一步
 
 - workbuddy：可选的"提示词指纹清洗"（仅当把 Claude Code 指向 WorkBuddy 后端时启用）。

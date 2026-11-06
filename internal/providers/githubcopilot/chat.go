@@ -31,10 +31,21 @@ func engine() *reverse.Provider {
 			DefaultBaseURL:  "https://api.githubcopilot.com",
 			DefaultChatPath: "/chat/completions",
 			Headers: map[string]string{
+				// 版本组合取自 Copilot Chat 扩展的真实抓包（0.35.0 / VS Code 1.107）。
+				// 旧值 0.26.7 / 1.99.0 已经落后真实客户端好几个版本，容易被按
+				// "过旧客户端"归档。
 				"Copilot-Integration-Id": "vscode-chat",
-				"Editor-Version":         "vscode/1.99.0",
-				"X-Initiator":            "agent",
-				"User-Agent":             "GitHubCopilotChat/0.26.7",
+				"Editor-Version":         copilotEditorVersion,
+				"Editor-Plugin-Version":  "copilot-chat/" + copilotChatVersion,
+				"User-Agent":             "GitHubCopilotChat/" + copilotChatVersion,
+			},
+			// X-Initiator 不是固定值：用户发起是 user，工具续轮是 agent。
+			DynamicHeaders: func(req *ir.UnifiedChatRequest) map[string]string {
+				h := map[string]string{"X-Initiator": copilotInitiator(req)}
+				if copilotHasImages(req) {
+					h["Copilot-Vision-Request"] = "true"
+				}
+				return h
 			},
 		})
 	})
@@ -72,9 +83,12 @@ func ensureCopilotToken(ctx context.Context, env *provider.AccountEnv) error {
 	}
 	req.Header.Set("Authorization", "token "+gh)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Editor-Version", "vscode/1.99.0")
+	// 与对话请求用同一组版本号：同一账号在 token 交换与对话上出现两套
+	// 客户端版本，是最容易被关联的破绽。
+	req.Header.Set("Editor-Version", copilotEditorVersion)
+	req.Header.Set("Editor-Plugin-Version", "copilot-chat/"+copilotChatVersion)
 	req.Header.Set("Copilot-Integration-Id", "vscode-chat")
-	req.Header.Set("User-Agent", "GitHubCopilotChat/0.26.7")
+	req.Header.Set("User-Agent", "GitHubCopilotChat/"+copilotChatVersion)
 	client := env.Client()
 	if client == nil {
 		client = http.DefaultClient

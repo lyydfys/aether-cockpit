@@ -62,6 +62,13 @@ type Profile struct {
 	// 的 x-opencode-session）。值取网关已算好的 req.SessionKey，跨轮稳定。
 	SessionHeader string
 
+	// DynamicHeaders 按请求内容生成的头（返回 nil 表示不需要）。
+	//
+	// 真实客户端里有些头随请求变化：Copilot 的 X-Initiator 在"用户发起"时是
+	// user、在工具续轮时是 agent；写死任何一边都会和请求体自相矛盾。放在这里
+	// 而不是 Headers 里，是为了让它能看到完整的统一请求。
+	DynamicHeaders func(req *ir.UnifiedChatRequest) map[string]string
+
 	// OfficialSessionProbe 开启"会话选号"：新会话先用一次免费小探针
 	// 判断这个会话 ID 落官方还是中转，挑中官方再发真实请求（见 sessionprobe.go）。
 	OfficialSessionProbe bool

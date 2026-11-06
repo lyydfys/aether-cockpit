@@ -88,6 +88,15 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	if len(p.profile.Headers) > 0 {
 		applyHeaders(httpReq, env, p.profile.Headers)
 	}
+	// 动态头：真实客户端里有些头随请求内容变化（例如 Copilot 的 X-Initiator
+	// 要区分"用户发起"还是"工具续轮"）。写死成固定值会与请求体自相矛盾。
+	if p.profile.DynamicHeaders != nil {
+		for k, v := range p.profile.DynamicHeaders(req) {
+			if k != "" && v != "" {
+				httpReq.Header.Set(k, v)
+			}
+		}
+	}
 	if sp != nil {
 		applyHeaders(httpReq, env, sp.HeadersTemplate)
 		if sp.SignatureRule != nil {
