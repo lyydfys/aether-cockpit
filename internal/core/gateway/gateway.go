@@ -1277,8 +1277,9 @@ func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if g.cfg.RequireCallerKey {
-			// 移动模式：模型协议与管理会话使用两把不同的内存 key。
-			// 只认请求头，绝不读取 query。
+			// 移动模式：模型协议与管理会话使用两把互不通用的 key。
+			// caller key 由运行时从数据目录的持久化文件读出（重启不变，客户端可长期持有）；
+			// 管理会话 key 每次启动随机生成、只在本机内存。只认请求头，绝不读取 query。
 			if !g.mobileCallerAllowed(r) {
 				writeJSON(w, http.StatusUnauthorized, map[string]any{
 					"error": "模型接口需要 caller key",
@@ -1739,6 +1740,10 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			if blocked[b.ProviderID] {
 				continue
 			}
+			// 风控冷静期内的渠道直接跳过：继续打只会把"可疑"升级成"确认滥用"。
+			if !riskPauseUntil(b.ProviderID).IsZero() {
+				continue
+			}
 			if attempts >= g.cfg.MaxAttempts {
 				break
 			}
@@ -1876,6 +1881,16 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 				release()
 				ae := ir.AsAPIError(err).WithProvider(b.ProviderID)
 				lastErr = ae
+				// 风控信号优先：暂停整个渠道，不重试、不罚账号（不是凭证问题）。
+				if isRiskSignal(ae) {
+					pauseRisk(b.ProviderID)
+					lastErr = ir.NewAPIError(ir.ErrCodeUpstreamRateLimit,
+						"上游判定为异常行为（风控），已暂停该渠道 10 分钟；请勿频繁重试，并尽量使用官方客户端").
+						WithProvider(b.ProviderID)
+					entry.ProviderID = b.ProviderID
+					entry.AccountID = env.AccountID
+					return nil, lastErr
+				}
 				g.penalizeModel(env, ae, b.UpstreamModel)
 				if trace != nil {
 					status, fail := traceFailCode(ae)
