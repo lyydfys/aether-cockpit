@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/core/transport/wirecodec"
@@ -24,6 +25,12 @@ const (
 
 // ChatStream 调用 WorkBuddy 的 OpenAI 兼容流式端点。
 func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req *ir.UnifiedChatRequest) (<-chan ir.UnifiedStreamEvent, error) {
+	// 命中过风控的渠道在冷静期内直接拒绝，避免"连续撞墙"把可疑升级成确认滥用。
+	if until := pausedUntil(p.profile.id); !until.IsZero() {
+		return nil, ir.NewAPIError(ir.ErrCodeUpstreamRateLimit,
+			"该渠道刚触发上游风控（11140/403），已暂停 "+time.Until(until).Round(time.Second).String()+"；请勿频繁重试，稍后再试或换账号").
+			WithProvider(p.profile.id)
+	}
 	token := firstNonEmpty(
 		strings.TrimSpace(env.GetCredential("token")),
 		strings.TrimSpace(env.GetCredential("access_token")),
@@ -80,6 +87,14 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		if attempt == 0 && channelBlocked(string(raw)) {
 			continue
 		}
+		if riskBlocked(status, string(raw)) {
+			// 风控信号：按下暂停键，让整个渠道冷静一段时间；继续重试只会让
+			// "可疑"升级成"确认滥用"，还可能连坐同区域其它账号。
+			pauseProvider(p.profile.id, riskPauseDefault)
+			return nil, ir.NewAPIError(ir.ErrCodeUpstreamRateLimit,
+				"上游判定为异常行为（风控），已暂停该渠道 10 分钟；请优先使用官方客户端，并避免多账号共用同一出口").
+				WithProvider(p.profile.id)
+		}
 		return nil, mapUpstreamError(status, string(raw), hdr).WithProvider(p.profile.id)
 	}
 	if resp == nil {
@@ -116,6 +131,18 @@ func (p *Provider) applyHeaders(req *http.Request, env *provider.AccountEnv, tok
 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-User-Id", userID)
+	// 设备风控头：官方桌面客户端登录后会拿到设备令牌，后续调用都带着它。
+	// 这个令牌由服务端签发，客户端无法凭空生成，所以只在账号凭证里配置了
+	// 才发送（device_token / device_id 两个字段，可从官方客户端登录态里取）。
+	//
+	// 为什么不能自己编一个：伪造的令牌比"没有令牌"更像异常样本，反而提高
+	// 被风控的概率。宁可缺，不可编。
+	if v := strings.TrimSpace(env.GetCredential("device_token")); v != "" {
+		req.Header.Set("X-Device-Token", v)
+	}
+	if v := strings.TrimSpace(env.GetCredential("device_id")); v != "" {
+		req.Header.Set("X-Device-Id", v)
+	}
 	req.Header.Set("X-Domain", p.domain(env))
 	req.Header.Set("X-Product", "SaaS")
 	req.Header.Set("X-IDE-Type", "WorkBuddy")

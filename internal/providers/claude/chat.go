@@ -94,6 +94,7 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	// 不一致会被上游判为非法客户端（400）或非正版（风控）。
 	beta := resolveBetaHeader(env)
 	ua := resolveUserAgent(env)
+	var identity claudeIdentity
 	body := buildRequestBody(req, model, thinking)
 	if keyMode == "" {
 		// beta 头与请求体能力声明必须一致；API Key 不声明 beta，也不裁剪 body。
@@ -101,13 +102,17 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		// OAuth 订阅流量补 Claude Code 的 billing attribution（cc_version 指纹
 		// 与 UA 版本、首条 user 文本绑定）；自定义非 CLI UA 不伪装。
 		injectClaudeBillingHeader(body, ua)
+		// 身份三件套：真实 CLI 每次请求都带设备/账号/会话标识。缺了它们，
+		// 上游看到的是"自称 CLI 却没有任何身份"的请求，比字段写错更像异常样本。
+		identity = buildClaudeIdentity(env.AccountID, env.Fingerprint.MachineID, req.SessionKey)
+		applyClaudeIdentity(body, identity)
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeInternal, "Claude 请求序列化失败").WithCause(err)
 	}
 
-	resp, err := p.doRequest(ctx, env, token, beta, payload, keyMode != "", ua, req.Stream)
+	resp, err := p.doRequest(ctx, env, token, beta, payload, keyMode != "", ua, req.Stream, identity.SessionUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +122,7 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		resp.Body.Close()
 		if refreshErr := p.refreshAccessToken(ctx, env, env.GetCredential("refresh_token")); refreshErr == nil {
-			resp, err = p.doRequest(ctx, env, env.GetCredential("access_token"), beta, payload, false, ua, req.Stream)
+			resp, err = p.doRequest(ctx, env, env.GetCredential("access_token"), beta, payload, false, ua, req.Stream, identity.SessionUUID)
 			if err != nil {
 				return nil, err
 			}
@@ -150,7 +155,7 @@ func baseURL(env *provider.AccountEnv) string {
 	return defaultAPIBaseURL
 }
 
-func (p *Provider) doRequest(ctx context.Context, env *provider.AccountEnv, token, beta string, body []byte, keyMode bool, ua string, stream bool) (*http.Response, error) {
+func (p *Provider) doRequest(ctx context.Context, env *provider.AccountEnv, token, beta string, body []byte, keyMode bool, ua string, stream bool, sessionUUID string) (*http.Response, error) {
 	endpoint := baseURL(env) + "/v1/messages"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -183,6 +188,12 @@ func (p *Provider) doRequest(ctx context.Context, env *provider.AccountEnv, toke
 		// 请求体 billing attribution 必须互相一致（见 mimicry.go）。
 		httpReq.Header.Set("User-Agent", ua)
 		applyClaudeMimicHeaders(httpReq.Header, stream)
+		// 会话与请求标识：真实 CLI 每次都带。会话 ID 跨轮稳定，请求 ID 每请求随机
+		// （复用请求 ID 会被当成重放）。
+		if sessionUUID != "" {
+			httpReq.Header.Set("X-Claude-Code-Session-Id", sessionUUID)
+		}
+		httpReq.Header.Set("x-client-request-id", newRequestUUID())
 	}
 
 	client := env.Client()
