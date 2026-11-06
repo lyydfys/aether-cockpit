@@ -19,6 +19,9 @@ class GatewayRuntimeRepository(context: Context) {
 
     private val lanStore = LanSharingStore(appContext)
 
+    /** 「用户希望网关在跑」的持久化意图，供冷启动后自动恢复（见 GatewayWantedStore）。 */
+    private val wantedStore = GatewayWantedStore(appContext)
+
     /** 局域网共享的**用户意图**（持久化值）。真正生效的值看 [status] 的 `lanEnabled`。 */
     private val _lanSharing = MutableStateFlow(runCatching { lanStore.load() }.getOrDefault(false))
     val lanSharing: StateFlow<Boolean> = _lanSharing.asStateFlow()
@@ -27,14 +30,29 @@ class GatewayRuntimeRepository(context: Context) {
     private val _lanError = MutableStateFlow<String?>(null)
     val lanError: StateFlow<String?> = _lanError.asStateFlow()
 
-    fun start() {
+    /**
+     * 用户点「启动网关」。
+     *
+     * 先落盘"希望网关在跑"的意图，再起前台 Service。被 force-stop 杀掉之后
+     * Android 不会自动把 Service 拉回来，下次打开 App 由 MainActivity 读这条意图
+     * 静默恢复；否则手机端所有页面（渠道/账号/设置）都会因为网关没起而显示为空。
+     *
+     * [recordIntent] 给自动恢复路径用：它自己负责失败计数，不需要这里再写一次。
+     */
+    fun start(recordIntent: Boolean = true) {
+        if (recordIntent) {
+            // 用户主动启动 = 重新开始计数，之前的连败记录作废。
+            runCatching { wantedStore.save(GatewayWanted(wanted = true, failures = 0)) }
+        }
         appContext.startForegroundService(
             Intent(appContext, AetherGatewayService::class.java)
                 .setAction(AetherGatewayService.ACTION_START),
         )
     }
 
+    /** 用户点「停止网关」：意图一并落盘为 false，下次冷启动不会再自动恢复。 */
     fun stop() {
+        runCatching { wantedStore.save(GatewayWanted(wanted = false, failures = 0)) }
         appContext.startService(
             Intent(appContext, AetherGatewayService::class.java)
                 .setAction(AetherGatewayService.ACTION_STOP),

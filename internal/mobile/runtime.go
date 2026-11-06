@@ -149,6 +149,9 @@ type RuntimeStatus struct {
 	ErrorCode string `json:"errorCode,omitempty"`
 	// AdminSession 与 CallerKey 只经 ABI 返回给原生宿主，由宿主保存在
 	// 私有内存；不写设置文件、不写日志、不放 URL。两把 key 互不通用。
+	//
+	// 差别只在生命周期：AdminSession 每次启动轮换（内存态），CallerKey 来自
+	// 数据目录里的持久化文件（0600，重启不变），客户端可以长期持有。
 	AdminSession string `json:"adminSession,omitempty"`
 	CallerKey    string `json:"callerKey,omitempty"`
 	// LanEnabled 表示主监听绑在 0.0.0.0（同网络设备可达）：此时 /v1 与 /api
@@ -186,6 +189,12 @@ type Runtime struct {
 	gw        *gateway.Gateway
 	sched     *scheduler.Scheduler
 	stopUsage func()
+	// stopPersist 停掉账号池与状态快照的周期落盘（停止时各做一次最终写入）。
+	// 桌面端在 cmd/cockpit/main.go:123 与 internal/desktop/desktop.go:177 各自接线，
+	// 移动端以前整块漏了；见 Start 里 StartAutoSave 那段的说明。
+	stopPersist func()
+	// callerKey 来自 paths.CallerKeyPath 的持久化文件（重启不变）；
+	// adminKey 每次启动随机生成、只在内存。Stop 时两者都从内存清掉。
 	adminKey  string
 	callerKey string
 	// lanShared 表示本次启动绑的是 0.0.0.0；lanURLs/lanHint 是启动时算出的
@@ -196,16 +205,120 @@ type Runtime struct {
 }
 
 // resolveEphemeralKey 优先使用宿主注入值（独立宿主/测试），否则生成
-// 每次启动随机的 256-bit key。key 只存在于内存与 ABI 返回值。
+// 每次启动随机的 256-bit key。只用于**管理会话**凭据：它本来就该随启动轮换，
+// 且只存在于内存与 ABI 返回值。调用方 key（caller key）不同——它由客户端长期
+// 持有，必须跨重启不变，所以走 resolvePersistentCallerKey（落盘）。
 func resolveEphemeralKey(provided string) (string, error) {
 	if v := strings.TrimSpace(provided); v != "" {
 		return v, nil
 	}
-	buf := make([]byte, 32)
+	return generateCallerKey()
+}
+
+// 调用方密钥（caller key）的持久化。
+//
+// 为什么必须落盘：Android 客户端会把「密钥」抄进自己的客户端配置里。密钥如果每次
+// 网关启动都重新生成，用户配置好的客户端就会在下一次重启后突然 401，且界面上
+// 看不出原因。所以：首次启动生成一次并写进数据目录，之后每次启动读同一把。
+//
+// 落点：<noBackupFilesDir>/aether/caller-key（apppaths.Paths.CallerKeyPath）。
+//   - noBackupFilesDir 不是缓存，系统不会把它当 cacheDir 清理；
+//   - 它也不进云备份/设备迁移（凭据不该跨设备复制）；
+//   - 文件 0600、父目录 0700，内容只有一行 43 字符 base64url（32 字节随机数）；
+//   - 值从不写日志、不进 URL/query、不进设置文件，只经 RuntimeStatus 交给宿主内存。
+//
+// 兼容旧版本：旧版本只有内存态 key，升级后首次启动时文件不存在，于是直接生成
+// 并落盘——不需要任何迁移代码。
+const (
+	// callerKeyBytes 是密钥的随机字节数（256-bit，与旧版临时 key 同强度）。
+	callerKeyBytes = 32
+	// callerKeyEncodedLen 是 callerKeyBytes 的 base64url（无填充）长度：
+	// ceil(32/3)*4 - 1 = 43，与旧版内存 key 完全一致，客户端格式校验不受影响。
+	callerKeyEncodedLen = 43
+)
+
+// generateCallerKey 生成一把新 key：32 字节 CSPRNG → 43 字符 base64url。
+func generateCallerKey() (string, error) {
+	buf := make([]byte, callerKeyBytes)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// validCallerKey 严格校验持久化内容：长度、字符集与**规范化编码**都要对。
+//
+// 用「解码后再编码是否等于原文」而不是只看解码错误：Go 的 base64 解码器会忽略
+// 内嵌的 \r \n、也不校验末尾多余比特，于是「key 中间夹了换行」或「末位比特非零」
+// 都能解码成功。round-trip 把这些一律拒掉——非法内容按损坏处理并重新生成，
+// 绝不把畸形 key 交给鉴权路径。
+func validCallerKey(value string) bool {
+	if len(value) != callerKeyEncodedLen {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(raw) != callerKeyBytes {
+		return false
+	}
+	return base64.RawURLEncoding.EncodeToString(raw) == value
+}
+
+// callerKeyPersistError 标记「新 key 生成成功但落盘失败」，好让 Start 报出
+// 可诊断的错误码（磁盘满/权限问题 vs CSPRNG 不可用）。
+type callerKeyPersistError struct{ err error }
+
+func (e *callerKeyPersistError) Error() string { return "persist caller key: " + e.err.Error() }
+func (e *callerKeyPersistError) Unwrap() error { return e.err }
+
+// resolvePersistentCallerKey 返回本次启动要用的调用方 key：
+//  1. 文件存在且内容合法 → 原样复用（**重启不变**，这是本需求的全部意义）；
+//  2. 文件不存在/内容非法/读不出来 → 生成新 key 并原子落盘。
+//
+// 落盘失败直接返回错误（fail-closed）：宁可启动失败并显示错误码，也不要悄悄退回
+// 「每次启动换一把 key」的旧行为——那正是客户端莫名 401 的来源。
+func resolvePersistentCallerKey(path string) (string, error) {
+	if b, err := os.ReadFile(path); err == nil {
+		key := strings.TrimSpace(string(b))
+		if validCallerKey(key) {
+			log.Printf("caller key 已从数据目录恢复（值不记录）")
+			return key, nil
+		}
+		log.Printf("[WARN] caller key 文件内容不合法（长度/字符集/编码），按首次启动重新生成")
+	}
+	key, err := generateCallerKey()
+	if err != nil {
+		return "", err
+	}
+	if err := writeCallerKey(path, key); err != nil {
+		return "", &callerKeyPersistError{err: err}
+	}
+	log.Printf("caller key 已生成并写入数据目录（值不记录）")
+	return key, nil
+}
+
+// writeCallerKey 原子写入调用方 key：tmp 文件 → chmod 0600 → rename。
+//
+// rename 是原子的，所以进程被杀时读者要么看到旧的完整文件、要么看到新的，
+// 不会读到半截内容。tmp 写失败/rename 失败都会把它删掉，不留垃圾。
+func writeCallerKey(path, key string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(key+"\n"), 0o600); err != nil {
+		return err
+	}
+	// WriteFile 的 perm 会被 umask 削减，且复用旧 tmp 时会保留旧权限：显式收紧。
+	// Windows 上 Chmod 只切只读位，不影响正常写入（Android/Linux 上才是 0600 语义）。
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // Start validates the host-owned path, binds 127.0.0.1 by default (or 0.0.0.0
@@ -283,13 +396,20 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		}
 		return nil, &StartError{Code: "admin_session_failed", Err: err}
 	}
-	callerKey, err := resolveEphemeralKey("")
+	callerKey, err := resolvePersistentCallerKey(paths.CallerKeyPath)
 	if err != nil {
 		_ = ln.Close()
 		if closeLog != nil {
 			closeLog()
 		}
-		return nil, &StartError{Code: "caller_key_failed", Err: err}
+		// 生成失败（CSPRNG）与落盘失败分开报：后者是磁盘/权限问题，
+		// 运维要修的东西完全不同。
+		code := "caller_key_failed"
+		var persistErr *callerKeyPersistError
+		if errors.As(err, &persistErr) {
+			code = "caller_key_persist_failed"
+		}
+		return nil, &StartError{Code: code, Err: err}
 	}
 	accountKey, err := decodeAccountKey(cfg.AccountKey)
 	if err != nil {
@@ -364,6 +484,22 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	gw.SetScheduler(sched)
 	sched.Start()
 
+	// 账号池与状态快照的周期落盘。
+	//
+	// 桌面端两处都接线了（cmd/cockpit/main.go:123、internal/desktop/desktop.go:177），
+	// 移动端以前**只接了用量**（StartUsageAutoSave），账号池的 StartAutoSave 从没跑过。
+	// 后果：pool.Flush() 永远等不到 ticker；而进程被 force-stop / 系统回收时
+	// Runtime.Stop 根本不会执行（日志里只有 started 没有 stopped 就是这种被杀），
+	// 于是"在内存里改了、但没走 saveAccountsNow 的账号状态"全部丢失。
+	// 这里补上与桌面同一套间隔：账号 10s、状态快照 20s。
+	stopAccountsSave := gw.Pool().StartAutoSave(10 * time.Second)
+	stopStateSave := gw.StartAutoSave(20 * time.Second)
+	stopPersist := func() {
+		// 先停状态快照再停账号：两者互不依赖，顺序只为输出稳定。
+		stopStateSave()
+		stopAccountsSave()
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -380,22 +516,23 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	})
 
 	rt := &Runtime{
-		state:     StateRunning,
-		addr:      ln.Addr().String(),
-		startedAt: time.Now().Unix(),
-		server:    &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second},
-		done:      make(chan struct{}),
-		stopDone:  make(chan struct{}),
-		paths:     paths,
-		closeLog:  closeLog,
-		gw:        gw,
-		sched:     sched,
-		stopUsage: gw.StartUsageAutoSave(15 * time.Second),
-		adminKey:  adminKey,
-		callerKey: callerKey,
-		lanShared: lanShared,
-		lanURLs:   lanURLs,
-		lanHint:   lanHint,
+		state:       StateRunning,
+		addr:        ln.Addr().String(),
+		startedAt:   time.Now().Unix(),
+		server:      &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second},
+		done:        make(chan struct{}),
+		stopDone:    make(chan struct{}),
+		paths:       paths,
+		closeLog:    closeLog,
+		gw:          gw,
+		sched:       sched,
+		stopUsage:   gw.StartUsageAutoSave(15 * time.Second),
+		stopPersist: stopPersist,
+		adminKey:    adminKey,
+		callerKey:   callerKey,
+		lanShared:   lanShared,
+		lanURLs:     lanURLs,
+		lanHint:     lanHint,
 	}
 	go func() {
 		defer close(rt.done)
@@ -467,6 +604,8 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	sched := r.sched
 	stopUsage := r.stopUsage
 	r.stopUsage = nil
+	stopPersist := r.stopPersist
+	r.stopPersist = nil
 	r.mu.Unlock()
 
 	// 先停调度器再关服务：否则它可能在监听器关闭后仍在跑签到请求，
@@ -483,6 +622,11 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	// 用量聚合与账本行保持一致，重启后用量页不会回到空态。
 	if stopUsage != nil {
 		stopUsage()
+	}
+	// 账号池 / 状态快照的周期落盘也要在关网关前停掉：它们各自会做一次最终写入，
+	// 之后 gw.Close 还会再 Flush 一次账号池（未变更时是空操作）。
+	if stopPersist != nil {
+		stopPersist()
 	}
 	if gw != nil {
 		if closeErr := gw.Close(ctx); err == nil {

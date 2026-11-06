@@ -91,9 +91,12 @@ class OverviewViewModel(application: Application) : AndroidViewModel(application
             val usage = runCatching {
                 withContext(Dispatchers.IO) { usageClient.fetchUsage(status, "today") }
             }.onFailure { usageError = "读不到用量" }.getOrNull()
-            val providers = runCatching {
-                withContext(Dispatchers.IO) { managementClient.fetchProviders(status) }
+            // 用快照而不是纯渠道列表：概览的「可用账号」要的是**磁盘真实账号数**
+            // （含因渠道未注册而暂时进不了池的那批），只数内存池会显示 0。
+            val snapshot = runCatching {
+                withContext(Dispatchers.IO) { managementClient.fetchProvidersSnapshot(status) }
             }.onFailure { accountsError = "读不到账号" }.getOrNull()
+            val providers = snapshot?.providers
             // 会话统计在冷启动/多 WSL 环境下可能很慢：桌面端用 3s 兜底（overview.js:39/61），
             // 这里同样只等 3s，超时按"读不到"处理，不拖住整张 KPI。
             val sessions = withTimeoutOrNull(3_000) {
@@ -112,6 +115,7 @@ class OverviewViewModel(application: Application) : AndroidViewModel(application
                     usageError = usageError,
                     accountsError = accountsError,
                     sessionsError = sessionsError,
+                    accountTotals = snapshot?.totals,
                 ),
             )
         }

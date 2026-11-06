@@ -62,13 +62,24 @@
 
 ![用量趋势与渠道分布](docs/images/screenshots/usage-zh.png)
 
-**手机端**：Android 版把同一套网关搬到手机上，设置首页与本机数据、渠道、脱敏相关的分区都在这里（下图为合成演示数据）。
+**手机端**：Android 版把同一套网关搬到手机上——概览、设置、关于与更多四页都在这里，网关状态、配置分区与版本信息随手可查。
 
-![手机端设置首页：深色 Hero 卡与 8 个配置分区](docs/images/screenshots/mobile-settings-zh.png)
+<table>
+  <tr>
+    <td align="center"><b>概览</b></td>
+    <td align="center"><b>设置</b></td>
+    <td align="center"><b>关于</b></td>
+    <td align="center"><b>更多</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/screenshots/mobile-overview-zh.png" width="180"></td>
+    <td><img src="docs/images/screenshots/mobile-settings-zh.png" width="180"></td>
+    <td><img src="docs/images/screenshots/mobile-about-zh.png" width="180"></td>
+    <td><img src="docs/images/screenshots/mobile-more-zh.png" width="180"></td>
+  </tr>
+</table>
 
-![手机端关于页：版本、更新通道、许可与诊断信息](docs/images/screenshots/mobile-about-zh.png)
-
-*两张手机截图取自合成演示配置，账号、额度与版本号不代表真实设备状态。*
+*四张手机截图取自合成演示配置，账号、额度与版本号不代表真实设备状态。*
 
 ## 渠道覆盖
 

@@ -161,7 +161,16 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     var showBackup by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var copied by remember { mutableStateOf(false) }
+    // 地址写入剪贴板失败时功能栏显示「复制失败」，1.5s 后复位（不静默吞掉）。
+    var copyFailed by remember { mutableStateOf(false) }
     val overlayVisible by GatewayOverlayController.visible.collectAsStateWithLifecycle()
+    // 系统窗 → 页面球的位置回传：关外显后页面球落在系统球最后所在的位置，不跳回默认角落。
+    val overlayPosition by GatewayOverlayController.position.collectAsStateWithLifecycle()
+    // 页面球 → 系统窗的交接位置（用户拖动页面球松手时更新）。
+    var inAppBubblePosition by remember { mutableStateOf(BubblePosition.BottomEnd) }
+    LaunchedEffect(overlayPosition) {
+        overlayPosition?.let { inAppBubblePosition = it }
+    }
     val tabStateHolder = rememberSaveableStateHolder()
     // 「上一页」快照层用**独立**的 saveable 命名空间：它和当前层可能在同一帧里渲染
     // 同一个 tab（AnimatedContent 切换时新旧内容并存），共用一个 holder 会直接抛
@@ -170,8 +179,16 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
 
     val overlayColors = OverlayColors(
         primary = MaterialTheme.colorScheme.primary.toArgb(),
+        onPrimary = MaterialTheme.colorScheme.onPrimary.toArgb(),
         surface = MaterialTheme.colorScheme.surface.toArgb(),
+        onSurface = MaterialTheme.colorScheme.onSurface.toArgb(),
+        surfaceVariant = MaterialTheme.colorScheme.surfaceVariant.toArgb(),
+        onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant.toArgb(),
         outline = MaterialTheme.colorScheme.outlineVariant.toArgb(),
+        outlineVariant = MaterialTheme.colorScheme.outlineVariant.toArgb(),
+        error = MaterialTheme.colorScheme.error.toArgb(),
+        onError = MaterialTheme.colorScheme.onError.toArgb(),
+        background = MaterialTheme.colorScheme.background.toArgb(),
     )
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -211,8 +228,19 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
             this.action = action
             if (action == AetherGatewayService.ACTION_SHOW_OVERLAY) {
                 putExtra(OverlayColors.EXTRA_PRIMARY, overlayColors.primary)
+                putExtra(OverlayColors.EXTRA_ON_PRIMARY, overlayColors.onPrimary)
                 putExtra(OverlayColors.EXTRA_SURFACE, overlayColors.surface)
+                putExtra(OverlayColors.EXTRA_ON_SURFACE, overlayColors.onSurface)
+                putExtra(OverlayColors.EXTRA_SURFACE_VARIANT, overlayColors.surfaceVariant)
+                putExtra(OverlayColors.EXTRA_ON_SURFACE_VARIANT, overlayColors.onSurfaceVariant)
                 putExtra(OverlayColors.EXTRA_OUTLINE, overlayColors.outline)
+                putExtra(OverlayColors.EXTRA_OUTLINE_VARIANT, overlayColors.outlineVariant)
+                putExtra(OverlayColors.EXTRA_ERROR, overlayColors.error)
+                putExtra(OverlayColors.EXTRA_ON_ERROR, overlayColors.onError)
+                putExtra(OverlayColors.EXTRA_BACKGROUND, overlayColors.background)
+                // 交接位置：系统窗里的球落在页面球现在的位置，眼睛看不到"换了一颗球"。
+                putExtra(GatewayOverlayController.EXTRA_OVERLAY_X, inAppBubblePosition.xFraction)
+                putExtra(GatewayOverlayController.EXTRA_OVERLAY_Y, inAppBubblePosition.yFraction)
             }
         }
         runCatching { context.startService(intent) }
@@ -224,10 +252,11 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
         ""
     }
 
-    LaunchedEffect(copied) {
-        if (copied) {
+    LaunchedEffect(copied, copyFailed) {
+        if (copied || copyFailed) {
             delay(1500)
             copied = false
+            copyFailed = false
         }
     }
 
@@ -380,13 +409,19 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                 onPrimaryAction = { requestPrimaryAction() },
                 onCopy = {
                     if (url.isNotEmpty()) {
-                        clipboard.setText(AnnotatedString(url))
-                        copied = true
+                        val ok = writeClipboard(context, "Aether 网关地址", url)
+                        copied = ok
+                        copyFailed = !ok
                     }
                 },
                 onToggleOverlay = { toggleOverlay() },
                 modifier = Modifier.fillMaxSize(),
                 contentInsets = innerPadding,
+                copyFailed = copyFailed,
+                // 外显打开后系统窗接管同一颗球：页面球隐藏，避免两个悬浮球同时出现。
+                visible = !overlayVisible,
+                externalPosition = if (overlayVisible) null else overlayPosition,
+                onPositionChange = { inAppBubblePosition = it },
             ) {
                 // 底层 Tab 栈抽成独立 lambda：它既是本页内容，也能作为返回手势的"上一页"。
                 // 纯结构搬移——状态读取、viewModel 调用、装饰（recede 缩放/透明度）全部原样。

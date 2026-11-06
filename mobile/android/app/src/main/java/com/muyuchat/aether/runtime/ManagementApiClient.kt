@@ -9,6 +9,38 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Base64
 
+/**
+ * 一个「渠道未就绪」的账号：磁盘上有，但对应渠道当前没有注册，所以进不了账号池。
+ *
+ * 数据来自 `/api/providers` 的 `unloaded_accounts`（Go 侧 `pool.UnloadedAccount`）。
+ * 这类账号**不能从界面上消失**——账号文件是本机唯一可信来源，渠道没注册不等于账号没了。
+ */
+data class UnloadedAccountSummary(
+    val accountId: String,
+    val providerId: String,
+    val label: String = "",
+)
+
+/**
+ * `/api/providers` 的账号口径汇总（Go `admin.go` 的 `account_total` / `ready_total` /
+ * `unloaded_accounts`）。
+ *
+ * `accountTotal` 是**磁盘上的账号总数**，`readyTotal` 是其中当前可路由的。
+ * 概览的「可用账号」按前者显示，再在注解里写「其中 N 个可用」——
+ * 否则渠道一旦未注册，磁盘上有账号、界面却是 0，看起来就像"账号被清零了"。
+ */
+data class ProviderAccountTotals(
+    val accountTotal: Int = 0,
+    val readyTotal: Int = 0,
+    val unloaded: List<UnloadedAccountSummary> = emptyList(),
+)
+
+/** `/api/providers` 的完整快照：渠道列表 + 账号口径汇总。 */
+data class ProvidersSnapshot(
+    val providers: List<ProviderSummary>,
+    val totals: ProviderAccountTotals,
+)
+
 /** One channel row from `/api/providers`; secrets are deliberately absent. */
 data class ProviderSummary(
     val id: String,
@@ -138,7 +170,16 @@ class ManagementApiClient(
     private val connectTimeoutMs: Int = 5_000,
     private val readTimeoutMs: Int = 8_000,
 ) {
-    fun fetchProviders(status: GatewayStatus): List<ProviderSummary> {
+    fun fetchProviders(status: GatewayStatus): List<ProviderSummary> =
+        fetchProvidersSnapshot(status).providers
+
+    /**
+     * `/api/providers` 的完整快照（渠道列表 + 账号口径汇总）。
+     *
+     * 概览的「可用账号」用它：单看 `providers[].readyCount` 只能数到内存池里的账号，
+     * 渠道未注册的那批（磁盘上明明还在）会被漏掉，于是界面上看起来"账号清零了"。
+     */
+    fun fetchProvidersSnapshot(status: GatewayStatus): ProvidersSnapshot {
         if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
             throw ManagementApiException("gateway_not_running", "网关未启动")
         }
@@ -154,7 +195,7 @@ class ManagementApiClient(
                 throw ManagementApiException("http_$code", errorMessage(connection, code))
             }
             val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { readLimited(it) }
-            return parseProviders(body)
+            return parseProvidersSnapshot(body)
         } catch (e: ManagementApiException) {
             throw e
         } catch (_: IOException) {
@@ -315,6 +356,48 @@ class ManagementApiClient(
         }
     }
 }
+
+internal fun parseProvidersSnapshot(body: String): ProvidersSnapshot {
+    val providers = parseProviders(body)
+    val root = runCatching { JSONObject(body.trim()) }.getOrNull()
+        ?: return ProvidersSnapshot(providers, fallbackTotals(providers, emptyList()))
+
+    val unloadedArray = root.optJSONArray("unloaded_accounts")
+    val unloaded = ArrayList<UnloadedAccountSummary>()
+    if (unloadedArray != null) {
+        for (index in 0 until unloadedArray.length()) {
+            val item = unloadedArray.optJSONObject(index) ?: continue
+            val accountId = item.optString("account_id").trim()
+            if (accountId.isEmpty()) {
+                continue
+            }
+            unloaded += UnloadedAccountSummary(
+                accountId = accountId,
+                providerId = item.optString("provider_id").trim(),
+                label = item.optString("label").trim(),
+            )
+        }
+    }
+
+    val fallback = fallbackTotals(providers, unloaded)
+    // 老服务端没有这两个顶层字段：回落到"把渠道行加起来"，行为与改动前一致。
+    val totals = ProviderAccountTotals(
+        accountTotal = if (root.has("account_total")) root.optInt("account_total", fallback.accountTotal) else fallback.accountTotal,
+        readyTotal = if (root.has("ready_total")) root.optInt("ready_total", fallback.readyTotal) else fallback.readyTotal,
+        unloaded = unloaded,
+    )
+    return ProvidersSnapshot(providers, totals)
+}
+
+/** 没有顶层汇总字段时的兜底口径：已进池（渠道行合计） + 未就绪。 */
+private fun fallbackTotals(
+    providers: List<ProviderSummary>,
+    unloaded: List<UnloadedAccountSummary>,
+): ProviderAccountTotals = ProviderAccountTotals(
+    accountTotal = providers.sumOf { it.accountCount } + unloaded.size,
+    readyTotal = providers.sumOf { it.readyCount },
+    unloaded = unloaded,
+)
 
 internal fun parseProviders(body: String): List<ProviderSummary> {
     val array = try {

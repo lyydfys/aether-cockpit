@@ -315,7 +315,10 @@ func TestMapUpstreamError(t *testing.T) {
 		{"11128", 400, `{"code":11128,"message":"bad model"}`, ir.ErrCodeBadRequest, false, "bad model"},
 		{"11133", 400, `{"code":11133,"message":"bad payload"}`, ir.ErrCodeBadRequest, false, "bad payload"},
 		{"11153", 400, `{"code":11153,"message":"bad tool"}`, ir.ErrCodeBadRequest, false, "bad tool"},
-		{"11140", 400, `{"code":11140,"message":"bad turn"}`, ir.ErrCodeBadRequest, false, "bad turn"},
+		{"11140", 400, `{"code":11140,"message":"bad turn"}`, ir.ErrCodeUpstreamRateLimit, true, "bad turn"},
+		{"11142", 400, `{"code":11142,"message":"bad turn"}`, ir.ErrCodeUpstreamRateLimit, true, "bad turn"},
+		{"14015", 401, `{"code":14015,"message":"expired"}`, ir.ErrCodeUpstreamAuth, false, "expired"},
+		{"6005", 200, `{"code":6005,"message":"quota"}`, ir.ErrCodeUpstreamRateLimit, true, "quota"},
 		{"500", 500, `{"error":{"message":"boom"}}`, ir.ErrCodeUpstreamFailed, true, "boom"},
 	}
 

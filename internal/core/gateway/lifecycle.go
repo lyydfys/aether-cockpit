@@ -47,6 +47,14 @@ func (g *Gateway) Close(ctx context.Context) error {
 	}()
 	select {
 	case <-done:
+		// 账号池在这里做最后一次落盘：周期自动保存可能还没轮到（移动端甚至
+		// 没有启动它，见 internal/mobile/runtime.go），而 Close 是唯一保证会跑的
+		// 收口点。Flush 内部按 dirty 判断，未变更时不写盘。
+		if g.pool != nil {
+			if err := g.pool.Flush(); err != nil {
+				log.Printf("[WARN] 关闭前保存账号失败: %v", err)
+			}
+		}
 		g.storeCloseOnce.Do(func() {
 			if g.store != nil {
 				if err := g.store.Close(); err != nil {

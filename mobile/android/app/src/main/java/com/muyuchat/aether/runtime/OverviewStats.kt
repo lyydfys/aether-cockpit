@@ -88,14 +88,24 @@ internal fun overviewStats(
     accountsError: String? = null,
     sessionsError: String? = null,
     nowMs: Long = System.currentTimeMillis(),
+    /**
+     * `/api/providers` 的账号口径汇总（`account_total` / `ready_total` /
+     * `unloaded_accounts`）。为 null 时按老口径从渠道行自行推算。
+     */
+    accountTotals: ProviderAccountTotals? = null,
 ): OverviewStats {
     val usageMissing = usageError != null || usage == null
     val accountsMissing = accountsError != null || providers == null
     val sessionsMissing = sessionsError != null || sessions == null
 
-    val readyAccounts = providers?.sumOf { it.readyCount } ?: 0
+    val readyAccounts = accountTotals?.readyTotal ?: (providers?.sumOf { it.readyCount } ?: 0)
     val realAccounts = providers?.filterNot { isTestProviderId(it.id) }?.sumOf { it.accountCount } ?: 0
     val testAccounts = providers?.filter { isTestProviderId(it.id) }?.sumOf { it.accountCount } ?: 0
+    // 主数字是**磁盘真实账号数**，不是"进池能用的账号数"。
+    // 渠道未注册时账号仍在 accounts.json 里：旧口径只数内存池，界面会显示 0，
+    // 用户看到的就是"接入的渠道被清零了"。
+    val unloadedAccounts = accountTotals?.unloaded?.size ?: 0
+    val totalAccounts = accountTotals?.accountTotal ?: ((realAccounts + testAccounts) + unloadedAccounts)
 
     val calls = if (usageMissing) DASH else formatUsageCount(usage!!.calls)
     val inputTotal = if (usageMissing) 0L else {
@@ -107,7 +117,22 @@ internal fun overviewStats(
     val accountsCaption = if (accountsMissing) {
         READ_FAIL
     } else {
-        "$realAccounts 个真实登录态 · $testAccounts 个测试渠道"
+        buildString {
+            append("其中 ")
+            append(readyAccounts)
+            append(" 个可用")
+            if (unloadedAccounts > 0) {
+                // 渠道未注册的账号：明确说"未就绪"，而不是让它们从数字里消失。
+                append(" · ")
+                append(unloadedAccounts)
+                append(" 个渠道未就绪")
+            }
+            append(" · ")
+            append(realAccounts)
+            append(" 个真实登录态 · ")
+            append(testAccounts)
+            append(" 个测试渠道")
+        }
     }
     val callsCaption = if (usageMissing) {
         READ_FAIL
@@ -140,7 +165,7 @@ internal fun overviewStats(
     val sessionsCaption = if (sessionsMissing) READ_FAIL else "本机记录 · 只读"
 
     return OverviewStats(
-        accounts = if (accountsMissing) DASH else readyAccounts.toString(),
+        accounts = if (accountsMissing) DASH else totalAccounts.toString(),
         calls = calls,
         tokens = tokens,
         sessions = sessionsValue,

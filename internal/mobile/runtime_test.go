@@ -175,7 +175,7 @@ func TestRuntimeServesGatewayAndGuardsManagement(t *testing.T) {
 		t.Fatalf("AdminSession = %q, want the injected key", status.AdminSession)
 	}
 	if len(status.CallerKey) != 43 || status.CallerKey == status.AdminSession {
-		t.Fatalf("CallerKey = %q, want an independent ephemeral key", status.CallerKey)
+		t.Fatalf("CallerKey = %q, want an independent 43-char caller key", status.CallerKey)
 	}
 	if info, err := os.Stat(paths.ModelsDir); err != nil || !info.IsDir() {
 		t.Fatalf("ModelsDir %s: %v", paths.ModelsDir, err)
@@ -298,6 +298,9 @@ func TestRuntimeServesGatewayAndGuardsManagement(t *testing.T) {
 	}
 }
 
+// 管理会话 key 每次启动轮换；调用方 key 在**同一个数据目录**下则跨重启不变
+// （持久化，见 caller_key_test.go）。这里每次用全新的临时目录（testConfig），
+// 所以两次都算"首次启动"，两把 caller key 自然不同。
 func TestStartGeneratesRandomSessionKeys(t *testing.T) {
 	admins := make([]string, 0, 2)
 	callers := make([]string, 0, 2)
@@ -325,8 +328,11 @@ func TestStartGeneratesRandomSessionKeys(t *testing.T) {
 		admins = append(admins, status.AdminSession)
 		callers = append(callers, status.CallerKey)
 	}
-	if admins[0] == admins[1] || callers[0] == callers[1] {
-		t.Fatal("each start must generate fresh session keys")
+	if admins[0] == admins[1] {
+		t.Fatal("each start must generate a fresh admin session key")
+	}
+	if callers[0] == callers[1] {
+		t.Fatal("a first-ever start in a fresh data dir must generate a fresh caller key")
 	}
 }
 

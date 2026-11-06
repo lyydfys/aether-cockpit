@@ -4,6 +4,8 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,9 +34,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -70,6 +74,7 @@ import com.muyuchat.core.designsystem.McaDialog
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaShape
 import com.muyuchat.core.designsystem.McaSwitch
+import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -347,6 +352,12 @@ private fun GatewayCard(
                 )
             }
         }
+        // 「密钥」行（对齐桌面 gateway.js:108 的 secretRow）：掩码 + 眼睛切换明文 + 复制。
+        // 插在地址舱下方、局域网共享开关上方；读不到运行时 key 时整行不渲染（不造假值）。
+        if (callerKeyRowVisible(status.callerKey)) {
+            Spacer(Modifier.height(8.dp))
+            GatewayKeyRow(callerKey = status.callerKey)
+        }
         if (notice.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))
             Text(
@@ -464,6 +475,82 @@ private fun GatewayCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * 网关卡「密钥」行：掩码 → 眼睛切换明文 → 复制（对齐桌面 `gateway.js:108` 的 `secretRow`）。
+ *
+ * 数据源是**运行时 caller key**（[GatewayStatus.callerKey]，经 `NativeBridge.RuntimeSnapshot.callerKey`
+ * 从 Go 运行时回来；`RequireCallerKey: true` 时它就是手机网关 `/v1` 真正校验的那把）。
+ * 它**不是** `GET /api/caller-keys` 里那些库密钥——那个接口只回 `masked`，明文要靠
+ * `POST /api/caller-keys/copy-key` 单独取，所以不能拿来直接展示。
+ *
+ * 读不到（空串）时整个组件不渲染：调用点先判空，这里再兜一次，避免出现「未设置」这类假状态。
+ */
+@Composable
+private fun GatewayKeyRow(callerKey: String) {
+    val key = callerKey.trim()
+    if (key.isEmpty()) {
+        return
+    }
+    val clipboard = LocalClipboardManager.current
+    var revealed by remember(key) { mutableStateOf(false) }
+    var copied by remember(key) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1500)
+            copied = false
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "密钥",
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherColors.textTertiary(),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = if (revealed) key else maskCallerKey(key),
+            // labelSmall + 等宽：1.3× 下 15 个掩码字符也还是一行，不折成竖排。
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface,
+            // 1.0× / 1.3× 都只占一行：关掉软换行 + 横向滚动，杜绝「单字竖排」。
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+        )
+        if (copied) {
+            Spacer(Modifier.width(6.dp))
+            AetherStatusChip(
+                text = "已复制",
+                kind = AetherChipKind.SUCCESS,
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        AetherHeaderIconButton(
+            iconRes = if (revealed) R.drawable.ic_visibility else R.drawable.ic_visibility_off,
+            contentDescription = if (revealed) "隐藏密钥" else "显示密钥",
+            onClick = { revealed = !revealed },
+            active = revealed,
+        )
+        AetherHeaderIconButton(
+            // 点过之后图标变勾：比只换按钮底色更容易被看见（1.5s 后自动复位）。
+            iconRes = if (copied) R.drawable.ic_check else R.drawable.ic_copy,
+            contentDescription = if (copied) "已复制密钥" else "复制密钥",
+            onClick = {
+                clipboard.setText(AnnotatedString(key))
+                copied = true
+            },
+            active = copied,
+            tint = if (copied) AetherColors.success() else null,
+        )
     }
 }
 
@@ -1171,6 +1258,32 @@ internal fun gatewayStateDetail(status: GatewayStatus): String = when {
 
 internal fun gatewayActionLabel(status: GatewayStatus): String =
     if (status.running) "停止网关" else "启动网关"
+
+/**
+ * 网关卡「密钥」行是否渲染：**读不到运行时 caller key 就整行不渲染**。
+ *
+ * 网关没启动（`RuntimeSnapshot` 里 callerKey 为空）或旧 runtime 没回传这个字段时，
+ * 那一行会凭空显示「未设置」；宁可少一行，也不给假状态。
+ */
+internal fun callerKeyRowVisible(callerKey: String): Boolean = callerKey.isNotBlank()
+
+/**
+ * 调用方密钥掩码：**前 3 位 + 8 个点 + 后 4 位**。
+ *
+ * 与桌面 `components.js` 的 `secretRow()` 同口径（`secret.slice(0, 3) + '•'.repeat(8) + secret.slice(-4)`）。
+ * 太短的串（≤ 11）没法既掩码又露头露尾：整串打成点，绝不把短密钥原样漏出去，也不补造字符。
+ * 空串返回空串——由调用方决定"不渲染"，这里不编占位符。
+ */
+internal fun maskCallerKey(secret: String): String {
+    val value = secret.trim()
+    if (value.isEmpty()) {
+        return ""
+    }
+    if (value.length <= 11) {
+        return "•".repeat(value.length)
+    }
+    return value.take(3) + "•".repeat(8) + value.takeLast(4)
+}
 
 internal data class StatFocusParts(
     val prefix: String,

@@ -3,6 +3,22 @@ package com.muyuchat.aether.ui
 import kotlin.math.roundToInt
 
 /**
+ * 悬浮球位置：活动区内的比例坐标（0..1），页面球与系统悬浮窗共用同一套语义。
+ *
+ * 存比例而不是像素，旋转/分屏/改刷新率后仍落在等效位置；页面球开外显时把自己的
+ * 比例交给系统窗，系统窗关外显时再把比例交回来，用户看到的始终是"同一颗球"。
+ */
+data class BubblePosition(
+    val xFraction: Float,
+    val yFraction: Float,
+) {
+    companion object {
+        /** 页面球的初始位置：右下角。 */
+        val BottomEnd = BubblePosition(xFraction = 1f, yFraction = 1f)
+    }
+}
+
+/**
  * 悬浮球的纯像素/比例几何。
  *
  * 与桌面色板无关，只做旋转/分屏/改尺寸后仍然正确的换算：
@@ -97,10 +113,10 @@ internal object OverlayGeometry {
     }
 
     /**
-     * 横向吸附：拖完只落到最近的一条边（0 或 1）。
+     * 可选的横向吸附：把比例落到最近的一条边（0 或 1）。
      *
-     * 页面球和系统 overlay 共用；系统层再把比例翻成 `Gravity.END/START`，
-     * 不在窗口层算绝对坐标。
+     * **默认不启用**：页面球和系统悬浮窗松手后都停在手指位置（用户要求自由拖动）。
+     * 这个纯函数保留给将来可能加的"吸边"开关；比例存储仍是二维的（x + y）。
      */
     fun snapFraction(fraction: Float): Float =
         if (clampFraction(fraction) >= 0.5f) 1f else 0f

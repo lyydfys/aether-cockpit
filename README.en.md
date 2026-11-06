@@ -62,13 +62,24 @@ The screenshots below come from an isolated demo configuration; accounts, quotas
 
 ![Synthetic usage trend and breakdown](docs/images/screenshots/usage-en.png)
 
-**Mobile**: the Android build runs the same gateway on the phone; the settings home groups the local data, channel and redaction sections (screenshots use synthetic demo data).
+**Mobile**: the Android build runs the same gateway on the phone — overview, settings, about and more pages read local state, configuration sections and version info.
 
-![Mobile settings home: dark hero card and eight configuration sections](docs/images/screenshots/mobile-settings-zh.png)
+<table>
+  <tr>
+    <td align="center"><b>Overview</b></td>
+    <td align="center"><b>Settings</b></td>
+    <td align="center"><b>About</b></td>
+    <td align="center"><b>More</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/screenshots/mobile-overview-zh.png" width="180"></td>
+    <td><img src="docs/images/screenshots/mobile-settings-zh.png" width="180"></td>
+    <td><img src="docs/images/screenshots/mobile-about-zh.png" width="180"></td>
+    <td><img src="docs/images/screenshots/mobile-more-zh.png" width="180"></td>
+  </tr>
+</table>
 
-![Mobile about page: version, update channel, license and diagnostics](docs/images/screenshots/mobile-about-zh.png)
-
-*Both mobile screenshots come from a synthetic demo profile; account, quota and version figures do not reflect a real device. The Android UI is currently Chinese-only.*
+*All four mobile screenshots come from a synthetic demo profile; account, quota and version figures do not reflect a real device. The Android UI is currently Chinese-only.*
 
 ## Channel Coverage
 

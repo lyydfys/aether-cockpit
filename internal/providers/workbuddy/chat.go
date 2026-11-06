@@ -18,11 +18,6 @@ import (
 	"aether-cockpit/internal/provider"
 )
 
-const (
-	userAgent  = "WorkBuddy/5.5.6"
-	ideVersion = "5.8.3"
-)
-
 // ChatStream 调用 WorkBuddy 的 OpenAI 兼容流式端点。
 func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req *ir.UnifiedChatRequest) (<-chan ir.UnifiedStreamEvent, error) {
 	// 命中过风控的渠道在冷静期内直接拒绝，避免"连续撞墙"把可疑升级成确认滥用。
@@ -72,6 +67,14 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	// 上游的 displayMsg 是"请求被拦截，请重新发送"，但它按会话/请求 id 记住
 	// 被拦的那一次，原样重发还是同一条 id，只会再被拦——所以必须换 id。
 	for attempt := 0; attempt < 2; attempt++ {
+		// 同账号请求节流：真实客户端按交互节奏发请求，机器式连发是风控特征之一。
+		if wait := paceWait(env.AccountID, wbPaceGap); wait > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ir.NewAPIError(ir.ErrCodeInternal, "请求已取消").WithCause(ctx.Err())
+			case <-time.After(wait):
+			}
+		}
 		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost,
 			p.baseURL(env)+"/chat/completions", bytes.NewReader(body))
 		if reqErr != nil {
@@ -91,6 +94,12 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
 		resp = nil
+		// 错误码 → 账号级冷却（表驱动，见 cooldown.go）。先冷却账号，再由
+		// 路由换号：既不继续撞同一个号，也不把整条渠道停掉。
+		cool, reason := wbCooldown(status, string(raw))
+		if cool > 0 {
+			env.MarkCoolingDown(cool, reason)
+		}
 		if attempt == 0 && channelBlocked(string(raw)) {
 			continue
 		}
@@ -99,7 +108,7 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 			// "可疑"升级成"确认滥用"，还可能连坐同区域其它账号。
 			pauseProvider(p.profile.id, riskPauseDefault)
 			return nil, ir.NewAPIError(ir.ErrCodeUpstreamRateLimit,
-				"上游判定为异常行为（风控），已暂停该渠道 10 分钟；请优先使用官方客户端，并避免多账号共用同一出口").
+				"上游判定为异常行为（风控），已暂停该渠道 "+riskPauseDefault.Round(time.Minute).String()+"；请优先使用官方客户端，并避免多账号共用同一出口").
 				WithProvider(p.profile.id)
 		}
 		return nil, mapUpstreamError(status, string(raw), hdr).WithProvider(p.profile.id)
@@ -133,6 +142,8 @@ func (p *Provider) domain(env *provider.AccountEnv) string {
 }
 
 // applyHeaders 写入 WorkBuddy 客户端要求的自定义头。
+//
+// 头族对齐官方桌面客户端（见 identity.go）：固定插件头 + UA + 会话/链路 ID。
 func (p *Provider) applyHeaders(req *http.Request, env *provider.AccountEnv, token, userID string, chat *ir.UnifiedChatRequest, fresh bool) {
 	conversationID, requestID, messageID := conversationIDs(chat, fresh)
 
@@ -151,19 +162,19 @@ func (p *Provider) applyHeaders(req *http.Request, env *provider.AccountEnv, tok
 		req.Header.Set("X-Device-Id", v)
 	}
 	req.Header.Set("X-Domain", p.domain(env))
-	req.Header.Set("X-Product", "SaaS")
-	req.Header.Set("X-IDE-Type", "WorkBuddy")
-	// User-Agent 必须保留 WorkBuddy 前缀，否则上游返回 10085。
+	// 版本、IDE 头、X-Requested-With、X-Private-Data 等由同一处定义，避免多个
+	// 调用点各写一份导致再次漂移。
+	setPluginHeaders(req.Header)
+	// User-Agent 必须保留 WorkBuddy 前缀，否则上游返回 10085；版本与
+	// X-IDE-Version 同源（clientVersion）。
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("X-Agent-Purpose", "conversation")
-	req.Header.Set("X-IDE-Name", "WorkBuddy")
-	req.Header.Set("X-IDE-Version", ideVersion)
 	req.Header.Set("X-Agent-Intent", "craft")
-	req.Header.Set("X-Requested-With", "WorkBuddy")
 	req.Header.Set("X-Conversation-ID", conversationID)
 	req.Header.Set("X-Conversation-Request-ID", requestID)
 	req.Header.Set("X-Conversation-Message-ID", messageID)
 	req.Header.Set("X-Request-ID", randomUUID())
+	applyTraceHeaders(req.Header, conversationID, requestID, messageID)
 
 	if v := strings.TrimSpace(env.GetCredential("enterprise_id")); v != "" {
 		req.Header.Set("X-Enterprise-Id", v)
@@ -568,12 +579,13 @@ func emit(ctx context.Context, out chan<- ir.UnifiedStreamEvent, ev ir.UnifiedSt
 
 // workbuddyBadRequestCodes 是 WorkBuddy 返回"请求本身不合法"的业务码。
 // 这些错误换账号重试没有意义，直接透传为 bad_request。
+//
+// 11140/11142 是风控码，不在这里：它们走 cooldown.go 的账号冷却 + 渠道暂停。
 var workbuddyBadRequestCodes = map[string]bool{
 	"10085": true,
 	"11128": true,
 	"11133": true,
 	"11153": true,
-	"11140": true,
 }
 
 // channelBlocked 判断上游是不是用 11128（通道校验）拦了这次调用。
@@ -592,7 +604,24 @@ func mapUpstreamError(status int, body string, hdr http.Header) *ir.APIError {
 	}
 
 	switch {
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+	case code == "11140" || code == "11142":
+		// 风控码：账号已按 cooldown.go 冷却；标成可重试，让路由换号而不是
+		// 把整条请求判死。
+		return ir.NewAPIErrorf(ir.ErrCodeUpstreamRateLimit, "WorkBuddy 风控拦截（%s）：%s", code, detail).
+			WithRetryable(true).WithRetryAfter(30 * time.Minute)
+	case code == "14015":
+		return ir.NewAPIErrorf(ir.ErrCodeUpstreamAuth, "WorkBuddy 登录态过期（14015）：%s", detail).
+			WithRetryAfter(wbCooldownRetry(status, body))
+	case isWBMeterLimitCode(code):
+		return ir.NewAPIErrorf(ir.ErrCodeUpstreamRateLimit, "WorkBuddy 额度/用量上限（%s）：%s", code, detail).
+			WithRetryable(true).WithRetryAfter(1440 * time.Minute)
+	case isWBEmptyCode(code):
+		return ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed, "WorkBuddy 上游未返回有效内容（%s）：%s", code, detail).
+			WithRetryable(true).WithRetryAfter(60 * time.Minute)
+	case status == http.StatusUnauthorized:
+		return ir.NewAPIErrorf(ir.ErrCodeUpstreamAuth, "WorkBuddy 鉴权失败（%d）：%s", status, detail).
+			WithRetryAfter(wbCooldownRetry(status, body))
+	case status == http.StatusForbidden:
 		return ir.NewAPIErrorf(ir.ErrCodeUpstreamAuth, "WorkBuddy 鉴权失败（%d）：%s", status, detail)
 	case status == http.StatusTooManyRequests:
 		return ir.NewAPIErrorf(ir.ErrCodeUpstreamRateLimit, "WorkBuddy 限流：%s", detail).
@@ -613,6 +642,15 @@ func mapUpstreamError(status int, body string, hdr http.Header) *ir.APIError {
 	default:
 		return ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed, "WorkBuddy 上游返回 %d：%s", status, detail)
 	}
+}
+
+// wbCooldownRetry 取冷却映射中的时长作为 RetryAfter；无规则时退回 30 分钟
+// （401/14015 都属于"过一会儿再看/重新登录"的临时状态，不是永久失效）。
+func wbCooldownRetry(status int, body string) time.Duration {
+	if d, _ := wbCooldown(status, body); d > 0 {
+		return d
+	}
+	return 30 * time.Minute
 }
 
 type wbErrorPayload struct {

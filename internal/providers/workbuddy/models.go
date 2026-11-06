@@ -111,7 +111,8 @@ func (p *Provider) ListModelInfos(ctx context.Context, env *provider.AccountEnv)
 	if token == "" || userID == "" {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamAuth, "WorkBuddy 账号缺少 token/user_id").WithProvider(p.profile.id)
 	}
-	base := strings.TrimSuffix(strings.TrimRight(p.baseURL(env), "/"), "/v2")
+	// 站点根与登录链路同源：{站点根}/v3/config（国际版 www.workbuddy.ai，国内版 copilot.tencent.com）。
+	base := providerOrigin(p.baseURL(env))
 	url := base + "/v3/config"
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -123,13 +124,9 @@ func (p *Provider) ListModelInfos(ctx context.Context, env *provider.AccountEnv)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-User-Id", userID)
 	req.Header.Set("X-Domain", p.domain(env))
-	req.Header.Set("X-Product", "SaaS")
-	req.Header.Set("X-IDE-Type", "WorkBuddy")
+	setPluginHeaders(req.Header)
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("X-Agent-Purpose", "conversation")
-	req.Header.Set("X-IDE-Name", "WorkBuddy")
-	req.Header.Set("X-IDE-Version", ideVersion)
-	req.Header.Set("X-Requested-With", "WorkBuddy")
 	resp, err := env.Client().Do(req)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "WorkBuddy 配置请求失败").

@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -83,8 +84,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.role
 
@@ -236,6 +239,26 @@ internal val AboutMcaPillCornerPercent: Int = 50
 /** 链接卡内边距：MCA 样板 padding 12/16（vertical 12 / horizontal 16）。 */
 internal val AboutMcaLinkPaddingH: Dp = 16.dp
 internal val AboutMcaLinkPaddingV: Dp = 12.dp
+
+/**
+ * 「赞赏码」展示尺寸：用户要求每张 140–160dp 见方，这里取 148dp。
+ *
+ * 为什么不取满 160dp：360dp 手机上弹窗正文可用宽度约 250–270dp，
+ * 148dp 图 + 左右各 [AboutSponsorQrFramePadding] 外框 = 160dp 单张居中；
+ * 两列排布需要 332dp 以上的可用宽度，只有平板/横屏/大窗才会走两列。
+ * 图片本身按 `ContentScale.Fit` 等比缩放，不会被拉伸。
+ */
+internal val AboutSponsorQrImageSize: Dp = 148.dp
+
+/** 二维码外框内边距：留出这段空隙后，外框圆角永远切不到码的边缘。 */
+internal val AboutSponsorQrFramePadding: Dp = 6.dp
+
+/** 两张二维码之间的间距（两列横排与单列竖排共用）。 */
+internal val AboutSponsorQrGap: Dp = 12.dp
+
+/** 走「两列」所需的最小可用宽度 =（图 + 左右外框）× 2 + 列间距。 */
+internal val AboutSponsorQrTwoUpMinWidth: Dp =
+    (AboutSponsorQrImageSize + AboutSponsorQrFramePadding * 2) * 2 + AboutSponsorQrGap
 
 internal fun buildTypeLabel(debuggable: Boolean): String = if (debuggable) "debug" else "release"
 
@@ -1052,7 +1075,8 @@ private fun AboutStarGuideDialog(onDismiss: () -> Unit) {
  * 差异（见汇报）：
  *  - MCA 用 `FlowRow`，这里用两行 `Row`（仓库 Compose 版本上避免额外 ExperimentalLayoutApi）；
  *  - MCA 有「分享项目」，本仓库不跳外部（`ACTION_SEND` 会拉起系统分享面板），改成**复制仓库链接**；
- *  - MCA 的支付宝/微信离线赞赏码图片本仓库没有素材，**整块省略**（不臆造二维码）；
+ *  - 赞赏码区域默认**折叠**（[AboutSponsorQrPanel]）：点一行「赞赏码」才展开两张图，
+ *    避免弹窗一打开就被大图撑满；MCA 是同款折叠思路，只是它的入口文案叫「离线赞赏码」；
  *  - 「去赞助 / 去点 Star / 意见反馈」在 MCA 里是外部跳转，这里一律**复制链接**在 App 内完成。
  */
 @Composable
@@ -1064,6 +1088,9 @@ private fun AboutSponsorDialog(onDismiss: () -> Unit) {
     fun copy(link: String) {
         clipboard.setText(AnnotatedString(link))
     }
+    // 赞赏码默认折叠：弹窗刚打开时只显示一行入口，点一下才展开两张码。
+    // 用 `remember` 而不是 rememberSaveable：每次重新打开弹窗都回到折叠态（更符合"默认折叠"）。
+    var qrExpanded by remember { mutableStateOf(false) }
     McaDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1169,6 +1196,11 @@ private fun AboutSponsorDialog(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // 离线赞赏码：按 MCA「离线赞赏码」的位置放在正文最末，默认折叠。
+                AboutSponsorQrPanel(
+                    expanded = qrExpanded,
+                    onToggle = { qrExpanded = !qrExpanded },
+                )
             }
         },
         confirmButton = {},
@@ -1176,6 +1208,168 @@ private fun AboutSponsorDialog(onDismiss: () -> Unit) {
             McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
         },
     )
+}
+
+/**
+ * 「赞赏码」折叠区：一行入口 + 展开后的支付宝/微信两张离线赞赏码。
+ *
+ * 交互：整行可点（`clickable` + `Role.Button`），箭头展开时旋转 90° 指下、收起时指右。
+ * 展开状态由调用方持有（[AboutSponsorDialog] 的 `qrExpanded`），每次重开弹窗都回到折叠态。
+ *
+ * 排版：用 [BoxWithConstraints] 读**实际可用宽度**，够 [AboutSponsorQrTwoUpMinWidth] 才两列，
+ * 否则单列竖排。1.0× / 1.3× 字体下都只会「整体换行」，不会把「支付宝」压成单字竖排——
+ * 每行标注都带 `maxLines = 1` + `softWrap = false`，最坏情况是省略号，永远不是竖排。
+ */
+@Composable
+private fun AboutSponsorQrPanel(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(AboutMcaHeroShapeDp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                // 点击挂在 Row 上（与 AboutMcaLinkTile 同一套写法：挂 Card/Surface 会被
+                // M3 的 surface/ripple 层吞掉），semantics 显式声明 Button 角色。
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggle)
+                    .semantics { role = androidx.compose.ui.semantics.Role.Button }
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "赞赏码",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = if (expanded) "点击收起" else "支付宝 / 微信 · 点击展开",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    painter = painterResource(R.drawable.ic_chevron),
+                    contentDescription = if (expanded) "收起赞赏码" else "展开赞赏码",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .rotate(if (expanded) 90f else 0f),
+                )
+            }
+            if (expanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        if (maxWidth >= AboutSponsorQrTwoUpMinWidth) {
+                            // 两列：只有平板 / 横屏 / 大窗才够宽，此时两张码并排。
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(AboutSponsorQrGap),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                AboutSponsorQrItem(
+                                    imageRes = R.drawable.ic_sponsor_alipay,
+                                    label = "支付宝",
+                                    description = "支付宝赞赏码",
+                                    modifier = Modifier.weight(1f),
+                                )
+                                AboutSponsorQrItem(
+                                    imageRes = R.drawable.ic_sponsor_wechat,
+                                    label = "微信",
+                                    description = "微信赞赏码",
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        } else {
+                            // 单列：手机竖屏（含 1.3× 字体）走这里，两张码上下居中排列。
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(AboutSponsorQrGap),
+                            ) {
+                                AboutSponsorQrItem(
+                                    imageRes = R.drawable.ic_sponsor_alipay,
+                                    label = "支付宝",
+                                    description = "支付宝赞赏码",
+                                )
+                                AboutSponsorQrItem(
+                                    imageRes = R.drawable.ic_sponsor_wechat,
+                                    label = "微信",
+                                    description = "微信赞赏码",
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        text = "GitHub 访问不稳定时，可直接扫码赞赏。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 单张赞赏码：外框 + 等比缩放的码图 + 下方标注。
+ *
+ * 圆角只加在**外框** [Surface] 上；图片自身再留 [AboutSponsorQrFramePadding] 的白边，
+ * 所以圆角弧线永远切不到二维码本体（三个定位角完整）。`ContentScale.Fit` 保证
+ * 任何可用宽度下都不被拉伸——二维码一旦非等比变形就扫不出来。
+ */
+@Composable
+private fun AboutSponsorQrItem(
+    imageRes: Int,
+    label: String,
+    description: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(AboutMcaCardShapeDp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Image(
+                painter = painterResource(imageRes),
+                contentDescription = description,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .padding(AboutSponsorQrFramePadding)
+                    .size(AboutSponsorQrImageSize),
+            )
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 /**

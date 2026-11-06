@@ -100,6 +100,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import com.muyuchat.core.designsystem.McaPlateSize
 import com.muyuchat.core.designsystem.McaShape
 import kotlinx.coroutines.CancellationException
@@ -1193,7 +1195,8 @@ private fun CallerKeysSection(
                 McaButton(onClick = { creating = true }, style = McaButtonStyle.Primary) {
                     Text("新建密钥")
                 }
-                DeepCardBody("明文只在创建时展示一次，不写日志/截图/剪贴板；本机仅保存加密密文。")
+                // 与「仅显示一次」弹窗的新按钮对齐：只有用户当场点了「复制」才进剪贴板。
+                DeepCardBody("明文只在创建时展示一次，不写日志、不截图；需要时当场点「复制」取走；本机仅保存加密密文。")
             }
             }
         }
@@ -1462,6 +1465,9 @@ private fun ModelWhitelistRow(
 }
 @Composable
 private fun CallerSecretDialog(secret: String, onDismiss: () -> Unit) {
+    // 只在本弹窗的内存里活着：关闭 = 组合销毁，不写 SharedPreferences、不缓存进 ViewModel。
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(secret) { mutableStateOf(false) }
     McaDialog(
         onDismissRequest = onDismiss,
         title = { Text("调用方密钥（仅显示一次）", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
@@ -1483,10 +1489,28 @@ private fun CallerSecretDialog(secret: String, onDismiss: () -> Unit) {
                             .padding(12.dp),
                     )
                 }
+                if (copied) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "已复制到剪贴板",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
         },
         confirmButton = {
             McaButton(onClick = onDismiss, style = McaButtonStyle.Primary) { Text("已抄写，关闭") }
+        },
+        // 复制只在用户主动点击时发生：明文这一次才进系统剪贴板。
+        dismissButton = {
+            McaButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(secret))
+                    copied = true
+                },
+                style = McaButtonStyle.Outlined,
+            ) { Text(if (copied) "已复制" else "复制") }
         },
     )
 }

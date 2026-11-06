@@ -73,6 +73,62 @@ class GatewayBubbleTest {
     }
 
     @Test
+    fun overlayActionBecomesReturnToAppOutsideTheApp() {
+        // 外显打开后，同一个按钮按宿主切换语义：
+        // 应用内保持原样「关闭 app 外显」，应用外变成「返回 app」（把 App 拉回前台）。
+        assertEquals("关闭 app 外显", overlayActionLabel(visible = true, inApp = true))
+        assertEquals("返回 app", overlayActionLabel(visible = true, inApp = false))
+        // 外显没开时永远是入口「app 外显」，和宿主无关。
+        assertEquals("app 外显", overlayActionLabel(visible = false, inApp = true))
+        assertEquals("app 外显", overlayActionLabel(visible = false, inApp = false))
+    }
+
+    @Test
+    fun callerKeyCopyIsHiddenOutsideAppOrWithoutKey() {
+        // 读不到 caller key 时不渲染（绝不显示一把空的）；
+        // showCopy=false 是宿主显式关闭复制的开关——系统悬浮窗现在传 true，
+        // 因为 Android 10+ 限制的是后台**读**剪贴板，写不受影响。
+        assertFalse(showCallerKeyCopy(showCopy = false, callerKey = "aek_abc"))
+        assertFalse(showCallerKeyCopy(showCopy = true, callerKey = ""))
+        assertFalse(showCallerKeyCopy(showCopy = true, callerKey = "   "))
+        assertTrue(showCallerKeyCopy(showCopy = true, callerKey = "aek_abc"))
+    }
+
+    @Test
+    fun copyButtonsReportSuccessAndFailure() {
+        // 写入成功 → 「已复制…」；写入失败 → 「复制失败」，不静默吞掉。
+        assertEquals("复制地址", addressCopyLabel(copied = false, failed = false))
+        assertEquals("已复制", addressCopyLabel(copied = true, failed = false))
+        assertEquals("复制失败", addressCopyLabel(copied = false, failed = true))
+        assertEquals("复制密钥", callerKeyCopyLabel(copied = false, failed = false))
+        assertEquals("已复制密钥", callerKeyCopyLabel(copied = true, failed = false))
+        assertEquals("复制失败", callerKeyCopyLabel(copied = false, failed = true))
+    }
+
+    @Test
+    fun actionGridPacksTwoPerRowAndKeepsLoneCell() {
+        // 固定顺序切成每行最多 2 颗：4 颗 → 2×2；3 颗 → [2,1]（第二行只占前半格）；
+        // 2 颗 → 一行两颗；1 颗 → 一行一颗。少一颗时后面的自动补位，不会塌成整行。
+        assertEquals(
+            listOf(listOf("a", "b"), listOf("c", "d")),
+            bubbleActionRows(listOf("a", "b", "c", "d")),
+        )
+        assertEquals(
+            listOf(listOf("a", "b"), listOf("c")),
+            bubbleActionRows(listOf("a", "b", "c")),
+        )
+        assertEquals(listOf(listOf("a", "b")), bubbleActionRows(listOf("a", "b")))
+        assertEquals(listOf(listOf("a")), bubbleActionRows(listOf("a")))
+        assertEquals(emptyList<List<String>>(), bubbleActionRows(emptyList<String>()))
+    }
+
+    @Test
+    fun callerKeyCopyButtonReportsSuccessOnce() {
+        assertEquals("复制密钥", callerKeyCopyLabel(copied = false))
+        assertEquals("已复制密钥", callerKeyCopyLabel(copied = true))
+    }
+
+    @Test
     fun permissionCopyStatesWhyAndWhereToGrant() {
         val copy = overlayPermissionRequestCopy()
         assertTrue(copy.contains("显示在其他应用上层"))

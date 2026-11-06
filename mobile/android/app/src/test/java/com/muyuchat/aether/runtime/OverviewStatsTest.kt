@@ -61,13 +61,57 @@ class OverviewStatsTest {
             sessions = 12,
             nowMs = 1_700_000_000_000L,
         )
-        assertEquals("2", stats.accounts)
+        // 主数字是磁盘账号总数（3），注解里写"其中 2 个可用"。
+        assertEquals("3", stats.accounts)
+        assertTrue(stats.captions[0], stats.captions[0].contains("其中 2 个可用"))
         assertEquals("7", stats.calls)
         // 1200 + 999(缓存读) + 0 + 300 = 2499 → 2.5K（桌面把缓存算进 Token 总量）
         assertEquals("2.5K", stats.tokens)
         assertEquals("12", stats.sessions)
         assertEquals(1_700_000_000_000L, stats.updatedAtMs)
         assertEquals(4, stats.captions.size)
+    }
+
+    /**
+     * 渠道未就绪时账号不能从概览上消失。
+     *
+     * 场景（真机复现）：accounts.json 里有 1 个账号，但它所属的自定义渠道没注册，
+     * 账号进不了内存池。旧口径只数内存池 → 概览显示 0，用户以为"渠道被清零了"。
+     */
+    @Test
+    fun unloadedAccountsStillCountedOnTheOverview() {
+        val stats = overviewStats(
+            usage = summary(calls = 0),
+            providers = emptyList(),
+            sessions = 0,
+            accountTotals = ProviderAccountTotals(
+                accountTotal = 1,
+                readyTotal = 0,
+                unloaded = listOf(
+                    UnloadedAccountSummary(
+                        accountId = "custom-e2e-1",
+                        providerId = "custom-e2e",
+                        label = "我的渠道",
+                    ),
+                ),
+            ),
+        )
+        // 磁盘上有 1 个账号 → 主数字是 1，不是 0。
+        assertEquals("1", stats.accounts)
+        assertTrue(stats.captions[0], stats.captions[0].contains("其中 0 个可用"))
+        assertTrue(stats.captions[0], stats.captions[0].contains("1 个渠道未就绪"))
+    }
+
+    /** 老服务端没有 account_total：回落到渠道行合计，行为与改动前一致。 */
+    @Test
+    fun fallsBackToProviderRowsWhenTotalsMissing() {
+        val stats = overviewStats(
+            usage = summary(calls = 0),
+            providers = listOf(provider("claude", accounts = 3, ready = 2)),
+            sessions = 0,
+        )
+        assertEquals("3", stats.accounts)
+        assertTrue(stats.captions[0], !stats.captions[0].contains("渠道未就绪"))
     }
 
     @Test

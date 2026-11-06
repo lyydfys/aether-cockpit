@@ -96,7 +96,16 @@ class OverlayGeometryTest {
     }
 
     @Test
+    fun freePositionRoundTripsWithoutSnapping() {
+        // 自由拖动：任意像素位置 ↔ 比例必须原样往返，不能落到左右两条边（用户要"停在哪就是哪"）。
+        val fraction = OverlayGeometry.fractionForOffset(437, 1000)
+        assertTrue(fraction > 0.4f && fraction < 0.5f)
+        assertEquals(437, OverlayGeometry.offsetPx(fraction, 1000))
+    }
+
+    @Test
     fun snapFractionGoesToNearestHorizontalEdge() {
+        // 可选的吸边工具：默认不再被拖动路径调用（见 freePositionRoundTripsWithoutSnapping）。
         assertEquals(0f, OverlayGeometry.snapFraction(0.49f))
         assertEquals(1f, OverlayGeometry.snapFraction(0.5f))
         assertEquals(1f, OverlayGeometry.snapFraction(0.9f))

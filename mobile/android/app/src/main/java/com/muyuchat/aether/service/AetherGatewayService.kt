@@ -86,7 +86,9 @@ class AetherGatewayService : Service() {
                     }
                 }
                 val colors = OverlayColors.from(intent)
-                val shown = colors != null && GatewayOverlayController.show(this, colors)
+                // 页面球把自己当前的位置一起带过来：外显打开后是同一颗球接着落在原地。
+                val position = overlayPositionFrom(intent)
+                val shown = colors != null && GatewayOverlayController.show(this, colors, position)
                 notifications.notify(
                     NOTIFICATION_ID,
                     if (shown) {

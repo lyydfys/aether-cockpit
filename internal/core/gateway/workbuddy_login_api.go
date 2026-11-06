@@ -8,9 +8,11 @@ import (
 	"aether-cockpit/internal/providers/workbuddy"
 )
 
-// WorkBuddy 登录：copilot.tencent.com auth/state → 浏览器登录 → auth/token 轮询。
+// WorkBuddy 登录：{站点根}/v2/plugin/auth/state → 浏览器登录 → auth/token 轮询。
+// 站点根按 site（provider id）选择：workbuddy-cn → copilot.tencent.com，
+// workbuddy-intl → www.workbuddy.ai；选错会让国际版跳到国内登录页。
 //
-//	POST /api/provider/workbuddy/device          {"site":"workbuddy-cn"}
+//	POST /api/provider/workbuddy/device          {"site":"workbuddy-intl"}
 //	GET  /api/provider/workbuddy/device/{id}     → {state, login_url, interval, account}
 //	POST /api/provider/workbuddy/device/{id}/cancel
 

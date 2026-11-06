@@ -141,7 +141,7 @@ func TestProbeConfigCatalog(t *testing.T) {
 			t.Logf("%s: parse: %v", prof.id, err)
 			continue
 		}
-		base := strings.TrimSuffix(prof.baseURL, "/v2")
+		base := providerOrigin(prof.baseURL)
 		url := base + "/v3/config"
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err != nil {
@@ -155,13 +155,9 @@ func TestProbeConfigCatalog(t *testing.T) {
 			domain = prof.domain
 		}
 		req.Header.Set("X-Domain", domain)
-		req.Header.Set("X-Product", "SaaS")
-		req.Header.Set("X-IDE-Type", "WorkBuddy")
+		setPluginHeaders(req.Header)
 		req.Header.Set("User-Agent", userAgent)
 		req.Header.Set("X-Agent-Purpose", "conversation")
-		req.Header.Set("X-IDE-Name", "WorkBuddy")
-		req.Header.Set("X-IDE-Version", ideVersion)
-		req.Header.Set("X-Requested-With", "WorkBuddy")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Logf("%s: GET %s: %v", prof.id, url, err)

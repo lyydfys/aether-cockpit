@@ -11,7 +11,8 @@ import (
 // DataDir is <noBackupFilesDir>/aether, CacheDir is <filesDir>/aether/cache and
 // TempDir is <cacheDir>/aether/tmp. All roots are absolute; the runtime derives
 // every store path under them and never falls back to Base() or the process
-// working directory.
+// working directory. Anything that must survive a restart (settings, accounts,
+// the caller key) lives under DataDir, never under CacheDir/TempDir.
 type Paths struct {
 	DataDir  string
 	StateDB  string
@@ -29,6 +30,10 @@ type Paths struct {
 	UsagePath      string
 	ModelsDir      string
 	SpecDir        string
+	// CallerKeyPath 是运行时调用方密钥的持久化文件：首次启动生成、
+	// 之后每次启动读取同一把（客户端把它抄进配置里，不能每次重启都变）。
+	// 落在 DataDir（noBackupFilesDir）而不是 cache，避免被系统当缓存清理。
+	CallerKeyPath string
 }
 
 // NewPaths validates and derives the mobile path set. Empty, relative or
@@ -78,5 +83,6 @@ func NewPaths(dataDir, cacheDir, tempDir string) (Paths, error) {
 		UsagePath:      filepath.Join(usageDir, "usage.json"),
 		ModelsDir:      filepath.Join(cleanCache, "models"),
 		SpecDir:        filepath.Join(cleanCache, "spec"),
+		CallerKeyPath:  filepath.Join(cleanData, "caller-key"),
 	}, nil
 }

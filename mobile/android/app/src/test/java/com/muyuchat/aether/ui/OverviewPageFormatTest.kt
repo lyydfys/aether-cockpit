@@ -3,6 +3,7 @@ package com.muyuchat.aether.ui
 import com.muyuchat.aether.runtime.GatewayState
 import com.muyuchat.aether.runtime.GatewayStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -87,5 +88,45 @@ class OverviewPageFormatTest {
         // 读不到时原文照旧，不许被去掉前缀后变成空串。
         assertEquals("读不到请求记录", latestRequestBody("读不到请求记录"))
         assertEquals("还没有客户端连过本机网关", latestRequestBody("还没有客户端连过本机网关"))
+    }
+
+    @Test
+    fun keyRowIsHiddenWhenRuntimeKeyIsUnavailable() {
+        // 网关没启动 / 旧 runtime 不回传 callerKey → 整行不渲染，
+        // 不显示「未设置」这类假状态（用户报的问题之一就是"没有这一行"）。
+        assertFalse(callerKeyRowVisible(""))
+        assertFalse(callerKeyRowVisible("   "))
+        assertTrue(callerKeyRowVisible("aek_0123456789abcdefghijklmnopqrstuvwxyz"))
+    }
+
+    @Test
+    fun masksCallerKeyAsDesktopDoes() {
+        // 桌面 components.js `secretRow()`：前 3 + 8 个点 + 后 4（native 运行时 key 是 43 字符）。
+        val key = "aek0123456789abcdefghijklmnopqrstuvwxyzAB12"
+        val masked = maskCallerKey(key)
+        assertEquals("aek••••••••AB12", masked)
+        // 总长固定 15，且只有头 3 尾 4 是原文——中段一个字符都不许漏。
+        assertEquals(15, masked.length)
+        assertEquals(key.take(3), masked.take(3))
+        assertEquals(key.takeLast(4), masked.takeLast(4))
+        assertFalse(masked.contains(key.substring(3, key.length - 4)))
+    }
+
+    @Test
+    fun shortCallerKeyIsMaskedCompletely() {
+        // 太短的串没法既掩码又露头露尾：整串打点，不把短密钥原样漏出去，也不补造字符。
+        assertEquals("•••••", maskCallerKey("sk-12"))
+        assertEquals("•••••••••••", maskCallerKey("a".repeat(11)))
+        // 12 字符起才按 3+8+4 处理（与 Go 侧 `maskCallerSecret` 的 12 阈值同口径）。
+        assertEquals("abc••••••••ijkl", maskCallerKey("abcdefghijkl"))
+    }
+
+    @Test
+    fun emptyCallerKeyMasksToEmptySoRowStaysHidden() {
+        // 空 = 读不到：返回空串，调用方据此整行不渲染（绝不编占位符）。
+        assertEquals("", maskCallerKey(""))
+        assertEquals("", maskCallerKey("   "))
+        // 前后空白先裁掉再打码，避免把空格算进"头 3 位"。
+        assertEquals("aek••••••••AB12", maskCallerKey("  aek0123456789abcdefghijklmnopqrstuvwxyzAB12  "))
     }
 }

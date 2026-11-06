@@ -574,36 +574,19 @@ func New(cfg Config) *Gateway {
 	// 引用了未注册渠道的条目会被跳过，而不是整体失败——渠道分批接入时很常见。
 	g.rebuildRoutingGroups()
 
-	// 账号恢复必须在 routes() 之前完成，否则第一批管理请求会看到空池。
-	if len(cfg.CredentialKey) > 0 {
-		g.pool.SetCredentialKey(cfg.CredentialKey)
-	}
-	if cfg.AccountStorePath != "" {
-		if err := g.pool.SetStorePath(cfg.AccountStorePath, g.tr); err != nil {
-			// 加载失败时账号池保持只读，避免后续空池回写覆盖原文件。
-			g.accountStoreErr = err
-			log.Printf("[WARN] 账号文件加载失败: %v", err)
-		}
-		// 响应 id 族统计与账号同目录：重启后官转率曲线不中断。
-		// 读失败只影响历史曲线，不影响网关启动（见 rtstats.SetPath）。
-		rtstats.SetPath(filepath.Join(filepath.Dir(cfg.AccountStorePath), "rtstats.json"))
-	}
-	// 账号恢复后把渠道级自定义请求头套上（保存时已套过的账号会幂等重套）。
-	g.applyProviderTransportAll()
-	// 渠道级"不校验证书"：恢复出来的客户端是工厂统铸的，要按渠道开关重建。
-	for _, env := range g.pool.All() {
-		if g.providerInsecureTLS(env.ProviderID) {
-			if err := g.rebuildAccountClient(env); err != nil {
-				log.Printf("[WARN] 重建 %s 客户端失败: %v", env.AccountID, err)
-			}
-		}
-	}
-
-	// 加载渠道参数 spec。它必须在 routes() 之前就绪。
-	// 否则第一波请求会拿不到热更新过的参数。
+	// 渠道注册必须早于账号恢复。
 	//
-	// 顺序有讲究：先给"编译期已注册的渠道"拍个快照，再加载 spec。
+	// 账号池按 provider_id 还原账号：`provider.Get(pa.ProviderID)` 查不到就进不了池
+	// （只留在 pool 的 preserved 里，概览数不到）。所以**所有**能注册渠道的步骤
+	// 都必须在 `SetStorePath` 之前完成：
+	//   1. 自定义渠道 —— 上面 syncCustomChannels() 已注册；
+	//   2. spec 声明的 reverse 渠道 —— 原先排在账号恢复之后，导致这些渠道下的账号
+	//      每次重启都落在"未就绪"，用户看到的就是"接入的渠道清零了"。
+	//
+	// 顺序有讲究：先给"编译期已注册的渠道"拍快照，再加载 spec，
 	// 之后 spec 里声明的 reverse 渠道才能注册，且不会被允许覆盖内置渠道。
+	// （SnapshotRegistry 只在注册表发生变化时才有差别；这里与原先的位置之间没有
+	//   任何注册动作，所以提前调用不改变快照内容。）
 	provider.SnapshotRegistry()
 	specStore := spec.Default()
 	if cfg.SpecDir != "" {
@@ -619,6 +602,39 @@ func New(cfg Config) *Gateway {
 	// spec 里声明了 extra.reverse_profile 的条目会在这里变成真实渠道。
 	// 失败只记日志，不让一个写错的 spec 拖垮启动。
 	provider.ReconcileSpecChannels()
+
+	// 账号恢复必须在 routes() 之前完成，否则第一批管理请求会看到空池。
+	if len(cfg.CredentialKey) > 0 {
+		g.pool.SetCredentialKey(cfg.CredentialKey)
+	}
+	if cfg.AccountStorePath != "" {
+		if err := g.pool.SetStorePath(cfg.AccountStorePath, g.tr); err != nil {
+			// 加载失败时账号池保持只读，避免后续空池回写覆盖原文件。
+			g.accountStoreErr = err
+			log.Printf("[WARN] 账号文件加载失败: %v", err)
+		}
+		// 响应 id 族统计与账号同目录：重启后官转率曲线不中断。
+		// 读失败只影响历史曲线，不影响网关启动（见 rtstats.SetPath）。
+		rtstats.SetPath(filepath.Join(filepath.Dir(cfg.AccountStorePath), "rtstats.json"))
+	}
+	// 兜底：万一仍有账号因渠道未就绪而没进池（例如 spec 目录本次读失败），
+	// 只要渠道在当前注册表里可用，就把它们提升回池——概览才不会少报。
+	if promoted, err := g.pool.PromoteUnloaded(g.tr); err != nil {
+		log.Printf("[WARN] 提升未就绪账号失败: %v", err)
+	} else if promoted > 0 {
+		log.Printf("启动时把 %d 个未就绪账号提升回池", promoted)
+	}
+	// 账号恢复后把渠道级自定义请求头套上（保存时已套过的账号会幂等重套）。
+	g.applyProviderTransportAll()
+	// 渠道级"不校验证书"：恢复出来的客户端是工厂统铸的，要按渠道开关重建。
+	for _, env := range g.pool.All() {
+		if g.providerInsecureTLS(env.ProviderID) {
+			if err := g.rebuildAccountClient(env); err != nil {
+				log.Printf("[WARN] 重建 %s 客户端失败: %v", env.AccountID, err)
+			}
+		}
+	}
+
 	// 上游实时模型目录：加载磁盘缓存，并在路由表重建前注入模型来源。
 	// 静态 Manifest 仍是兜底；没有缓存的渠道行为完全不变。
 	g.catalog = newModelCatalog(cfg.ModelsDir, g)
@@ -2462,6 +2478,14 @@ func (g *Gateway) penalizeModel(env *provider.AccountEnv, err *ir.APIError, mode
 			g.quotaHist.record(env.ProviderID, env.Label, env.RateWindows(), nil)
 		}
 	case ir.ErrCodeUpstreamAuth:
+		// 上游给了明确的重试窗口（如 WorkBuddy 14015/401 的 30 分钟）：这是
+		// 临时过期，不是凭证永久失效——冷却账号（到期自动恢复），不要打进
+		// invalid 永久态，否则一次抖动就得人工重新登录。
+		if err.RetryAfter > 0 {
+			env.MarkCoolingDown(err.RetryAfter, err.Message)
+			eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())
+			return
+		}
 		env.MarkInvalid(err.Message)
 		// 官方订阅通道被上游拒绝授权：单独标记并暂停该通道，
 		// 等用户「检查授权 / 恢复」后再参与路由；普通中转账号没有这一层。

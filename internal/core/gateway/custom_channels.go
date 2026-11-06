@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -222,6 +223,15 @@ func (g *Gateway) syncCustomChannels() {
 		}
 	}
 	g.setCustomProviderIDs(customIDKeys(want))
+
+	// 渠道刚刚（重新）注册进注册表：此前因为"渠道未注册"而只能留在 preserved 里的
+	// 账号，现在应该立刻回到池里，而不是等到下次重启——否则用户重新添加渠道后
+	// 仍会看到"账号清零"，得重启 App 才恢复。
+	if promoted, err := g.pool.PromoteUnloaded(g.tr); err != nil {
+		log.Printf("[WARN] 提升未就绪账号失败: %v", err)
+	} else if promoted > 0 {
+		log.Printf("自定义渠道变更后把 %d 个未就绪账号提升回池", promoted)
+	}
 }
 
 // customProviderIDs 记录"当前由自定义渠道注册的 provider id"。

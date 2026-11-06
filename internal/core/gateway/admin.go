@@ -303,8 +303,25 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// 磁盘真实账号数 = 已进池的 + 因渠道未注册而进不了池的。
+	//
+	// 概览「可用账号」以前只数内存池，于是"渠道还没注册"的账号会被数成 0，
+	// 用户看到的就是"接入的渠道清零了"——数据其实一直在 accounts.json 里。
+	unloaded := g.pool.UnloadedAccounts()
+	accountTotal := len(unloaded)
+	readyTotal := 0
+	for _, v := range views {
+		accountTotal += v.AccountCount
+		readyTotal += v.ReadyCount
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"providers":             out,
+		"providers": out,
+		// 账号口径：account_total 是磁盘上的账号总数，ready_total 是其中当前可路由的。
+		// unloaded_accounts 列出"渠道未就绪"的那批，前端要显式展示（不能消失）。
+		"account_total":         accountTotal,
+		"ready_total":           readyTotal,
+		"unloaded_accounts":     unloaded,
 		"tun":                   transport.DetectTUN(),
 		"virtual_groups":        g.models.VirtualGroups(),
 		"virtual_group_details": g.models.VirtualGroupDetails(),

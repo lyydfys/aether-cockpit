@@ -39,6 +39,7 @@ func TestNewPathsDerivesMobilePaths(t *testing.T) {
 		{"ClientsPath", paths.ClientsPath, filepath.Join(data, "clients.json")},
 		{"LibraryPath", paths.LibraryPath, filepath.Join(data, "library.json")},
 		{"UsagePath", paths.UsagePath, filepath.Join(data, "usage", "usage.json")},
+		{"CallerKeyPath", paths.CallerKeyPath, filepath.Join(data, "caller-key")},
 		{"ModelsDir", paths.ModelsDir, filepath.Join(cache, "models")},
 		{"SpecDir", paths.SpecDir, filepath.Join(cache, "spec")},
 	} {

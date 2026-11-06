@@ -11,17 +11,33 @@
 
 ### workbuddy（CN / Intl）
 
+> 2026-11-06 按参考实现（`com.joy4fire.wbproxy` 1.0.6）的方法级证据收敛：
+> **UA 与 X-IDE-Version 同源同版本**（`clientVersion`），不再出现 UA 5.5.6 /
+> IDE 5.8.3 这种自相矛盾组合。依据见 [ANTI_BAN.md §2.4](ANTI_BAN.md)。
+
 | 头 | 取值 | 代码 |
 |---|---|---|
-| `User-Agent` | `WorkBuddy/5.5.6` | `workbuddy/chat.go` |
+| `User-Agent` | `WorkBuddy/5.9.3`（`"WorkBuddy/" + clientVersion`） | `workbuddy/identity.go` |
 | `X-IDE-Type` / `X-IDE-Name` | `WorkBuddy` | 同上 |
-| `X-IDE-Version` | `5.8.3` | 同上 |
-| `X-Agent-Purpose` / `X-Agent-Intent` | `conversation` / `craft` | 同上 |
+| `X-IDE-Version` | `5.9.3`（与 UA 同一常量） | 同上 |
+| `X-Product` | `SaaS` | 同上 |
+| `X-Private-Data` | `true` | 同上 |
+| `X-CodeBuddy-Request` | `1` | 同上 |
+| `X-Requested-With` | `XMLHttpRequest`（**不再是编造的 `WorkBuddy`**） | 同上 |
+| `X-Agent-Purpose` / `X-Agent-Intent` | `conversation` / `craft` | `workbuddy/chat.go` |
 | `X-Conversation-ID` / `-Request-ID` / `-Message-ID` | 会话/请求/消息三级，稳定派生 | 同上 |
 | `X-Request-ID` | 每请求随机 UUID | 同上 |
-| `X-Device-Token` / `X-Device-Id` | 凭证配置了才发（服务端签发，不可伪造） | 同上 |
+| `traceparent` | `00-<32hex>-<16hex>-01`，由会话/请求 ID 派生 | `workbuddy/identity.go` |
+| `b3` / `X-B3-TraceId` / `-ParentSpanId` / `-SpanId` / `-Sampled` | 与 traceparent 同源 | 同上 |
+| `baggage` | `codebuddy.session_id=…,codebuddy.conversation_request_id=…` | 同上 |
+| `Accept-Language` / `Origin` / `Referer`（登录链路） | `zh-CN` / 站点根 / 站点根 + `/` | `workbuddy/login.go` |
+| 请求间隔 | 同账号 ≥ 350ms（`wbPaceGap`） | `workbuddy/identity.go` |
+| `X-Machine-ID` / `X-Session-ID` | **默认不发**（官方对话请求也不带；留开关时默认 false） | — |
+| `X-Device-Token` / `X-Device-Id` | 凭证配置了才发（服务端签发，不可伪造） | `workbuddy/chat.go` |
 | `X-Enterprise-Id` / `X-Tenant-Id` | 凭证有才发 | 同上 |
+| 错误 → 账号冷却 | 11140/11142→30min；14015/401→30min；14001…14018→60min；14003/10105/6005-6008→1440min；quota_request_limit→10min | `workbuddy/cooldown.go` |
 | 提示词指纹清洗 | 表单开关，默认关（替换 system 开场白指纹） | `workbuddy/scrub.go` |
+
 
 ### codebuddy（CN / Intl）
 

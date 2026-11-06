@@ -30,7 +30,25 @@ import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaChip
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * 设置页的统一错误文案。
+ *
+ * `HttpURLConnection` 抛出的 `NetworkOnMainThreadException` / 部分 `IOException`
+ * 的 `message` 是 **null**；早前用 `it.message ?: "读取设置失败"` 会把它吞成一句
+ * 没有信息量的「读取设置失败」，页面看起来像"配置损坏"。这里至少带上异常类型。
+ */
+internal fun settingsErrorText(error: Throwable, fallback: String): String {
+    val message = error.message?.trim()
+    if (!message.isNullOrEmpty()) {
+        return message
+    }
+    val kind = error.javaClass.simpleName.ifBlank { "未知错误" }
+    return "$fallback（$kind）"
+}
 
 /**
  * 设置 → 常规（桌面 `settings.js:130-205`）。
@@ -56,9 +74,11 @@ internal fun SettingsGeneralSection(
             return@LaunchedEffect
         }
         error = null
-        runCatching { client.fetchSettings(status) }
+        // 必须离开主线程：LaunchedEffect 跑在 Main 调度器，`openConnection().responseCode`
+        // 会直接抛 NetworkOnMainThreadException（message 为 null），表现得就像"读取设置失败"。
+        runCatching { withContext(Dispatchers.IO) { client.fetchSettings(status) } }
             .onSuccess { summary = it }
-            .onFailure { error = it.message ?: "读取设置失败" }
+            .onFailure { error = settingsErrorText(it, "读取设置失败") }
     }
 
     DeepCard(modifier = modifier) {
@@ -90,9 +110,9 @@ internal fun SettingsGeneralSection(
                     selected = (current?.uiTheme ?: "").ifBlank { "auto" } == value,
                     enabled = !busy && current != null,
                     onClick = { if (!busy) { busy = true; scope.launch {
-                        try { summary = client.setTheme(status, value); error = null }
+                        try { summary = withContext(Dispatchers.IO) { client.setTheme(status, value) }; error = null }
                         catch (e: ManagementApiException) { error = "${e.message}（错误码：${e.code}）" }
-                        catch (_: Exception) { error = "保存失败，请重试" }
+                        catch (e: Exception) { error = "保存失败：${settingsErrorText(e, "请重试")}" }
                         finally { busy = false }
                     } } },
                     label = { Text(label) },
@@ -137,9 +157,9 @@ internal fun SettingsGeneralSection(
                     selected = current?.monitorMinutes == minutes,
                     enabled = !busy && current != null,
                     onClick = { if (!busy) { busy = true; scope.launch {
-                        try { summary = client.setMonitorMinutes(status, minutes); error = null }
+                        try { summary = withContext(Dispatchers.IO) { client.setMonitorMinutes(status, minutes) }; error = null }
                         catch (e: ManagementApiException) { error = "${e.message}（错误码：${e.code}）" }
-                        catch (_: Exception) { error = "保存失败，请重试" }
+                        catch (e: Exception) { error = "保存失败：${settingsErrorText(e, "请重试")}" }
                         finally { busy = false }
                     } } },
                     label = { Text(label) },
@@ -196,9 +216,9 @@ internal fun SettingsPrivacySection(
             return@LaunchedEffect
         }
         error = null
-        runCatching { client.fetchSettings(status) }
+        runCatching { withContext(Dispatchers.IO) { client.fetchSettings(status) } }
             .onSuccess { summary = it }
-            .onFailure { error = it.message ?: "读取隐私设置失败" }
+            .onFailure { error = settingsErrorText(it, "读取隐私设置失败") }
     }
 
     fun write(block: (GatewayStatus) -> SettingsSummary) {
@@ -208,12 +228,12 @@ internal fun SettingsPrivacySection(
         busy = true
         scope.launch {
             try {
-                summary = block(status)
+                summary = withContext(Dispatchers.IO) { block(status) }
                 error = null
             } catch (e: ManagementApiException) {
                 error = "${e.message}（错误码：${e.code}）"
-            } catch (_: Exception) {
-                error = "保存失败，请重试"
+            } catch (e: Exception) {
+                error = "保存失败：${settingsErrorText(e, "请重试")}"
             } finally {
                 busy = false
             }

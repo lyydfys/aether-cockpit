@@ -15,10 +15,10 @@ import (
 
 // riskPauseDefault 是命中风控后的冷静时长。
 //
-// 取 10 分钟：社区项目的经验值是 30 分钟全区域暂停，但我们只暂停本渠道，
-// 且用户多半会立刻手动重试；10 分钟能打断"连续撞墙"的循环，又不至于让
-// 人以为网关死掉。账号级冷却由网关的 penalize 另行处理。
-const riskPauseDefault = 10 * time.Minute
+// 取 30 分钟：对齐参考实现对 11140/11142 的冷却档位，也给"整区域连坐限流"
+// 留出足够时间。太短（如 10 分钟）会让同一个出口反复撞墙，把"可疑"升级成
+// "确认滥用"；账号级冷却由网关 penalize / cooldown.go 另行处理。
+const riskPauseDefault = 30 * time.Minute
 
 var riskPauses = struct {
 	mu sync.Mutex
@@ -52,13 +52,13 @@ func pausedUntil(id string) time.Time {
 
 // riskBlocked 判断响应体是否属于"风控/异常行为"信号。
 //
-// 11140 是上游的异常行为码；403 在 WorkBuddy 上通常也来自风控而不是鉴权
-// （凭证失效是 401）。两者都按风控处理，宁可少发一会儿也不要连坐。
+// 11140 / 11142 是上游的异常行为码；403 在 WorkBuddy 上通常也来自风控而不是
+// 鉴权（凭证失效是 401）。这些按风控处理，宁可少发一会儿也不要连坐。
 func riskBlocked(status int, raw string) bool {
 	if status == 403 {
 		return true
 	}
-	return containsCode(raw, "11140")
+	return containsCode(raw, "11140") || containsCode(raw, "11142")
 }
 
 // containsCode 判断 JSON 里是否出现给定数字状态码（兼容有无空格两种写法）。

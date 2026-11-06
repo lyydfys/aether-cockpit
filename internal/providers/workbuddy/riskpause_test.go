@@ -15,6 +15,8 @@ func TestRiskBlocked(t *testing.T) {
 		{403, `{"code":403,"message":"forbidden"}`, true},
 		{400, `{"code":11140,"message":"abnormal behavior"}`, true},
 		{400, `{"code": 11140, "message":"abnormal"}`, true},
+		{400, `{"code":11142,"message":"abnormal behavior"}`, true},
+		{400, `{"code": 11142, "message":"abnormal"}`, true},
 		{400, `{"code":11128,"message":"channel check"}`, false}, // 通道校验，不是风控
 		{401, `{"code":401}`, false},                             // 鉴权失效
 		{200, `{"ok":true}`, false},

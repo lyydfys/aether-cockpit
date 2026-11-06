@@ -41,6 +41,10 @@ type Manager struct {
 	stickySavedNs atomic.Int64
 	// persist 账号持久化。
 	persist persistence
+	// promoteMu 串行化 PromoteUnloaded：它要"读 preserved → Add → 写回 preserved"，
+	// 两步之间必须独占，否则两个渠道同时注册时可能把同一条记录既留在 preserved
+	// 又加进池（Add 按 ID 去重不会重复入池，但"未就绪"计数会虚高）。
+	promoteMu sync.Mutex
 }
 
 type stickyBind struct {
