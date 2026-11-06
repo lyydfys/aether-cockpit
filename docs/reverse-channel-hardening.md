@@ -109,6 +109,24 @@
 `metadata.user_id` 必须是 JSON 字符串、请求 ID 每请求唯一，并在 OAuth 流式用例里
 断言 `X-Claude-Code-Session-Id` / `x-client-request-id` / `metadata.user_id` 真实出现在请求上。
 
+## 第八轮：workbuddy 提示词指纹清洗（默认关闭）
+
+场景：把 Claude Code / OpenCode 这类 agent 客户端指到 WorkBuddy 后端时，客户端会在
+system 里写死 `You are Claude Code, Anthropic's official CLI for Claude.` 这类开场白——
+对上游来说等于自报"我不是官方客户端"。
+
+用法：在账号凭证里加 `sanitize_claude_prompt=1`（也可用 `true/yes/on`）。
+
+行为：
+
+- 只清洗**第一条 system 消息**；
+- 只替换已知开场白指纹（Claude Code / OpenCode 三种写法），替换为中性描述；
+- 不动用户正文、不动代码、不动 `<env>` 等环境块；
+- 默认关闭，未开启时行为与之前完全一致。
+
+测试：4 个单元用例（命中/未命中/仅 system/开关解析）+ 1 个端到端用例
+（开启后上游收到的 system 不再含 "Claude Code"/"Anthropic"）。
+
 ## 下一步
 
 - workbuddy：可选的"提示词指纹清洗"（仅当把 Claude Code 指向 WorkBuddy 后端时启用）。

@@ -54,7 +54,14 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 			WithProvider(p.profile.id)
 	}
 
-	body, err := json.Marshal(buildPayload(req, model, p.profile.intl))
+	payload := buildPayload(req, model, p.profile.intl)
+	// 提示词指纹清洗：仅在账号显式开启时生效（见 scrub.go）。
+	// 把 Claude Code / OpenCode 的开场白指纹换成中性描述——对 WorkBuddy 上游来说，
+	// 系统提示里写着别家客户端名字，等于自报"我不是官方客户端"。
+	if scrubEnabled(env.GetCredential) {
+		_ = scrubClaudeFingerprint(payload)
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeInternal, "WorkBuddy 请求序列化失败").WithCause(err)
 	}
