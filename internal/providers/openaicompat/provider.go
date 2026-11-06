@@ -63,6 +63,11 @@ type Config struct {
 	// AllowAnthropicUpstream 表示该厂商除 Chat Completions 外还有
 	// Anthropic Messages 端点；账号可选 api_protocol=anthropic。
 	AllowAnthropicUpstream bool
+	// AnthropicBaseURL 是该厂商 Anthropic 端点的推荐地址（如
+	// https://api.deepseek.com/anthropic）。只用于表单提示与报错文案：
+	// 选 anthropic 协议时仍需在账号 Base URL 里显式填写，避免把 Messages
+	// 请求误拼到 /v1/chat/completions 上。
+	AnthropicBaseURL string
 	// AllowResponsesUpstream 表示该厂商除 Chat Completions 外还有
 	// OpenAI Responses 端点；账号可选 api_protocol=responses。
 	AllowResponsesUpstream bool
@@ -129,9 +134,12 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 		protocols = append(protocols, "responses")
 	}
 	if len(protocols) > 1 {
+		help := "chat = /chat/completions；anthropic = /v1/messages；responses = /responses；选后两者时 Base URL 要填对应端点"
+		if cfg.AnthropicBaseURL != "" {
+			help = "chat = /chat/completions；anthropic = /v1/messages（Base URL 填 " + cfg.AnthropicBaseURL + "）；选 responses 时同理填对应端点"
+		}
 		authSchema = append(authSchema,
-			provider.FormFieldSchema{Key: "api_protocol", Label: "上游协议", Type: "select", Options: protocols,
-				Help: "chat = /chat/completions；anthropic = /v1/messages；responses = /responses；选后两者时 Base URL 要填对应端点"},
+			provider.FormFieldSchema{Key: "api_protocol", Label: "上游协议", Type: "select", Options: protocols, Help: help},
 		)
 	}
 	if cfg.AllowAnthropicUpstream {
@@ -211,8 +219,12 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	// 必须显式填该厂商的 Anthropic 端点，避免误拼到 Chat 端点。
 	if p.cfg.AllowAnthropicUpstream && protocol == "anthropic" {
 		if accountBase == "" {
+			hint := "（通常以 /anthropic 结尾）"
+			if p.cfg.AnthropicBaseURL != "" {
+				hint = "：" + p.cfg.AnthropicBaseURL
+			}
 			return nil, ir.NewAPIError(ir.ErrCodeBadRequest,
-				"api_protocol=anthropic 时请在账号 Base URL 填写该厂商的 Anthropic 端点（通常以 /anthropic 结尾）").
+				"api_protocol=anthropic 时请在账号 Base URL 填写该厂商的 Anthropic 端点"+hint).
 				WithProvider(p.cfg.ID)
 		}
 		req2 := *req

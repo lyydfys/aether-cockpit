@@ -66,6 +66,12 @@ func init() {
 		if v.ID == "commandcode" {
 			cfg.AllowAnthropicUpstream = true
 		}
+		// DeepSeek 官方除 OpenAI 兼容端点外，还提供 Anthropic Messages 端点
+		// （/anthropic/v1/messages），Claude Code 这类客户端可以直接挂上来。
+		if v.ID == "deepseek" {
+			cfg.AllowAnthropicUpstream = true
+			cfg.AnthropicBaseURL = "https://api.deepseek.com/anthropic"
+		}
 		// xAI Grok CLI 走公开 OAuth 设备码；其余 vendor 仍是 API Key。
 		if v.ID == "xai" {
 			// xAI 同时提供 Responses API（与 OpenAI 同形），

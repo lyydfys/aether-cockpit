@@ -25,7 +25,7 @@ type Vendor struct {
 	// 卡片上就会出现一条吓人的红色报错。声明成 NoQuota 后，卡片改为
 	// 提示"去控制台查看"，并在有控制台地址时给出跳转。
 	NoQuota bool
-	Models    []ir.ModelMeta
+	Models  []ir.ModelMeta
 	// Regions 是同一厂商的多个套餐/区域端点（aether KeyPlans）：编辑器
 	// 用区域选择器切换，保存时把选中的 Base URL 写进账号。
 	Regions     []Region
@@ -68,23 +68,30 @@ var vendors = []Vendor{
 	},
 	{
 		ID: "deepseek", DisplayName: "DeepSeek", Family: "deepseek", RegionTag: "CN", BrandColor: "#4D6BFE",
-		Description: "DeepSeek 开放平台（OpenAI 兼容）。",
+		// 官方开放平台：同时提供 OpenAI 兼容（/v1）与 Anthropic Messages（/anthropic）两套端点，
+		// 后者可直接承接 Claude Code 这类只讲 Messages 协议的客户端。
+		Description: "DeepSeek 开放平台（OpenAI /chat/completions 与 Anthropic /v1/messages 双协议）。",
 		BaseURL:     "https://api.deepseek.com/v1", QuotaKind: "deepseek",
 		Kind: "vendor", Icon: "deepseek-color",
 		Website: "https://platform.deepseek.com", KeysURL: "https://platform.deepseek.com/api_keys",
+		// 模型清单按官方 /v1/models 实时返回校准（2026-11-06）：
+		//   deepseek-flash（DeepSeek-V4.1-Flash）：1M 上下文，支持图片输入与 effort 档位；
+		//   deepseek-v4-pro（DeepSeek-V4-Pro）：1M 上下文，纯文本，支持 effort 档位。
+		// 旧的 deepseek-chat / deepseek-reasoner 已不在官方模型列表里，不再登记，
+		// 避免界面展示一个上游已经不认的模型名。
 		Models: []ir.ModelMeta{
-			{ID: "deepseek/deepseek-chat", UpstreamModel: "deepseek-chat", DisplayName: "DeepSeek Chat", ContextWindow: 128000,
-				Capabilities: ir.ModelCapabilities{ToolCall: true, Streaming: true}},
-			{ID: "deepseek/deepseek-reasoner", UpstreamModel: "deepseek-reasoner", DisplayName: "DeepSeek Reasoner", ContextWindow: 128000,
+			{ID: "deepseek/deepseek-flash", UpstreamModel: "deepseek-flash", DisplayName: "DeepSeek V4.1 Flash", ContextWindow: 1048576,
+				Capabilities: ir.ModelCapabilities{ToolCall: true, Vision: true, Reasoning: true, Streaming: true}},
+			{ID: "deepseek/deepseek-v4-pro", UpstreamModel: "deepseek-v4-pro", DisplayName: "DeepSeek V4 Pro", ContextWindow: 1048576,
 				Capabilities: ir.ModelCapabilities{ToolCall: true, Reasoning: true, Streaming: true}},
 		},
 	},
 	{
 		ID: "open-design", DisplayName: "Open Design", Family: "opendesign", RegionTag: "CN", BrandColor: "#6D5EF8",
-		Icon:        "open-design",
+		Icon: "open-design",
 		// 额度（Design Plan 5 小时 / 7 天窗口）只在厂商控制台里，
 		// 模型网关没有任何可读的额度接口，用 API Key 也读不到。
-		NoQuota: true,
+		NoQuota:     true,
 		Description: "Open Design 聚合中转（OpenAI 兼容）：一个 Key 覆盖 Claude / GPT / DeepSeek / GLM / Kimi / MiMo / MiniMax 多家模型。",
 		BaseURL:     "https://amr-link.open-design.ai/v1",
 		Kind:        "relay",
