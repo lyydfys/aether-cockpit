@@ -40,5 +40,11 @@ func (g *Gateway) setProviderInsecureTLS(providerID string, insecure bool) error
 
 // clientFor 按渠道的 TLS 开关铸造账号客户端。
 func (g *Gateway) clientFor(env *provider.AccountEnv, policy provider.NetworkPolicy) (*http.Client, error) {
-	return g.tr.NewClientOpts(policy, env.Proxy(), env.TLSProfile, g.providerInsecureTLS(env.ProviderID))
+	// 账号没显式指定指纹时用渠道默认值（见 fingerprint_defaults.go）：
+	// 反代渠道的真实客户端大多是 Chromium，Go 的握手特征过于显眼。
+	tlsProfile := env.TLSProfile
+	if tlsProfile == "" {
+		tlsProfile = defaultTLSProfile(env.ProviderID)
+	}
+	return g.tr.NewClientOpts(policy, env.Proxy(), tlsProfile, g.providerInsecureTLS(env.ProviderID))
 }
