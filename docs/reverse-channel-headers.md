@@ -1,0 +1,141 @@
+# 反代渠道：关键请求头基线表
+
+用于回归对照。**改动任何一列之前先看这里**：真实客户端不可能按接口换 UA、换平台、
+换设备标识；不一致就是最好的识别特征。
+
+- 生成时间：2026-11-06
+- 依据：代码审计（`internal/providers/*`）+ 公开逆向资料 + 抓包结论
+- 版本号会随客户端升级过期，升级时**成组更新**（UA / Editor-Version / Plugin-Version 互相印证）
+
+## 逐渠道基线
+
+### workbuddy（CN / Intl）
+
+| 头 | 取值 | 代码 |
+|---|---|---|
+| `User-Agent` | `WorkBuddy/5.5.6` | `workbuddy/chat.go` |
+| `X-IDE-Type` / `X-IDE-Name` | `WorkBuddy` | 同上 |
+| `X-IDE-Version` | `5.8.3` | 同上 |
+| `X-Agent-Purpose` / `X-Agent-Intent` | `conversation` / `craft` | 同上 |
+| `X-Conversation-ID` / `-Request-ID` / `-Message-ID` | 会话/请求/消息三级，稳定派生 | 同上 |
+| `X-Request-ID` | 每请求随机 UUID | 同上 |
+| `X-Device-Token` / `X-Device-Id` | 凭证配置了才发（服务端签发，不可伪造） | 同上 |
+| `X-Enterprise-Id` / `X-Tenant-Id` | 凭证有才发 | 同上 |
+| 提示词指纹清洗 | 表单开关，默认关（替换 system 开场白指纹） | `workbuddy/scrub.go` |
+
+### codebuddy（CN / Intl）
+
+| 头 | 取值 |
+|---|---|
+| `User-Agent` | `CLI/<cliVer> CodeBuddy/<cliVer>`（CN 2.107.0 / Intl 2.137.1） |
+| `X-IDE-Type` / `X-IDE-Name` | `CLI` |
+| `X-IDE-Version` | 同上 |
+| `X-Client-Platform` | `web` |
+| `X-Agent-Intent` | `craft` |
+| `X-Conversation-ID` / `-Request-ID` / `-Message-ID` | 三级（会话 ID 稳定、请求/消息每轮派生） |
+| `x-stainless-*` | `lang=js`、`runtime=node`、`runtime-version=v24.11.1`、`package-version=<sdk>` |
+| `X-Product` | `SaaS`（Intl 另有 `X-Product-Version`） |
+
+### qoder
+
+| 头 | 取值 |
+|---|---|
+| `User-Agent` | `qoder/<cosyVer>`（当前 1.1.77，对话/签到/额度统一） |
+| `Cosy-MachineId` | 凭证 `machine_id` |
+| `Cosy-MachineToken` | `machine_token` 优先，缺省退回 `machine_id`（三接口统一） |
+| `Cosy-MachineType` / `Cosy-MachineOS` | `5` / `x86_64_<os>`（按平台） |
+| `Cosy-ClientType` / `Cosy-Scene` / `Cosy-Version` | `10` / `app` / `<cosyVer>` |
+
+### trae（CN / SOLO / SG / US）
+
+| 头 | 取值 |
+|---|---|
+| `User-Agent` | `Trae/<ideVersion>`（必须是 Trae 前缀，否则流内 4011） |
+| `Authorization` | `Cloud-IDE-JWT <token>` |
+| `X-Cloudide-Token` | 同 token |
+| `x-device-id` / `x-machine-id` | 凭证优先；缺省用网关按账号派生的稳定指纹（**不空**） |
+| `x-device-type` / `x-os-version` | 按运行平台（Windows 保持抓包值） |
+| `x-app-id` / `x-app-version` / `x-ide-version*` | 版本常量 |
+
+### claude（订阅流）
+
+| 头 / 字段 | 取值 |
+|---|---|
+| `User-Agent` | `claude-cli/<ver>`（不得低于上游版本地板） |
+| `X-App` | `cli` |
+| `X-Stainless-*` | 官方 CLI 抓包常量（lang js / linux arm64 / node v24.3.0 / timeout 600） |
+| `anthropic-beta` | 默认对齐 CLI（含 `oauth-2025-04-20`），凭证可覆盖 |
+| `X-Claude-Code-Session-Id` | 会话 UUID（按 账号+机器+会话 派生，跨轮稳定） |
+| `x-client-request-id` | 每请求随机 UUID |
+| `metadata.user_id` | **JSON 字符串**：`device_id`(64hex) / `account_uuid` / `session_id` |
+| system 首块 | `x-anthropic-billing-header: cc_version=<ver>.<3位指纹>`，指纹与首条 user 文本+版本绑定 |
+
+API Key 模式不注入上述订阅专属字段（官方 API 不需要，多塞反而像伪造）。
+
+### kiro
+
+| 头 | 取值 |
+|---|---|
+| `User-Agent` / `x-amz-user-agent` | `aws-sdk-rust/1.0.0 ua/2.1 ... app/AmazonQ-For-CLI ...`（对话与额度共用同一函数） |
+| `tokentype` | `API_KEY` |
+| `x-amzn-kiro-agent-mode` | `vibe` |
+| `amz-sdk-invocation-id` | 每请求随机 UUID（SDK 语义） |
+| `amz-sdk-request` | `attempt=1; max=3` |
+| 会话状态 | 请求体 `conversationId` + `conversationState` |
+
+### devin
+
+| 头 | 取值 |
+|---|---|
+| `User-Agent` | **不发**（原生 devin-cli 抓包结论；实现里显式抑制 Go 默认值） |
+| `Authorization` | `Basic <token>-<token>`（token 自带 `devin-session-token$` 前缀） |
+| `Connect-Protocol-Version` | `1` |
+| `Content-Type` | `application/connect+proto` |
+| `Sentry-Trace` | `<32hex>-<16hex>-1` |
+| 会话 | 由 `account + 首条用户消息` 派生稳定会话 UUID（跨轮稳定） |
+
+### githubcopilot
+
+| 头 | 取值 |
+|---|---|
+| `User-Agent` | `GitHubCopilotChat/0.35.0` |
+| `Editor-Version` | `vscode/1.107.0` |
+| `Editor-Plugin-Version` | `copilot-chat/0.35.0` |
+| `Copilot-Integration-Id` | `vscode-chat` |
+| `X-Initiator` | 动态：用户发起 `user`；工具/助手续轮 `agent` |
+| `Copilot-Vision-Request` | 带图请求才发 `true` |
+
+### antigravity
+
+| 头 | 取值 |
+|---|---|
+| `User-Agent` | `antigravity/hub/2.24.0 (aidev_client; os_type=<host>; arch=<host>; cl=1000335682)` |
+
+### zcode（CN / Intl）
+
+| 头 | 取值 |
+|---|---|
+| `User-Agent` | `ZCode/3.10.2`（对话与额度统一） |
+
+### minimax
+
+| 接口 | UA |
+|---|---|
+| 对话 | `MiniMaxAgent` |
+| 签到 | `MiniMaxCode` |
+
+两者分属不同上游产品/endpoint，属**有意差异**（已在硬锁 `uaMultiAllowed` 登记）。
+
+## 不转发对话的渠道
+
+`cursor` / `zed` / `windsurf` / `antigravityide` 只做登录态读取、额度查询、一键切号，
+不产生对话流量，因此不在"对话防封"范围内。
+
+## 跨渠道硬锁（改动时必须一起看）
+
+| 测试 | 约束 |
+|---|---|
+| `TestNoBrandInUpstreamUserAgent` | UA 不得含本产品品牌 |
+| `TestNoEmptyCredentialHeader` | 不得写出"可能为空值"的头 |
+| `TestSingleUserAgentPerChannel` | 同渠道只允许一种 UA（例外需登记） |
+| `TestChatChannelSetsUserAgent` | 有 ChatStream 就必须设 UA（例外需登记） |

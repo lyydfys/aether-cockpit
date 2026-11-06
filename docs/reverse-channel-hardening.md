@@ -127,6 +127,14 @@ system 里写死 `You are Claude Code, Anthropic's official CLI for Claude.` 这
 测试：4 个单元用例（命中/未命中/仅 system/开关解析）+ 1 个端到端用例
 （开启后上游收到的 system 不再含 "Claude Code"/"Anthropic"）。
 
+## 第九轮：基线表与 devin 复核
+
+1. 新增 [反代渠道关键头基线表](reverse-channel-headers.md)：逐渠道列出 UA、身份头、会话标识、
+   平台字段的真实取值与出处，作为回归对照。
+2. **devin 复核结论**：会话并非缺失——`conversation_id` 由「账号 + 首条用户消息」派生
+   （`devinConversationSeed`），跨轮稳定；此前审计表里的"无会话 ID"是误判。
+3. 修正审计表：devin 会话 = ✅。
+
 ## 下一步
 
 - workbuddy：可选的"提示词指纹清洗"（仅当把 Claude Code 指向 WorkBuddy 后端时启用）。
