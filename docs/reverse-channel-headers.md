@@ -126,6 +126,15 @@ API Key 模式不注入上述订阅专属字段（官方 API 不需要，多塞�
 
 两者分属不同上游产品/endpoint，属**有意差异**（已在硬锁 `uaMultiAllowed` 登记）。
 
+## 已知局限（明确的"暂时不做"）
+
+| 项 | 现状 | 原因 |
+|---|---|---|
+| HTTP 头顺序 | Go 按字母序发送 | 真实 Node/Chromium 客户端按插入序发送；要匹配需自写 transport，收益与风险不成比例 |
+| HTTP/2 SETTINGS 指纹 | 未定制 | 同上；uTLS 已覆盖 TLS ClientHello 层 |
+| `zed` 额度接口 UA | 未设置（Go 默认） | 无公开证据表明 Zed 客户端的 UA 形态；该渠道只读、不转发对话，故不臆造 |
+| 官方 API 渠道 TLS | 保持 Go 默认 | 官方 SDK 用的是各自运行时，套浏览器指纹反而更异常 |
+
 ## 不转发对话的渠道
 
 `cursor` / `zed` / `windsurf` / `antigravityide` 只做登录态读取、额度查询、一键切号，

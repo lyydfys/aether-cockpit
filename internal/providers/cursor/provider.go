@@ -186,7 +186,7 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Cookie", sessionCookie(token))
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	req.Header.Set("User-Agent", cursorUserAgent())
 	resp, err := env.Client().Do(req)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "读取 Cursor 用量失败: "+err.Error()).
