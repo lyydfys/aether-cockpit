@@ -222,7 +222,67 @@ export default {
           line('允许的 IP', '非本机请求只能来自这些 IP / CIDR；留空不限', listControl(s, 'allow_ips', '192.168.1.0/24, 10.0.0.5')),
         ]),
         channelNetSection(),
+        workbuddyIdentitySection(),
       ];
+    }
+
+    // workbuddyIdentitySection 暴露 WorkBuddy 渠道的「出网身份」档位。
+    //
+    // 这是渠道级能力（UA / CLI 段 / Stainless 头 / 请求间隔整组切换），手机端早就有；
+    // 桌面端此前只能手改 settings.json 或环境变量。保存只落盘，**重启应用后生效**，
+    // 所以这里必须同时显示「运行中真实在用的档位」，否则用户会以为切换没成功。
+    function workbuddyIdentitySection() {
+      const TITLES = {
+        cli: '官方 CLI（双段 UA + Stainless）',
+        desktop: '桌面端（单段 UA）',
+        quiet: '桌面端 · 安静（请求间隔 900ms）',
+        browser: '浏览器 UA',
+      };
+      const body = h('div', { style: 'display:flex;flex-direction:column;gap:8px' });
+      const box = section('WorkBuddy 出网身份', [
+        h('div', { class: 'meta', style: 'line-height:1.6' },
+          '同一时刻只用一档：UA、CLI 段、Stainless 头、请求间隔整组切换，不会出现「UA 说桌面、头却发 CLI」的跨档组合。'),
+        body,
+      ]);
+      const render = (st) => {
+        clear(body);
+        if (!st) {
+          body.append(h('div', { class: 'meta' }, '当前网关不支持该能力（或读取失败）。'));
+          return;
+        }
+        const saved = st.saved || st.identity;
+        const available = st.available && st.available.length ? st.available : [st.identity];
+        const ctl = select(available.map((k) => ({ value: k, label: TITLES[k] || k })), saved, async (val) => {
+          await save({ workbuddy_identity: val }, 'WorkBuddy 出网身份');
+          await refresh();
+        });
+        body.append(line('身份档位', '保存后需重启应用才会生效', ctl));
+        body.append(line('运行中 UA', '当前进程实际发出的 User-Agent',
+          h('span', { class: 'mono meta', style: 'word-break:break-all' }, st.ua || '—')));
+        if (st.stainless) {
+          body.append(line('Stainless', '仅 CLI 档发送这一族头',
+            h('span', { class: 'mono meta' }, 'v' + (st.stainless_version || '?') + ' · ' + (st.cli_version || '?'))));
+        }
+        body.append(line('同账号请求间隔', '防止并发突刺被判定为脚本',
+          h('span', { class: 'mono meta' }, (st.pace_ms || 0) + 'ms')));
+        if (st.saved && st.identity && st.saved !== st.identity) {
+          body.append(h('div', { class: 'meta', style: 'line-height:1.6;color:var(--amber, #b45309)' },
+            '已保存 ' + (TITLES[st.saved] || st.saved) + '，当前运行仍是 ' +
+            (TITLES[st.identity] || st.identity) + '。重启应用后生效。'));
+        }
+      };
+
+      const refresh = async () => {
+        try {
+          const st = await api.get('providers/workbuddy/identity');
+          state.wbIdentity = st;
+          render(st);
+        } catch {
+          render(state.wbIdentity || null);
+        }
+      };
+      refresh();
+      return box;
     }
 
     // channelNetSection 是「慢链路优化」的**全局总览**。

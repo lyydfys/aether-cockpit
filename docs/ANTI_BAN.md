@@ -149,9 +149,70 @@ OpenAI / Anthropic 兼容接口」）。**只做只读静态分析，未复制�
 | 链路 | `traceparent` | `00-<32hex>-<16hex>-01` | 未发 |
 | 链路 | `b3` / `X-B3-TraceId` / `-ParentSpanId` / `-SpanId` / `-Sampled` | 与 trace 同源 | 未发 |
 | 链路 | `baggage` | `codebuddy.session_id=…,codebuddy.conversation_request_id=…` | 未发 |
-| CLI 形态 | `X-Stainless-Lang/Package-Version/OS/Arch/Runtime/Runtime-Version/Retry-Count` | `js / 6.25.0 / Windows / x64 / node / v22.14.0 / 0` | 未发（我们声明桌面形态） |
+| CLI 形态 | `X-Stainless-Lang/Package-Version/OS/Arch/Runtime/Runtime-Version/Retry-Count` | `js / 6.25.0 / Windows / x64 / node / v22.14.0 / 0` | 未发 → 现 CLI 档发（与双段 UA 成套） |
 | 登录链路 | `Accept-Language` / `Origin` / `Referer` / `User-Agent` / `X-Requested-With` | `zh-CN` / 站点根 | 未发 |
 | 设备标识 | `X-Machine-ID` / `X-Session-ID` | **默认关闭**（"官方对话请求不带"） | 不发（正确） |
+
+**出网身份档位（REA 复刻，2026-11-06）**
+
+用 REA（jadx-headless）逐方法比对后，参考实现的身份模型已完全确认：
+
+- `Fingerprint.ua()` 三形态：`uaMode="client"` → `WorkBuddy/5.9.3`；
+  `uaMode="browser"` → `Identity.BROWSER_UA = Mozilla/5.0 (Windows NT 10.0; Win64; x64)
+  AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36`；
+  其余（默认）→ 双段 `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`。
+- `Fingerprint.getStainless()`：**uaMode=="cli"**，所以双段 UA 与 Stainless 族天然成套。
+- `Fingerprints.of(region)` 默认返回 `Fingerprint.OFFICIAL`，而 OFFICIAL 全部走构造默认值
+  （uaMode=`cli`、paceMs=350）→ **参考实现默认就是双段 UA + Stainless**。
+- 三档：OFFICIAL（双段/350ms）、DESKTOP（uaMode=client/350ms）、QUIET（uaMode=client/900ms）。
+  我们另加 `browser` 档覆盖第三种 UA 形态。
+
+| 维度 | `cli`（默认，= OFFICIAL） | `desktop`（= DESKTOP） | `quiet`（= QUIET） | `browser` |
+|---|---|---|---|---|
+| UA | 双段 | `WorkBuddy/5.9.3` | `WorkBuddy/5.9.3` | Chrome 125 UA |
+| IDE 版本 | 5.9.3 | 5.9.3 | 5.9.3 | 5.9.3 |
+| CLI 版本 | 2.165.0（进 UA） | 2.165.0（仅字段） | 2.165.0（仅字段） | 2.165.0（仅字段） |
+| Stainless 族 | 发（Retry-Count 恒 0） | 不发 | 不发 | 不发 |
+| 运行时声明 | node / v22.14.0 / Windows / x64 | — | — | — |
+| 请求间隔 | 350ms | 350ms | 900ms | 350ms |
+| 设备标识 | 默认不附加 | 默认不附加 | 默认不附加 | 默认不附加 |
+
+**对话头逐项（REA 方法体）**：
+
+- `Upstream.chatHeaders` = 基础头（UA=cliUa、插件头、设备令牌、企业头）
+  + `Identity.conversationHeaders` + `Identity.stainlessHeaders`
+  + `Identity.channelVerifyHeaders`，最后过滤空值。
+- `conversationHeaders(conv,msg)`：`X-Conversation-ID=conv`、
+  `X-Conversation-Message-ID=msg`、**`X-Request-ID=msg`**、`X-Agent-Intent=craft`、
+  `X-Agent-Purpose=conversation`。
+- `channelVerifyHeaders(conv,msg,reqId)`：`X-Private-Data=true`、
+  **小写 `x-codebuddy-request=1`**（与插件头的大写键并存）、
+  `X-Conversation-Request-ID=reqId`、`traceparent=00-<32hex>-<16hex>-01`、
+  **`b3=<trace>-<span>-1-<parent>`**、`X-B3-TraceId/ParentSpanId/SpanId/Sampled=1`、
+  `baggage=codebuddy.session_id=<conv>,codebuddy.conversation_request_id=<reqId>`。
+  trace/span/parent 由 `Identity.hex(32/16/16)` 现取随机值。
+- 会话 ID：`Accounts.conversationId` 按 (account.key + sessionSalt) 缓存 uuidV4；
+  message/request ID：`Identity.uuidV7()` = 12 位毫秒时间 + 20 位随机 hex（32 位无连字符）。
+- `billingHeaders`（计费/积分）：UA **恒单段** `WorkBuddy/5.9.3`（不使用 uaMode），
+  带 `Accept-Language`（CN zh-CN / Intl en-US）、`Origin`/`Referer`（区域 origin）、
+  `X-CodeBuddy-Request`、企业头、设备令牌。
+- `LoginApi.noAuth`：UA=cliUa(region)（按档位）、Accept-Language、Origin/Referer、
+  `X-No-*`、`X-Domain=region.defaultDomain`（CN `www.codebuddy.cn` / Intl `www.workbuddy.ai`）。
+- `machineHeaders`：`deviceHeaders=false` → 空；开启时
+  `X-Machine-ID = sha256(machineSeed+":machine:"+uid)` 前 8 位 hex，
+  `X-Session-ID` = 同 hash 拼 `xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx`。
+- 参考实现**不发送** `X-Agent-Type` / `X-Device-Id`（dex 检索：X-Agent-Type 只出现在
+  `importHeaders` 的识别表中）。
+
+配置入口：桌面端「设置 → 网络与共享 → WorkBuddy 出网身份」，手机端设置页同一项；
+底层写 `settings.json` 的 `workbuddy_identity`（`cli|desktop|quiet|browser`，默认
+`cli`），也可用环境变量 `AETHER_WORKBUDDY_IDENTITY`；网关加载设置时注入
+（`internal/core/gateway/settings.go` 的 `applyWorkBuddyIdentity`）。保存只落盘，
+**重启网关/应用后生效**——两端界面都要同时显示「运行中真实档位」并提示重启，
+否则用户会以为切换失败（运行中档位由 `GET /api/providers/workbuddy/identity` 提供）。
+实现集中在 `internal/providers/workbuddy/identity.go` 的 `IdentityProfile`：UA、版本、
+Stainless、运行时、间隔全部由同一个 profile 派生，禁止跨档组合。
+
 
 **官方身份默认值**（`Fingerprint` 构造默认参数）：clientVersion `5.9.3`、
 cliVersion `2.165.0`、stainless `6.25.0`、`os=Windows`、`arch=x64`、
@@ -191,9 +252,9 @@ cliVersion `2.165.0`、stainless `6.25.0`、`os=Windows`、`arch=x64`、
 | UA 一致性硬锁 | `internal/providers/ua_consistency_test.go`、`uahygiene_test.go` | 同渠道只允许一种 UA；有 ChatStream 必须设 UA；禁止把本产品品牌写进上游 UA |
 | Claude 订阅身份 | `internal/providers/claude/chat.go`、`mimicry.go`、`identity.go` | 订阅模式才注入 CLI 头、billing attribution、`X-Claude-Code-Session-Id`、`x-client-request-id`、`metadata.user_id` 三元组；API Key 模式不伪装 |
 | WorkBuddy 会话三级 ID | `internal/providers/workbuddy/chat.go` | `X-Conversation-ID` / `-Request-ID` / `-Message-ID`，请求 ID 对同一次逻辑发送稳定 |
-| WorkBuddy 身份头族（2026-11-06 新增） | `internal/providers/workbuddy/identity.go` | UA 与 `X-IDE-Version` 同源（`clientVersion=5.9.3`）；补齐 `X-Product/X-IDE-Type/X-IDE-Name`、`X-Private-Data=true`、`X-CodeBuddy-Request=1`、`X-Requested-With=XMLHttpRequest`；`X-Machine-ID/X-Session-ID` 默认不发 |
+| WorkBuddy 身份档位（REA 复刻，2026-11-06） | `internal/providers/workbuddy/identity.go` | `IdentityProfile` 四档 `cli/desktop/quiet/browser`（默认 `cli` = 参考 OFFICIAL 双段 UA）；UA/IDE 版本/CLI 段/Stainless/运行时/间隔由**同一 profile** 派生；配置 `workbuddy_identity` / `AETHER_WORKBUDDY_IDENTITY`；`X-Machine-ID/X-Session-ID` 默认关（有精确算法，可显式开启） |
 | WorkBuddy 链路头（新增） | `internal/providers/workbuddy/identity.go` | `traceparent` / `b3` / `X-B3-*` / `baggage` 全部由本会话 conversation/request id 派生（W3C 格式），不复制外部值 |
-| WorkBuddy 请求节流（新增） | `internal/providers/workbuddy/identity.go` | 同账号两次上游请求最小间隔 350ms（`wbPaceGap`），打断机器式连发 |
+| WorkBuddy 请求节流（新增） | `internal/providers/workbuddy/identity.go` | 同账号两次上游请求最小间隔由档位决定（cli/desktop 350ms、quiet 900ms），打断机器式连发 |
 | WorkBuddy 错误 → 账号冷却（新增） | `internal/providers/workbuddy/cooldown.go` | 表驱动：11140/11142→30min、14015/401→30min、14001…14018→60min、14003/10105/6005-6008→24h、quota_request_limit→10min；冷却只作用于当前账号，网关鉴权错误带 RetryAfter 时也改为冷却而非永久 invalid |
 | 其他渠道身份头 | `internal/providers/*` | CodeBuddy CLI 全套、Qoder `Cosy-*`、Trae `Trae/<ver>` + 设备头、Kiro AWS SDK、Devin Connect-RPC（刻意不发 UA）、Copilot 扩展头等 |
 | 提示词指纹清洗（WorkBuddy，可选） | `internal/providers/workbuddy/scrub.go` | 默认关闭；只清洗第一条 system 的已知开场白指纹 |
