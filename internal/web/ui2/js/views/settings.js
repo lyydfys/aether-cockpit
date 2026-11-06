@@ -259,10 +259,13 @@ export default {
         body.append(line('身份档位', '保存后需重启应用才会生效', ctl));
         body.append(line('运行中 UA', '当前进程实际发出的 User-Agent',
           h('span', { class: 'mono meta', style: 'word-break:break-all' }, st.ua || '—')));
-        if (st.stainless) {
-          body.append(line('Stainless', '仅 CLI 档发送这一族头',
-            h('span', { class: 'mono meta' }, 'v' + (st.stainless_version || '?') + ' · ' + (st.cli_version || '?'))));
-        }
+        body.append(line('Stainless', '仅 CLI 档发送这一族头',
+          h('span', { class: 'mono meta' },
+            st.stainless
+              ? 'v' + (st.stainless_version || '?') + ' · ' + (st.cli_version || '?')
+              : '不发（仅 CLI 档）')));
+        body.append(line('设备标识头', 'X-Machine-ID / X-Session-ID 默认不发；可按账号 device_headers 开启',
+          h('span', { class: 'mono meta' }, st.machine_headers ? '发送' : '不发')));
         body.append(line('同账号请求间隔', '防止并发突刺被判定为脚本',
           h('span', { class: 'mono meta' }, (st.pace_ms || 0) + 'ms')));
         if (st.saved && st.identity && st.saved !== st.identity) {
