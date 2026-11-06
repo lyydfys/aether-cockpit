@@ -56,7 +56,7 @@ func (p *Provider) ListModels(ctx context.Context, env *provider.AccountEnv) ([]
 		return nil, err.WithProvider(p.profile.ID)
 	}
 	if sp != nil && sp.ClientVersion != "" {
-		req.Header.Set("User-Agent", "aether-cockpit/"+sp.ClientVersion)
+		req.Header.Set("User-Agent", "openai-node/"+sp.ClientVersion)
 	}
 	if len(p.profile.Headers) > 0 {
 		applyHeaders(req, env, p.profile.Headers)

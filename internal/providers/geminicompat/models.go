@@ -60,7 +60,7 @@ func (p *Provider) ListModels(ctx context.Context, env *provider.AccountEnv) ([]
 		}
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("x-goog-api-key", key)
-		req.Header.Set("User-Agent", "aether-cockpit/gemini-compat")
+		req.Header.Set("User-Agent", "google-genai/1.0.0")
 		resp, err := env.Client().Do(req)
 		if err != nil {
 			return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "模型列表连接失败").

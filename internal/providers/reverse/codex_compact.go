@@ -48,7 +48,7 @@ func (p *Provider) CompactResponses(ctx context.Context, env *provider.AccountEn
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("originator", "codex_cli_rs")
-	req.Header.Set("User-Agent", "codex_cli_rs/0.16.0 (Aether Cockpit)")
+	req.Header.Set("User-Agent", codexUserAgent())
 	if acct := strings.TrimSpace(env.GetCredential("account_id")); acct != "" {
 		req.Header.Set("chatgpt-account-id", acct)
 	}

@@ -74,7 +74,7 @@ func (p *Provider) ResponsesPassthrough(ctx context.Context, env *provider.Accou
 	}
 	if sp != nil {
 		if sp.ClientVersion != "" {
-			httpReq.Header.Set("User-Agent", "aether-cockpit/"+sp.ClientVersion)
+			httpReq.Header.Set("User-Agent", "openai-node/"+sp.ClientVersion)
 		}
 		applyHeaders(httpReq, env, sp.HeadersTemplate)
 		if sp.SignatureRule != nil {

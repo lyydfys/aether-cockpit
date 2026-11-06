@@ -252,11 +252,16 @@ func applyUserAgent(r *http.Request, env *provider.AccountEnv, sp *spec.Spec) {
 			return
 		}
 	}
+	providerID := ""
+	if env != nil {
+		providerID = env.ProviderID
+	}
 	if sp != nil && sp.ClientVersion != "" {
-		r.Header.Set("User-Agent", "aether-cockpit/"+sp.ClientVersion)
+		// spec 显式声明了"该渠道真实客户端的发行方/版本"，直接照抄。
+		r.Header.Set("User-Agent", clientUAFor(providerID, sp.ClientVersion))
 		return
 	}
-	r.Header.Set("User-Agent", "aether-cockpit/"+reverseClientVersion)
+	r.Header.Set("User-Agent", clientUAFor(providerID, ""))
 }
 
 // reverseClientVersion 是没有 spec/client_version 时的兜底版本号。
@@ -863,4 +868,23 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// clientUAFor 生成"看起来像真实客户端"的 UA。
+//
+// 不能把本产品名写进 UA：真实客户端不会在自己的 UA 里标注第三方网关，
+// 那等于主动打招呼（社区里这类写法是公认的封号加速器）。
+//
+// 传了 version 说明 spec 知道真实客户端的版本，按渠道取对应产品名；
+// 没传则用一个与该渠道生态一致的默认值。
+func clientUAFor(profileID, version string) string {
+	if version == "" {
+		version = reverseClientVersion
+	}
+	if strings.HasPrefix(profileID, "opencode") {
+		// OpenCode 官方 CLI 的 UA 形态：opencode/<version>
+		return "opencode/" + version
+	}
+	// Codex 系：codex_cli_rs/<version> (<os>; <arch>)
+	return fmt.Sprintf("codex_cli_rs/%s (%s; %s)", version, uaOS(), uaArch())
 }

@@ -184,7 +184,7 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("User-Agent", "aether-cockpit/vertex")
+	httpReq.Header.Set("User-Agent", "google-cloud-vertex/1.0.0")
 
 	resp, err := env.Client().Do(httpReq)
 	if err != nil {

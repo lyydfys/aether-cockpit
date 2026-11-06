@@ -48,7 +48,7 @@ func (p *Provider) RefreshCredential(ctx context.Context, env *provider.AccountE
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "AetherCockpit/token-refresh")
+	req.Header.Set("User-Agent", codexUserAgent())
 
 	resp, err := env.Client().Do(req)
 	if err != nil {

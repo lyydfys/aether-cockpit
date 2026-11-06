@@ -65,7 +65,7 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeInternal, "构造 Kiro 请求失败").WithCause(err)
 	}
-	ua := "aws-sdk-rust/1.0.0 ua/2.1 os/other lang/rust api/codewhispererstreaming#1.28.3 m/E app/AmazonQ-For-CLI md/appVersion-1.28.3-" + randomHex(8)
+	ua := kiroUserAgent()
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/vnd.amazon.eventstream")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
@@ -516,4 +516,13 @@ func lookupInt(m map[string]any, key string) int {
 		return int(v)
 	}
 	return 0
+}
+
+// kiroUserAgent 生成 AWS SDK + Amazon Q for CLI 形态的 UA。
+//
+// 尾部那段随机十六进制是 SDK 的客户端标识（每个进程一个），真实客户端也有；
+// 少了它反而规整得可疑。额度查询与对话必须用同一种形态——同一个"客户端"
+// 在不同接口上用两种 UA，是最容易被关联的破绽。
+func kiroUserAgent() string {
+	return "aws-sdk-rust/1.0.0 ua/2.1 os/other lang/rust api/codewhispererstreaming#1.28.3 m/E app/AmazonQ-For-CLI md/appVersion-1.28.3-" + randomHex(8)
 }

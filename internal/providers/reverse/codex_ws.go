@@ -92,7 +92,7 @@ func (p *Provider) ResponsesWebSocketStream(ctx context.Context, env *provider.A
 			"chatgpt-account-id":  strings.TrimSpace(env.GetCredential("account_id")),
 			"originator":          "codex_cli_rs",
 			"OpenAI-Beta":         codexWSBeta,
-			"User-Agent":          "codex_cli_rs/0.16.0 (Aether Cockpit)",
+			"User-Agent":          codexUserAgent(),
 			"x-client-request-id": randomWSUUID(),
 		}
 	} else {

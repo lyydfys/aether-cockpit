@@ -49,7 +49,7 @@ type Config struct {
 	// NoQuota：有额度但无 API 可读（只在厂商控制台里）。为真时不再对外
 	// 声明额度能力，页面也不会去探测账单接口、自然不会有 404 报错。
 	NoQuota bool
-	Models    []ir.ModelMeta
+	Models  []ir.ModelMeta
 	// AuthStyle：空 = Authorization: Bearer；"api-key" = Azure 的 api-key 头。
 	AuthStyle string
 	// Azure：端点按 /openai/deployments/{deployment}/…?api-version= 拼接。
@@ -312,7 +312,7 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		}
 	}
 	if sp != nil && sp.ClientVersion != "" {
-		httpReq.Header.Set("User-Agent", "aether-cockpit/"+sp.ClientVersion)
+		httpReq.Header.Set("User-Agent", "openai-node/"+sp.ClientVersion)
 	}
 
 	// 若 spec 声明了签名规则，按规则计算并写入头。

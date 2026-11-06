@@ -347,7 +347,7 @@ func (p *Provider) refreshAccessTokenWithPair(ctx context.Context, env *provider
 		return ir.NewAPIError(ir.ErrCodeInternal, "构造 Antigravity 刷新请求失败").WithCause(err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "Go-http-client/2.0")
+	req.Header.Set("User-Agent", userAgent)
 
 	client := env.Client()
 	resp, err := client.Do(req)

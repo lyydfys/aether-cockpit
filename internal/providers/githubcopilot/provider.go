@@ -204,7 +204,7 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-GitHub-Api-Version", "2025-04-01")
-	req.Header.Set("User-Agent", "AetherCockpit")
+	req.Header.Set("User-Agent", "GitHubCopilotChat/0.26.7")
 	resp, err := env.Client().Do(req)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "读取 Copilot 额度失败: "+err.Error()).

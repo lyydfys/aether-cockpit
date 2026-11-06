@@ -148,7 +148,7 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 		req.Header.Set("tokentype", "API_KEY")
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "AetherCockpit/quota")
+	req.Header.Set("User-Agent", kiroUserAgent())
 
 	resp, err := env.Client().Do(req)
 	if err != nil {

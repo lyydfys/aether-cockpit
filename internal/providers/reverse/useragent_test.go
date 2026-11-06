@@ -27,18 +27,18 @@ func TestApplyUserAgentPrecedence(t *testing.T) {
 			name:   "没有显式值时用 spec 的客户端版本",
 			creds:  map[string]string{},
 			spec:   &spec.Spec{ClientVersion: "0.4.2"},
-			wantUA: "aether-cockpit/0.4.2",
+			wantUA: "opencode/0.4.2",
 		},
 		{
 			name:   "两者都没有时兜底，绝不能是 Go-http-client",
 			creds:  map[string]string{},
-			wantUA: "aether-cockpit/" + reverseClientVersion,
+			wantUA: "opencode/" + reverseClientVersion,
 		},
 		{
 			name:   "空白显式值当作没填",
 			creds:  map[string]string{"user_agent": "   "},
 			spec:   &spec.Spec{ClientVersion: "1.1"},
-			wantUA: "aether-cockpit/1.1",
+			wantUA: "opencode/1.1",
 		},
 	}
 	for _, c := range cases {

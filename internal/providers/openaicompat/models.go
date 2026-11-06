@@ -62,7 +62,7 @@ func (p *Provider) ListModels(ctx context.Context, env *provider.AccountEnv) ([]
 		}
 	}
 	if sp != nil && sp.ClientVersion != "" {
-		req.Header.Set("User-Agent", "aether-cockpit/"+sp.ClientVersion)
+		req.Header.Set("User-Agent", "openai-node/"+sp.ClientVersion)
 	}
 	resp, err := env.Client().Do(req)
 	if err != nil {

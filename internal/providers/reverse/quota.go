@@ -126,7 +126,7 @@ func (p *Provider) queryCodexWham(ctx context.Context, env *provider.AccountEnv)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("chatgpt-account-id", accountID)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "AetherCockpit/quota")
+	req.Header.Set("User-Agent", codexUserAgent())
 
 	resp, err := env.Client().Do(req)
 	if err != nil {
@@ -243,7 +243,7 @@ func (p *Provider) queryOpenCodeGo(ctx context.Context, env *provider.AccountEnv
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "AetherCockpit/quota")
+	req.Header.Set("User-Agent", codexUserAgent())
 
 	resp, err := env.Client().Do(req)
 	if err != nil {

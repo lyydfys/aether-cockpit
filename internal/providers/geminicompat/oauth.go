@@ -437,7 +437,7 @@ func (p *Provider) chatAIStudio(ctx context.Context, env *provider.AccountEnv, r
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
-	httpReq.Header.Set("User-Agent", "aether-cockpit/gemini-oauth")
+	httpReq.Header.Set("User-Agent", "google-genai/1.0.0")
 	client := env.Client()
 	if client == nil {
 		client = http.DefaultClient

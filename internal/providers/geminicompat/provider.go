@@ -146,7 +146,7 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("x-goog-api-key", key)
-	httpReq.Header.Set("User-Agent", "aether-cockpit/gemini-compat")
+	httpReq.Header.Set("User-Agent", "google-genai/1.0.0")
 
 	resp, err := env.Client().Do(httpReq)
 	if err != nil {
