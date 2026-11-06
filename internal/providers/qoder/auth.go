@@ -129,7 +129,7 @@ func (p *Provider) refreshToken(ctx context.Context, env *provider.AccountEnv) e
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "qoder/1.1.77")
+	req.Header.Set("User-Agent", "qoder/"+p.profile.cosyVer)
 
 	resp, err := p.doHTTP(env, req)
 	if err != nil {

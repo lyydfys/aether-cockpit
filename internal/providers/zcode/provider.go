@@ -56,8 +56,11 @@ func newProvider(id, region, baseURL, plan string) *Provider {
 	}
 	p := &Provider{id: id, region: region, baseURL: baseURL, plan: plan}
 	p.Provider = reverse.New(reverse.Profile{
-		ID:            id,
-		DisplayName:   display,
+		ID:          id,
+		DisplayName: display,
+		// 对话与额度必须是同一个客户端形态：额度接口发 ZCode/<ver>，
+		// 对话却用 openai-node 兜底的话，同一账号就成了两个客户端。
+		Headers:       map[string]string{"User-Agent": "ZCode/" + zcodeAppVersion},
 		Family:        "zcode",
 		RegionTag:     regionTag,
 		BrandColor:    "#3859FF",

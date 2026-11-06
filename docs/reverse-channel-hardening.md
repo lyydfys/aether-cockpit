@@ -81,6 +81,20 @@
 5. 新增硬锁 `TestNoEmptyCredentialHeader`：禁止 `Set(头, TrimSpace(GetCredential(...)))`
    这种"可能发出空值头"的写法。
 
+## 第六轮补充（2026-11-06）
+
+1. **trae 平台字段按本机生成**：`x-device-type` / `x-os-version` / 登录 `OSInfo` 原来写死
+   Windows 10，macOS/Linux 上会"自称 Windows"（与登录时的真实系统冲突）。
+2. **qoder UA 统一**：对话/签到分别用 `qoder/1.1.77` 与裸 `Qoder`，现统一为
+   `qoder/<cosyVer>`。
+3. **copilot 残留旧版本**：额度路径还留着 `GitHubCopilotChat/0.26.7`，已统一到常量。
+4. **zcode UA 统一**：对话走 openai-node 兜底、额度走 `ZCode/<ver>`——同一账号两个客户端。
+   现在统一为 `ZCode/3.10.2`。
+5. 新增 `TestPlatformMatchesHost`（trae）。
+
+遗留说明：minimax 的 `MiniMaxAgent`（对话）与 `MiniMaxCode`（签到）分属两个不同上游
+产品/endpoint，保持差异。
+
 ## 下一步
 
 - workbuddy：可选的"提示词指纹清洗"（仅当把 Claude Code 指向 WorkBuddy 后端时启用）。

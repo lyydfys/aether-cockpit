@@ -30,8 +30,6 @@ const (
 
 	deviceBrand = "82RF"
 	deviceCPU   = "Intel"
-	osVersion   = "Windows 10"
-	deviceType  = "windows"
 )
 
 // baseURL 返回账号级上游地址。

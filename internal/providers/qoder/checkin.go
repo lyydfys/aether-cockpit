@@ -159,7 +159,7 @@ func (p *Provider) campaignCall(ctx context.Context, env *provider.AccountEnv, c
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Cosy-ClientType", "10")
-	req.Header.Set("User-Agent", "Qoder")
+	req.Header.Set("User-Agent", "qoder/"+p.profile.cosyVer)
 	req.Header.Set("Cosy-MachineId", c.MachineID)
 	req.Header.Set("Cosy-MachineToken", firstNonEmpty(env.GetCredential("machine_token"), c.MachineID))
 	req.Header.Set("Cosy-MachineType", firstNonEmpty(env.GetCredential("machine_type"), "5"))

@@ -2,6 +2,7 @@ package trae
 
 import (
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -46,5 +47,23 @@ func TestDeviceIdentityHeadersNonEmpty(t *testing.T) {
 	p.applyHeaders(h3, env2, "tok")
 	if h3.Get("x-machine-id") != "real-machine" || h3.Get("x-device-id") != "real-device" {
 		t.Fatalf("显式凭证应优先：machine=%q device=%q", h3.Get("x-machine-id"), h3.Get("x-device-id"))
+	}
+}
+
+// 平台字段必须反映本机：写死 Windows 会让 macOS/Linux 上的网关"自称 Windows 10"，
+// 与登录时上报的真实系统冲突。
+func TestPlatformMatchesHost(t *testing.T) {
+	want := map[string]string{"windows": "windows", "darwin": "darwin", "linux": "linux"}[runtime.GOOS]
+	if want == "" {
+		want = runtime.GOOS
+	}
+	if got := traeDeviceType(); got != want {
+		t.Fatalf("traeDeviceType() = %q，want %q", got, want)
+	}
+	if strings.TrimSpace(traeOSVersion()) == "" {
+		t.Fatal("traeOSVersion() 不能为空")
+	}
+	if runtime.GOOS == "windows" && traeOSVersion() != "Windows 10" {
+		t.Fatalf("Windows 上应保持抓包原值 Windows 10，得到 %q", traeOSVersion())
 	}
 }

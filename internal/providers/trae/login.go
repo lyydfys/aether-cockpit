@@ -133,7 +133,7 @@ func StartLogin(providerID string) (*LoginSession, error) {
 	q.Set("x_machine_id", machineID)
 	q.Set("x_device_brand", "Windows")
 	q.Set("x_device_type", "windows")
-	q.Set("x_os_version", osVersion)
+	q.Set("x_os_version", traeOSVersion())
 	q.Set("x_env", "")
 	q.Set("x_app_version", "3.5.54")
 	q.Set("x_app_type", "stable")
@@ -269,7 +269,7 @@ func (s *LoginSession) exchange(code string) (string, string, error) {
 			"DeviceID": s.deviceID, "MachineID": s.machineID, "PlatformCode": "IDE_PC",
 			"DeviceType": "PC", "DeviceName": os.Getenv("USERNAME"), "DeviceModel": "PC",
 			"ClientVersion": "3.5.54", "DevicePublicKey": "", "DeviceBrand": "Microsoft",
-			"DeviceCPU": "", "OSInfo": "windows", "OSVersion": osVersion,
+			"DeviceCPU": "", "OSInfo": traeDeviceType(), "OSVersion": traeOSVersion(),
 		},
 		"IDEVersion": "3.5.54",
 	})
