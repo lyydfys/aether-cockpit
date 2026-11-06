@@ -95,6 +95,20 @@
 遗留说明：minimax 的 `MiniMaxAgent`（对话）与 `MiniMaxCode`（签到）分属两个不同上游
 产品/endpoint，保持差异。
 
+## 第七轮补充（2026-11-06）
+
+新增两道**通用硬锁**（不再依赖人工扫）：
+
+1. `TestSingleUserAgentPerChannel`：同一渠道目录里发给上游的 UA 字面量只允许一种；
+   例外（minimax 的两个不同上游产品）在 `uaMultiAllowed` 显式登记原因。
+2. `TestChatChannelSetsUserAgent`：实现了 `ChatStream` 的渠道必须设置 UA
+   （否则上游看到 `Go-http-client`）；例外（devin 原生 CLI 不发 UA、协议兼容层、
+   mock）在 `uaAbsentAllowed` 登记。
+
+同时补齐 claude 身份三件套的测试：稳定性（换机器/换会话的差异面）、
+`metadata.user_id` 必须是 JSON 字符串、请求 ID 每请求唯一，并在 OAuth 流式用例里
+断言 `X-Claude-Code-Session-Id` / `x-client-request-id` / `metadata.user_id` 真实出现在请求上。
+
 ## 下一步
 
 - workbuddy：可选的"提示词指纹清洗"（仅当把 Claude Code 指向 WorkBuddy 后端时启用）。

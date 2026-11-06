@@ -303,6 +303,8 @@ func TestChatStreamParsesAnthropicSSE(t *testing.T) {
 		gotBeta     string
 		gotVersion  string
 		gotUA       string
+		gotSessID   string
+		gotReqID    string
 		gotBody     map[string]any
 		gotBodyOnce bool
 	)
@@ -330,6 +332,8 @@ func TestChatStreamParsesAnthropicSSE(t *testing.T) {
 		gotBeta = r.Header.Get("anthropic-beta")
 		gotVersion = r.Header.Get("anthropic-version")
 		gotUA = r.Header.Get("User-Agent")
+		gotSessID = r.Header.Get("X-Claude-Code-Session-Id")
+		gotReqID = r.Header.Get("x-client-request-id")
 		raw, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(raw, &gotBody)
 		gotBodyOnce = true
@@ -428,6 +432,20 @@ func TestChatStreamParsesAnthropicSSE(t *testing.T) {
 	// 判非正版并持续 429 且无 reset 头）。
 	if !strings.HasPrefix(gotUA, "claude-cli/2.1.258") {
 		t.Fatalf("user-agent = %q", gotUA)
+	}
+	// 真实 CLI 每次请求都带会话与请求标识；缺了就是"自称 CLI 却毫无身份"。
+	if len(gotSessID) != 36 {
+		t.Fatalf("X-Claude-Code-Session-Id 应为 UUID，得到 %q", gotSessID)
+	}
+	if len(gotReqID) != 36 {
+		t.Fatalf("x-client-request-id 应为 UUID，得到 %q", gotReqID)
+	}
+	if meta, ok := gotBody["metadata"].(map[string]any); ok {
+		if s, _ := meta["user_id"].(string); !strings.Contains(s, "device_id") {
+			t.Fatalf("metadata.user_id 缺失或不含 device_id：%q", s)
+		}
+	} else {
+		t.Fatal("请求体应带 metadata.user_id")
 	}
 	if !gotBodyOnce {
 		t.Fatal("未捕获请求体")
