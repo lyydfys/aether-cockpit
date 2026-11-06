@@ -881,10 +881,18 @@ func clientUAFor(profileID, version string) string {
 	if version == "" {
 		version = reverseClientVersion
 	}
-	if strings.HasPrefix(profileID, "opencode") {
+	switch {
+	case strings.HasPrefix(profileID, "opencode"):
 		// OpenCode 官方 CLI 的 UA 形态：opencode/<version>
 		return "opencode/" + version
+	case strings.HasPrefix(profileID, "github-copilot"):
+		return "GitHubCopilotChat/" + version
+	case strings.HasPrefix(profileID, "codex"):
+		// Codex 系：codex_cli_rs/<version> (<os>; <arch>)
+		return fmt.Sprintf("codex_cli_rs/%s (%s; %s)", version, uaOS(), uaArch())
+	default:
+		// 其余走 OpenAI 兼容协议的反代渠道（z.ai coding plan 之类）：
+		// 真实用户多半用官方 SDK，Node 版 UA 最常见；套 Codex 的 UA 反而更可疑。
+		return "openai-node/" + version
 	}
-	// Codex 系：codex_cli_rs/<version> (<os>; <arch>)
-	return fmt.Sprintf("codex_cli_rs/%s (%s; %s)", version, uaOS(), uaArch())
 }

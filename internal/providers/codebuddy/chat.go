@@ -182,6 +182,9 @@ func applyChatHeaders(req *http.Request, env *provider.AccountEnv, base, token, 
 	h.Set("X-Private-Data", "false")
 	h.Set("X-CodeBuddy-Request", "1")
 	h.Set("X-Product", "SaaS")
+	// 官方 CLI 会声明自己在什么平台上跑（web/desktop）；缺这个字段的请求
+	// 在对照开源实现（codebuddy2api）时就会被识别为"头不全"。
+	h.Set("X-Client-Platform", "web")
 	if host != "" {
 		h.Set("X-Domain", host)
 		req.Host = host

@@ -60,6 +60,9 @@ func (p *Provider) QueryQuota(ctx context.Context, env *provider.AccountEnv) (*p
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
+	// 与对话请求保持同一种客户端形态：额度接口用 Go 默认 UA 会显得不如
+	// 对话"是个客户端"，同一账号两种指纹是最容易被关联的。
+	req.Header.Set("User-Agent", "openai-node/1.0")
 	applyQuotaHeaders(req)
 
 	resp, err := env.Client().Do(req)

@@ -50,6 +50,16 @@
 4. **kiro / copilot / antigravity 额度接口的 UA 与对话不一致**：统一为同一客户端形态。
 5. **反代渠道没有 TLS 指纹**：默认启用 uTLS `chrome_131`（官方 API 渠道不受影响）。
 
+## 第三轮补充（2026-11-06）
+
+1. **UA 按渠道生态分支**：`opencode/*`、`codex_cli_rs/*`、`GitHubCopilotChat/*`、
+   `openai-node/*`。此前所有反代渠道共用 Codex 形态的 UA——给 z.ai coding plan
+   发 `codex_cli_rs`，和没有 UA 一样可疑。
+2. **zcode 额度接口补 UA**：对话走 `openai-node/*`，额度接口原来是 Go 默认 UA，
+   同一账号两种指纹。
+3. **codebuddy 补 `X-Client-Platform: web`**，与开源参考实现（codebuddy2api）对齐，
+   并在测试里断言 CLI 身份三件套（`X-IDE-Name`/`X-Agent-Intent`/`X-Client-Platform`）。
+
 ## 下一步
 
 - workbuddy：可选的"提示词指纹清洗"（仅当把 Claude Code 指向 WorkBuddy 后端时启用）。

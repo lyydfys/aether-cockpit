@@ -107,6 +107,16 @@ func TestCodeBuddyChatStreamCN(t *testing.T) {
 	if got := gotReq.Header.Get("x-stainless-lang"); got != "js" {
 		t.Fatalf("x-stainless-lang=%q", got)
 	}
+	// 官方 CLI 的身份头必须齐：缺了就和开源参考实现对不上，等于自报"非官方"。
+	if got := gotReq.Header.Get("X-IDE-Name"); got != "CLI" {
+		t.Fatalf("X-IDE-Name=%q", got)
+	}
+	if got := gotReq.Header.Get("X-Agent-Intent"); got != "craft" {
+		t.Fatalf("X-Agent-Intent=%q", got)
+	}
+	if got := gotReq.Header.Get("X-Client-Platform"); got != "web" {
+		t.Fatalf("X-Client-Platform=%q", got)
+	}
 	if got := gotReq.Header.Get("X-Conversation-ID"); len(got) != 36 {
 		t.Fatalf("X-Conversation-ID=%q", got)
 	}
