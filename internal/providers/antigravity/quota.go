@@ -234,7 +234,7 @@ func (p *Provider) postCodeAssist(ctx context.Context, env *provider.AccountEnv,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", antigravityUserAgent())
 	resp, err := env.Client().Do(req)
 	if err != nil {
 		return nil, 0, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "Antigravity 额度接口连接失败").

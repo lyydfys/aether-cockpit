@@ -169,7 +169,7 @@ func buildPayload(req *ir.UnifiedChatRequest, model string) map[string]any {
 				"request_set_id":    randomUUID(),
 				"session_id":        sessionID,
 				"source_session_id": sessionID,
-				"os_type":           "windows",
+				"os_type":           qoderOSName(),
 				"task_id":           "common",
 				"client_type":       "10",
 			},

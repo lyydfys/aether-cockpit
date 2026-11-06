@@ -163,7 +163,7 @@ func (p *Provider) campaignCall(ctx context.Context, env *provider.AccountEnv, c
 	req.Header.Set("Cosy-MachineId", c.MachineID)
 	req.Header.Set("Cosy-MachineToken", firstNonEmpty(env.GetCredential("machine_token"), c.MachineID))
 	req.Header.Set("Cosy-MachineType", firstNonEmpty(env.GetCredential("machine_type"), "5"))
-	req.Header.Set("Cosy-MachineOS", "windows")
+	req.Header.Set("Cosy-MachineOS", qoderOSName())
 
 	client := env.Client()
 	resp, err := client.Do(req)

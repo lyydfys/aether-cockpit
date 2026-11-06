@@ -91,7 +91,7 @@ func (p *Provider) doRequest(ctx context.Context, env *provider.AccountEnv, toke
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
-	httpReq.Header.Set("User-Agent", userAgent)
+	httpReq.Header.Set("User-Agent", antigravityUserAgent())
 
 	client := env.Client()
 	resp, err := client.Do(httpReq)

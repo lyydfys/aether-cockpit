@@ -39,7 +39,7 @@ const (
 	dailyBaseURL  = "https://daily-cloudcode-pa.googleapis.com"
 
 	// 官方客户端 UA。Cloud Code 对低于 2.23.0 的客户端会拒绝新模型。
-	userAgent = "antigravity/hub/2.24.0 (aidev_client; os_type=darwin; arch=arm64; cl=1000335682)"
+	// UA 由 useragent.go 按本机平台生成（见 antigravityUserAgent）。
 
 	tokenSafetyWindow = 5 * time.Minute
 )
@@ -347,7 +347,7 @@ func (p *Provider) refreshAccessTokenWithPair(ctx context.Context, env *provider
 		return ir.NewAPIError(ir.ErrCodeInternal, "构造 Antigravity 刷新请求失败").WithCause(err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", antigravityUserAgent())
 
 	client := env.Client()
 	resp, err := client.Do(req)
@@ -407,7 +407,7 @@ func (p *Provider) ensureProjectID(ctx context.Context, env *provider.AccountEnv
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", antigravityUserAgent())
 
 	client := env.Client()
 	resp, err := client.Do(req)

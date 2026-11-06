@@ -399,3 +399,19 @@ func truncate(s string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
+
+// qoderOSName 返回请求体 os_type 字段的取值（官方客户端按平台上报）。
+//
+// 之前 chat.go 里写死 "windows"、checkin.go 里写死 Cosy-MachineOS=windows，
+// 而 machineOS() 已经按平台映射——同一台机器在不同接口上报两种系统，是最容易
+// 被关联的不一致。这里统一收口。
+func qoderOSName() string {
+	switch {
+	case os.PathSeparator == '\\':
+		return "windows"
+	case strings.Contains(strings.ToLower(os.Getenv("OSTYPE")), "darwin"):
+		return "darwin"
+	default:
+		return "linux"
+	}
+}
