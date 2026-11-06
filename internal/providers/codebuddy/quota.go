@@ -246,7 +246,10 @@ func (p *Provider) cbMeterCall(ctx context.Context, env *provider.AccountEnv, ba
 	}
 	if ent := strings.TrimSpace(env.GetCredential("enterprise_id")); ent != "" {
 		req.Header.Set("X-Enterprise-Id", ent)
-		req.Header.Set("X-Tenant-Id", cbFirst(strings.TrimSpace(env.GetCredential("tenant_id")), ent))
+		// 租户值可能和 enterprise 不同：只有非空才发，空值头会被上游当非法租户。
+		if tenant := cbFirst(strings.TrimSpace(env.GetCredential("tenant_id")), ent); tenant != "" {
+			req.Header.Set("X-Tenant-Id", tenant)
+		}
 	}
 	if domain := strings.TrimSpace(env.GetCredential("domain")); domain != "" {
 		req.Header.Set("X-Domain", domain)

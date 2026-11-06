@@ -70,6 +70,17 @@
    `Profile.DynamicHeaders` 钩子（静态 Headers 无法表达这类随请求变化的头）。
 3. **token 交换与对话用同一组版本头**，避免同一账号两套客户端版本。
 
+## 第五轮补充（2026-11-06）
+
+1. **qoder 机器令牌口径统一**：对话/额度固定发 `machine_id`，签到优先 `machine_token`
+   ——同一账号三套身份。现在三处统一为"`machine_token` 优先、缺省退回 `machine_id`"。
+2. **trae 设备标识兜底**：导入账号没有 `machine_id` 时会发**空值头**（比没有头更显眼）。
+   现在退回网关按账号派生的稳定指纹，且同一账号每次一致。
+3. **trae `x-uid` 不再发空值**：没有 uid 就不发。
+4. **codebuddy 额度接口 `X-Tenant-Id`** 同样改为非空才发。
+5. 新增硬锁 `TestNoEmptyCredentialHeader`：禁止 `Set(头, TrimSpace(GetCredential(...)))`
+   这种"可能发出空值头"的写法。
+
 ## 下一步
 
 - workbuddy：可选的"提示词指纹清洗"（仅当把 Claude Code 指向 WorkBuddy 后端时启用）。

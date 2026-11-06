@@ -139,7 +139,7 @@ func (p *Provider) applyQuotaHeaders(h http.Header, c creds) {
 		return
 	}
 	if v := strings.TrimSpace(c.MachineID); v != "" {
-		h.Set("Cosy-MachineToken", v)
+		h.Set("Cosy-MachineToken", firstNonEmpty(c.MachineToken, v))
 		h.Set("Cosy-MachineId", v)
 	}
 	if v := strings.TrimSpace(c.UserID); v != "" {

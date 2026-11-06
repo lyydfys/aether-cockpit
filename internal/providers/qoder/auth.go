@@ -64,20 +64,22 @@ func loadRSAKey() (*rsa.PublicKey, error) {
 }
 
 type creds struct {
-	UserID    string
-	Token     string
-	Name      string
-	Email     string
-	MachineID string
+	UserID       string
+	Token        string
+	Name         string
+	Email        string
+	MachineID    string
+	MachineToken string
 }
 
 func (p *Provider) credentials(env *provider.AccountEnv) creds {
 	return creds{
-		UserID:    strings.TrimSpace(firstNonEmpty(env.GetCredential("user_id"), env.GetCredential("uid"))),
-		Token:     strings.TrimSpace(firstNonEmpty(env.GetCredential("token"), env.GetCredential("access_token"))),
-		Name:      env.GetCredential("user_name"),
-		Email:     env.GetCredential("user_email"),
-		MachineID: strings.TrimSpace(env.GetCredential("machine_id")),
+		UserID:       strings.TrimSpace(firstNonEmpty(env.GetCredential("user_id"), env.GetCredential("uid"))),
+		Token:        strings.TrimSpace(firstNonEmpty(env.GetCredential("token"), env.GetCredential("access_token"))),
+		Name:         env.GetCredential("user_name"),
+		Email:        env.GetCredential("user_email"),
+		MachineID:    strings.TrimSpace(env.GetCredential("machine_id")),
+		MachineToken: strings.TrimSpace(env.GetCredential("machine_token")),
 	}
 }
 
@@ -303,7 +305,7 @@ func (p *Provider) buildCOSYHeaders(wireBody []byte, requestURL string, c creds)
 		"Cosy-Date":             ts,
 		"Cosy-Key":              wrapped,
 		"Cosy-MachineId":        c.MachineID,
-		"Cosy-MachineToken":     c.MachineID,
+		"Cosy-MachineToken":     firstNonEmpty(c.MachineToken, c.MachineID),
 		"Cosy-MachineType":      "5",
 		"Cosy-MachineOS":        machineOS(),
 		"Cosy-Scene":            "app",

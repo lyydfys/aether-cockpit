@@ -87,3 +87,52 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+// 头里不要放"可能是空串"的凭证值。
+//
+// `Header.Set("X-Uid", strings.TrimSpace(env.GetCredential("user_id")))` 在凭证缺失时
+// 会发出一个**空值头**。官方客户端要么带真实值、要么根本不会有这个头；空值头
+// 是一个很容易被规则命中的异常特征（也污染缓存键）。
+//
+// 正确写法：先取值、判空，非空再 Set。
+func TestNoEmptyCredentialHeader(t *testing.T) {
+	root := "."
+	var violations []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			base := filepath.Base(info.Name())
+			if base == "testdata" || (strings.HasPrefix(base, ".") && base != ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		for i, line := range strings.Split(string(raw), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			if !strings.Contains(line, `.Set("`) || !strings.Contains(line, "TrimSpace(env.GetCredential") {
+				continue
+			}
+			violations = append(violations, filepath.ToSlash(path)+":"+itoa(i+1)+"  "+trimmed)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("遍历失败：%v", err)
+	}
+	if len(violations) > 0 {
+		t.Fatalf("这些头可能被写成空值（官方客户端不会发空值头），请先判空：\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+}

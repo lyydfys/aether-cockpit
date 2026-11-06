@@ -73,9 +73,16 @@ func (p *Provider) applyHeaders(h http.Header, env *provider.AccountEnv, token s
 	spanID := randomHex(8)
 	requestID := randomUUID()
 
+	// 机器标识必须非空且稳定：官方客户端永远带这两个头，空字符串头
+	// 反而比"没这个头"更显眼。导入的账号可能没有 machine_id（例如只导了
+	// token），这时退回网关按账号派生的稳定机器指纹，而不是发空值。
+	machineID := strings.TrimSpace(env.GetCredential("machine_id"))
+	if machineID == "" {
+		machineID = strings.TrimSpace(env.Fingerprint.MachineID)
+	}
 	deviceID := strings.TrimSpace(env.GetCredential("device_id"))
 	if deviceID == "" {
-		deviceID = hashDeviceID(env.GetCredential("machine_id"))
+		deviceID = hashDeviceID(machineID)
 	}
 
 	h.Set("Content-Type", "application/json")
@@ -94,13 +101,16 @@ func (p *Provider) applyHeaders(h http.Header, env *provider.AccountEnv, token s
 	h.Set("x-device-brand", deviceBrand)
 	h.Set("x-device-cpu", deviceCPU)
 	h.Set("x-device-id", deviceID)
-	h.Set("x-machine-id", strings.TrimSpace(env.GetCredential("machine_id")))
+	h.Set("x-machine-id", machineID)
 	h.Set("x-os-version", osVersion)
 	h.Set("x-device-type", deviceType)
 	h.Set("x-ide-version", p.ideVersion())
 	h.Set("x-ide-version-type", "stable")
 	h.Set("request-traffic-type", "prod")
-	h.Set("x-uid", strings.TrimSpace(env.GetCredential("user_id")))
+	// 空值头比没有这个头更显眼：没有 uid 就不发，别发空串。
+	if v := strings.TrimSpace(env.GetCredential("user_id")); v != "" {
+		h.Set("x-uid", v)
+	}
 	h.Set("X-Request-ID", requestID)
 	h.Set("X-Trae-Request-ID", requestID)
 }
