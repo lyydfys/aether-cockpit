@@ -115,7 +115,7 @@
 system 里写死 `You are Claude Code, Anthropic's official CLI for Claude.` 这类开场白——
 对上游来说等于自报"我不是官方客户端"。
 
-用法：在账号凭证里加 `sanitize_claude_prompt=1`（也可用 `true/yes/on`）。
+用法：渠道「添加账号 → 提示词指纹清洗」选「开启」；等价于凭证 `sanitize_claude_prompt=开启`（也接受 `1/true/yes/on`）。
 
 行为：
 

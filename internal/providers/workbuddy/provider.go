@@ -142,6 +142,13 @@ func (p *Provider) Manifest() provider.ProviderManifest {
 				Key: "tenant_id", Label: "Tenant ID（可选）", Type: "text",
 				Help: "企业版账号才需要；会作为 X-Tenant-Id 发送",
 			},
+			{
+				// 把 Claude Code / OpenCode 指向本渠道时，客户端会在 system 里
+				// 写死自己的产品指纹；开启后替换成中性描述（不动用户正文）。
+				Key: "sanitize_claude_prompt", Label: "提示词指纹清洗", Type: "select",
+				Options: []string{"关闭", "开启"},
+				Help:    "开启后会把 system 里 Claude Code / OpenCode 的开场白指纹替换为中性描述；默认关闭",
+			},
 		},
 		Models:              models,
 		RequiredMiddlewares: []string{"stateful_session"},

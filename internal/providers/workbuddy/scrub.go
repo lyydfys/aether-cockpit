@@ -49,7 +49,7 @@ var claudePromptFingerprints = []struct {
 func scrubEnabled(get func(string) string) bool {
 	v := strings.ToLower(strings.TrimSpace(get("sanitize_claude_prompt")))
 	switch v {
-	case "1", "true", "yes", "on":
+	case "1", "true", "yes", "on", "开启":
 		return true
 	}
 	return false

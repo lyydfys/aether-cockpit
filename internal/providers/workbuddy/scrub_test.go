@@ -81,3 +81,24 @@ func TestScrubEnabledFlag(t *testing.T) {
 		}
 	}
 }
+
+// 新增渠道时表单必须能选到开关（用户不该靠手写凭证键）。
+func TestManifestExposesScrubToggle(t *testing.T) {
+	p := newProvider(cnProfile)
+	m := p.Manifest()
+	found := false
+	for _, f := range m.AuthFormSchema {
+		if f.Key == "sanitize_claude_prompt" {
+			found = true
+			if f.Type != "select" {
+				t.Fatalf("应为 select，得到 %q", f.Type)
+			}
+			if len(f.Options) != 2 || f.Options[1] != "开启" {
+				t.Fatalf("选项不对：%v", f.Options)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("AuthFormSchema 缺少 sanitize_claude_prompt")
+	}
+}
