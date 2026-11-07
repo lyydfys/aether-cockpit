@@ -207,6 +207,15 @@ internal fun PredictiveBackHost(
     /** 覆盖页当前是否仍打开。返回手势提交后由 false 触发"归零"，而不是动画一结束就归零。 */
     open: Boolean = true,
     previous: (@Composable () -> Unit)? = null,
+    /**
+     * 预测返回手势是否正在收尾（已提交、动画未结束）。
+     *
+     * 调用方用它来**抑制自己的页面转场**：手势提交后 onBack() 会同时改导航状态，
+     * 若外层 AnimatedContent 再播一次滑出，两个右移位移会叠加在同一份内容上，
+     * 表现就是"滑出去以后又弹回来一下"（只在转场时长与预测动画错开的设备上明显）。
+     * 回调在收尾结束时置回 false。
+     */
+    onSettlingChanged: ((Boolean) -> Unit)? = null,
     // 传**提供者**而不是值：值在组合阶段读会让整个覆盖页每帧重组（快滑掉帧→看起来像闪）。
     content: @Composable (progress: () -> Float) -> Unit,
 ) {
@@ -276,6 +285,9 @@ internal fun PredictiveBackHost(
                 // 避免被系统在手势提交时取消。
                 isAnimating = true
                 settling = true
+                // 告诉调用方"手势正在收尾"：它应当在 onBack() 后抑制自己的页面转场，
+                // 否则两段右移动画叠在同一份内容上（滑出去又弹回来 = 重复/闪烁）。
+                onSettlingChanged?.invoke(true)
                 settleScope.launch {
                     try {
                         // 快滑时 motion 已经接近 1：从当前值补到 1，不会再"弹回原位再滑出"。
@@ -297,11 +309,13 @@ internal fun PredictiveBackHost(
                             runCatching { motion.stop() }
                             runCatching { motion.snapTo(0f) }
                         }
+                        onSettlingChanged?.invoke(false)
                     }
                 }
             } catch (e: CancellationException) {
                 // 中途松手：回到原位。同样不能在被取消的协程里做动画。
                 settling = true
+                onSettlingChanged?.invoke(true)
                 settleScope.launch {
                     try {
                         motion.animateTo(
@@ -314,6 +328,7 @@ internal fun PredictiveBackHost(
                     } finally {
                         settling = false
                         isAnimating = false
+                        onSettlingChanged?.invoke(false)
                     }
                 }
                 throw e

@@ -9,6 +9,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
@@ -141,6 +143,13 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
     // App 内网页（关于页的链接、Release 页等）：不走任何 Intent。
     var inAppUrl by remember { mutableStateOf<String?>(null) }
     var selectedTab by rememberSaveable { mutableStateOf(MobileTab.OVERVIEW) }
+    // 预测返回手势正在收尾（已提交、动画未结束）。
+    //
+    // 这个标志用来**抑制 AnimatedContent 的页面转场**：手势提交时 onBack() 会同时改
+    // activeSubpage，若外层再播一次"右滑 + 淡出"，两段右移位移叠在同一份内容上，
+    // 真机上表现为"滑出去之后又弹回来一下"（只在转场时长与预测动画错开的设备上明显）。
+    // 手势期间位移完全交给预测动画，转场直接 None；非手势返回仍走正常转场。
+    var backGestureSettling by remember { mutableStateOf(false) }
     var notReady by remember { mutableStateOf<NotReadyNotice?>(null) }
     var showRouting by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
@@ -705,6 +714,9 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                     onBack = handleBack,
                     // 覆盖页真的关掉之后才归零（不是动画一结束就归零）。
                     open = anySubpageOpen,
+                    // 手势收尾期间让 AnimatedContent 让位：位移已由预测动画承担，
+                    // 再叠一次转场会出现"滑出去又弹回来"。
+                    onSettlingChanged = { backGestureSettling = it },
                     previous = when {
                         snapshotForGesture != null -> ({
                             Image(
@@ -731,7 +743,12 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                         AnimatedContent(
                             targetState = activeSubpage,
                             transitionSpec = {
-                                if (targetState != ActiveSubpage.NONE) {
+                                // 预测返回手势收尾中：转场必须让位。
+                                // 手势已经把内容右移出去了，此时若再播一次"滑出 + 淡出"，
+                                // 两段位移叠加 → "滑出去又弹回来"。直接 None，让预测动画独占。
+                                if (backGestureSettling) {
+                                    EnterTransition.None togetherWith ExitTransition.None
+                                } else if (targetState != ActiveSubpage.NONE) {
                                     (slideInHorizontally(
                                         animationSpec = tween(260, easing = FastOutSlowInEasing),
                                         initialOffsetX = { fullWidth -> (fullWidth * 0.22f).toInt() },

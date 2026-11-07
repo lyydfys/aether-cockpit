@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -257,6 +258,15 @@ func (g *Gateway) handleProviderModelList(w http.ResponseWriter, r *http.Request
 				if supported {
 					ids, err := lister.ListModels(r.Context(), env)
 					if err == nil && len(ids) > 0 {
+						// 探测结果必须**同时写进模型目录的 live 缓存**，否则只有这一个弹窗
+						// 能看到模型，`/v1/models` 与路由表仍然看不到 —— 自定义渠道尤其明显：
+						// 它的 manifest 模型常为空，全靠 live 目录撑起 `custom-xxx/<上游名>`。
+						// refresh 内部自己会带超时/并发去重，失败只记日志，不影响本次响应。
+						if g.catalog != nil {
+							if _, rerr := g.catalog.refresh(r.Context(), id); rerr != nil {
+								log.Printf("[CATALOG] %s 探测成功但写回目录失败：%v", id, rerr)
+							}
+						}
 						writeJSON(w, http.StatusOK, map[string]any{
 							"count": len(ids), "models": ids, "dropped": []string{},
 							"source": "vendor",

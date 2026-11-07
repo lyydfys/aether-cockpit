@@ -1,3 +1,29 @@
+## 0.4.0 补丁（2026-11-07，同版本替换）
+
+### 思考模型的工具调用不再 400
+
+- 根因在出站拼装：一轮 assistant 回合在 IR 里分成 Reasoning / Message / FunctionCall
+  多个条目，而 	oMessages 遇到文本就落盘，把 easoning_content 和 	ool_calls
+  拆成了两条消息。DeepSeek thinking 模式要求二者在同一条，拆开就报
+  The reasoning_content in the thinking mode must be passed back to the API。
+- 现在 assistant 侧的文本、思考、tool_calls 全部累积，等下一轮开头或数据结束才落盘成一条。
+- 带 tool_calls 且无文本时 content 按 OpenAI 惯用法给 
+ull；同轮有文本则同时带上。
+
+### 自定义渠道的模型能被客户端识别
+
+- 根因是两条独立的数据路径：/api/provider/models（弹窗里的「刷新模型」）只探测并返回，
+  不写入模型目录的 live 缓存；而 /v1/models 与路由表都从 live 缓存读。
+  于是弹窗里看得见上游模型，客户端却一条 custom-xxx/模型名 都拿不到。
+- 现在探测成功后会同步写回 live 目录，/v1/models 立即可见。
+
+### 手势返回在部分设备仍会二次闪动
+
+- 叠加来源确认：预测返回把内容右移出去的同时，AnimatedContent 因
+  ctiveSubpage 变化又播了一次「右滑 + 淡出」，两段位移落在同一份内容上。
+- PredictiveBackHost 新增 onSettlingChanged 回调，手势收尾期间调用方把转场设为
+  EnterTransition.None togetherWith ExitTransition.None，位移完全交给预测动画。
+  非手势返回（点按钮 / 返回键）仍走正常转场。
 ## 0.4.0（2026-11-07）
 
 ### 工具调用不再被上游拒绝

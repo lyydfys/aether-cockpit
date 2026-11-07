@@ -495,8 +495,15 @@ func buildPayload(req *ir.UnifiedChatRequest, upstreamModel, maxTokensField stri
 }
 
 // toMessages 把 IR 的 Item 列表转成 OpenAI messages 数组。
+// toMessages 把 IR 的 Item 列表转成 OpenAI messages 数组。
 //
 // 关键细节：
+//   - **一轮 assistant 回合在 IR 里是多个条目**（Reasoning / Message / 每个 FunctionCall 一条），
+//     但发回上游时必须是**一条** assistant 消息，reasoning_content 与 tool_calls
+//     必须落在同一条里。DeepSeek thinking 模式会校验这一点，拆成两条就报
+//     "The reasoning_content in the thinking mode must be passed back to the API"。
+//     所以本函数对 assistant 侧条目一律**先累积**，等下一轮开头（user 消息 / tool 结果）
+//     或数据结束时才落盘成一条。
 //   - assistant 带 tool_calls 时 content 必须为 null（不是空串），否则部分上游报错；
 //   - tool 消息必须紧跟对应的 assistant.tool_calls，否则 OpenAI 会 400；
 //   - reasoning 明文优先放进 reasoning_content（DeepSeek / 智谱 的通用字段）。
@@ -507,21 +514,27 @@ func toMessages(req *ir.UnifiedChatRequest) []map[string]any {
 		msgs = append(msgs, map[string]any{"role": "system", "content": s})
 	}
 
-	// pendingToolCalls 累积当前 assistant 轮的 tool_calls，
-	// 遇到 tool 结果或新的 assistant 文本时再落盘成一条消息。
+	// 一轮 assistant 回合的三部分：文本、思考、tool_calls。三者一起落盘。
 	var pendingCalls []map[string]any
 	var pendingReasoning string
+	var pendingText string
 
-	flushCalls := func() {
-		if len(pendingCalls) == 0 && pendingReasoning == "" {
+	flushAssistant := func() {
+		if len(pendingCalls) == 0 && pendingReasoning == "" && pendingText == "" {
 			return
 		}
 		msg := map[string]any{"role": "assistant"}
 		if len(pendingCalls) > 0 {
-			msg["content"] = nil
+			// 有 tool_calls 时 content 按 OpenAI 惯用法给 null；
+			// 若同一轮还有文本，仍按字符串带上（DeepSeek 允许非空 content + tool_calls）。
+			if pendingText == "" {
+				msg["content"] = nil
+			} else {
+				msg["content"] = pendingText
+			}
 			msg["tool_calls"] = pendingCalls
 		} else {
-			msg["content"] = ""
+			msg["content"] = pendingText
 		}
 		if pendingReasoning != "" {
 			msg["reasoning_content"] = pendingReasoning
@@ -529,12 +542,18 @@ func toMessages(req *ir.UnifiedChatRequest) []map[string]any {
 		msgs = append(msgs, msg)
 		pendingCalls = nil
 		pendingReasoning = ""
+		pendingText = ""
 	}
 
 	for _, it := range req.Items {
 		switch it.Type {
 		case ir.ItemTypeMessage:
-			flushCalls()
+			if it.Role == "assistant" {
+				// 同一轮 assistant 的文本：累积，不落盘（后面可能还有 tool_calls）。
+				pendingText += it.Text
+				continue
+			}
+			flushAssistant()
 			content := any(it.Text)
 			if len(it.Attachments) > 0 {
 				content = buildMultimodalContent(it)
@@ -555,8 +574,9 @@ func toMessages(req *ir.UnifiedChatRequest) []map[string]any {
 			})
 
 		case ir.ItemTypeFunctionCallOutput:
-			// 先把挂起的 tool_calls 落成 assistant 消息，再追加 tool 结果。
-			flushCalls()
+			// 先把挂起的整轮 assistant（文本 + 思考 + tool_calls）落成一条消息，
+			// 再追加 tool 结果。
+			flushAssistant()
 			msgs = append(msgs, map[string]any{
 				"role":         "tool",
 				"tool_call_id": it.CallID,
@@ -564,7 +584,7 @@ func toMessages(req *ir.UnifiedChatRequest) []map[string]any {
 			})
 		}
 	}
-	flushCalls()
+	flushAssistant()
 
 	return msgs
 }
