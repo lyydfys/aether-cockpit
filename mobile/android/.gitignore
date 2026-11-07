@@ -2,3 +2,7 @@
 .kotlin/
 local.properties
 **/build/
+
+# agent 临时编译日志
+.ktK.log
+.ktM.log
