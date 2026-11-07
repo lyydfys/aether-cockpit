@@ -1,4 +1,4 @@
-/* 渠道与额度（自有实现）：账号卡 + 内嵌额度区 + 批量条 + 供应商抽屉 + 五段详情。 */
+/* 渠道与额度（自有实现）：账号卡 + 内嵌额度区 + 批量条 + 渠道开关抽屉 + 五段详情。 */
 import { h, clear } from '../dom.js';
 import { usedPct } from '../format.js';
 import * as api from '../api.js';
@@ -54,9 +54,9 @@ export default {
         }
         render();
         try {
-          if (sessionStorage.getItem('aether.addProvider') === '1') { sessionStorage.removeItem('aether.addProvider'); addProviderDialog(); }
+          if (sessionStorage.getItem('aether.addProvider') === '1') { sessionStorage.removeItem('aether.addProvider'); customChannelsDrawer(); }
         } catch {}
-        window.__aetherAddProvider = addProviderDialog;
+        window.__aetherAddProvider = customChannelsDrawer;
         // 首帧的额度窗口可能还在后台读，补一次
         if (!state.late) {
           state.late = true;
@@ -207,13 +207,13 @@ export default {
         } catch (e) { toast('删除失败：' + (e.message || e)); }
       }, { danger: true });
       const bulk = iconBtn('settings', '批量设置已选账号', () => batchSettings());
-      const bar = h('div', { class: 'batchbar' }, h('label', { class: 'inline', style: 'font-size:12px;color:var(--muted)' }, box, h('span', null, '全选')), count, h('span', { id: 'pickedLabel', class: 'meta' }), groups, plus, bulk, h('span', { class: 'grow' }), btn('接入渠道', { icon: 'plus', onClick: () => ctx.navigate('onboard') }), btn('自定义渠道', { icon: 'plugin', onClick: customChannelsDrawer }), btn('供应商与开关', { icon: 'database', onClick: supplierDrawer }), del);
+      const bar = h('div', { class: 'batchbar' }, h('label', { class: 'inline', style: 'font-size:12px;color:var(--muted)' }, box, h('span', null, '全选')), count, h('span', { id: 'pickedLabel', class: 'meta' }), groups, plus, bulk, h('span', { class: 'grow' }), btn('接入渠道', { icon: 'plus', onClick: () => ctx.navigate('onboard') }), btn('＋ 自定义渠道', { icon: 'plugin', onClick: customChannelsDrawer }), btn('渠道开关', { icon: 'database', onClick: supplierDrawer }), del);
       return bar;
     }
 
     function gridView(filter) {
       const list = filtered();
-      if (!list.length) return empty(state.accounts.length ? '没有符合筛选条件的账号' : '还没有账号', state.accounts.length ? '调整搜索或筛选条件。' : '添加供应商后，账号会出现在这里。');
+      if (!list.length) return empty(state.accounts.length ? '没有符合筛选条件的账号' : '还没有账号', state.accounts.length ? '调整搜索或筛选条件。' : '点上方「接入渠道」接入内置渠道，或用「＋ 自定义渠道」注册一个第三方中转站。');
       const grid = h('div', { class: 'acct-grid', style: filter.layout === 'list' ? 'grid-template-columns:1fr' : '' });
       for (const a of list) grid.append(acctCard(a));
       // 账号少于 3 个时补一张虚线卡：auto-fill 会留出半格到一整格的死区，顺手把「接入」放在手边
@@ -221,7 +221,8 @@ export default {
         grid.append(h('button', {
           class: 'acct-add', type: 'button', onclick: () => ctx.navigate('onboard'),
         }, icon('plus', 20), h('span', null, '接入新渠道')));
-        // 紧挨着「接入新渠道」：自定义渠道同样是"加一个渠道"，只是配置来自用户而不是内置清单
+        // 紧挨着「接入新渠道」：自定义渠道同样是"加一个渠道"，只是配置来自用户而不是内置清单。
+        // 注意这只是空态补充，顶部批量条里的「＋ 自定义渠道」是常驻入口（不依赖账号数量）。
         grid.append(h('button', {
           class: 'acct-add', type: 'button', onclick: customChannelsDrawer,
         }, icon('plugin', 20), h('span', null, '自定义渠道')));
@@ -308,8 +309,12 @@ export default {
           const col = h('div', { class: 'acct-col' }, h('div', { class: 'acct-pool' }, g.name));
           for (const w of g.wins) {
             const rem = remaining(w);
+            // 剩余 0% 时上游会直接拒绝请求（Qoder 的主额度、WorkBuddy 的 credits 都是
+            // 这个行为），所以必须显式标出"已用尽"，不能只给一个 0% 让人猜。
+            const exhausted = rem <= 0.5;
             col.append(h('div', { class: 'acct-win' },
               h('div', { class: 'row-h' }, h('span', { class: 'lbl' }, w.name),
+                exhausted ? h('span', { class: 'chip red', title: '该额度已用完：上游会直接拒绝请求（不一定支持只用加量包）', style: 'margin-left:6px;font-size:11px' }, '已用尽') : null,
                 h('span', { class: 'pct', title: '剩余 ' + (Math.round(rem * 10) / 10) + '%', style: 'color:var(--' + (rem <= 10 ? 'red' : rem <= 40 ? 'amber' : 'green') + ')' }, Math.round(rem) + '%')),
               meter(rem, tone(rem)),
               w.resets_at ? h('div', { class: 'reset' }, fmtReset(new Date(w.resets_at * 1000).toISOString()) + ' 重置') : null));
@@ -321,8 +326,11 @@ export default {
         // 积分制渠道（Trae 等）只有余额、没有重置窗口，单独画一行余额，
         // 不能落到"没有可读的额度窗口"的空白提示里。
         const readAt = a.quota && a.quota.read_at ? fmtDate(a.quota.read_at, true, true) : '';
+        const balZero = /^0(\.0+)?\s/.test(creditsText) || creditsText === '0';
         inset.append(h('div', { class: 'acct-win' },
-          h('div', { class: 'row-h' }, h('span', { class: 'lbl' }, '积分余额'), h('span', { class: 'pct', style: 'color:var(--green)' }, creditsText)),
+          h('div', { class: 'row-h' }, h('span', { class: 'lbl' }, '积分余额'),
+            balZero ? h('span', { class: 'chip red', title: '余额为 0：上游会直接拒绝请求', style: 'margin-left:6px;font-size:11px' }, '已用尽') : null,
+            h('span', { class: 'pct', style: 'color:var(--' + (balZero ? 'red' : 'green') + ')' }, creditsText)),
           h('div', { class: 'reset' }, '积分制渠道 · 没有重置窗口' + (readAt ? ' · 读于 ' + readAt : ''))));
       } else {
         // 没有额度接口的渠道（额度只在厂商控制台里）不能显示成"读取失败"：
@@ -815,13 +823,14 @@ export default {
     /* ---------- 自定义渠道抽屉 ---------- */
     // 把渠道页的数据入口交给抽屉：保存后它要能拿到新的 custom-<id> provider，
     // 才能直接走 openProvider 的接入流程；重新 load 一次也能让卡片立刻出现。
+    // 这是**唯一**新建渠道入口：顶部常驻按钮、空态虚线卡、深链 aether.addProvider 都走它。
     function customChannelsDrawer() {
       openCustomChannels({ getProviders: () => state.providers, reload: load });
     }
 
-    /* ---------- 供应商抽屉 ---------- */
+    /* ---------- 渠道开关抽屉（只剩开关与预设：新建入口已并入「自定义渠道」） ---------- */
     function supplierDrawer() {
-      const d = drawer('供应商与开关', (body) => {
+      const d = drawer('渠道开关', (body) => {
         const list = h('div', { class: 'list' });
         for (const p of state.providers) {
           const sw = h('button', { class: 'toggle' + (p.off ? '' : ' on'), type: 'button', role: 'switch', 'aria-checked': p.off ? 'false' : 'true', onclick: async () => {
@@ -833,8 +842,7 @@ export default {
         }
         body.append(list);
         body.append(h('div', { class: 'inline', style: 'justify-content:flex-end;padding-top:10px' },
-          btn('管理预设', { ghost: true, onClick: () => ctx.navigate('settings', { tab: 'presets' }) }),
-          btn('＋ 添加自定义供应商', { primary: true, onClick: () => { d.close(); addProviderDialog(); } })));
+          btn('管理预设', { ghost: true, onClick: () => { d.close(); ctx.navigate('settings', { tab: 'presets' }); } })));
       });
     }
 
@@ -892,35 +900,9 @@ export default {
       });
     }
 
-    function addProviderDialog() {
-      const name = input({ placeholder: '例如：My Relay' });
-      const proto = select([{ value: 'chat', label: 'OpenAI Chat' }, { value: 'responses', label: 'Responses' }, { value: 'anthropic', label: 'Anthropic' }, { value: 'gemini', label: 'Gemini' }], 'chat', () => {});
-      const base = input({ placeholder: 'https://api.example.com/v1' });
-      const key = input({ type: 'password', placeholder: 'sk-…' });
-      const models = input({ placeholder: 'model-a, model-b（可留空）' });
-      const d = drawer('添加供应商', (body) => {
-        body.append(
-          field('名称', name), field('协议', proto), field('Base URL', base),
-          field('API Key', key), field('模型', models),
-          h('div', { class: 'meta' }, '自定义供应商会落到同协议的内置渠道上（OpenAI Chat→openai-compat，Responses→codex，Anthropic→claude-sub，Gemini→gemini-compat）。'),
-          h('div', { class: 'inline', style: 'justify-content:flex-end' },
-            btn('取消', { onClick: () => d.close() }),
-            btn('保存', { primary: true, onClick: async () => {
-              const nm = name.value.trim();
-              const url = base.value.trim();
-              if (!nm || !url) { toast('名称和 Base URL 都要填'); return; }
-              const id = nm.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'custom';
-              const payload = { id, name: nm, key: key.value, models: models.value.split(',').map((x) => x.trim()).filter(Boolean) };
-              payload[proto.value] = url;
-              try {
-                await api.post('provider/save', payload);
-                d.close();
-                toast('供应商已添加');
-                await load();
-              } catch (e) { toast('保存失败：' + (e.message || e)); }
-            } })));
-      });
-    }
+    // `addProviderDialog` 已删除：它和 customchannels.js 的抽屉是同一件事
+    // （后端 provider_api.go:206-252 对未注册 id 都会 upsert CustomChannel 再建账号）。
+    // 现在唯一的入口是 customChannelsDrawer。
 
     /* ---------- 导出（脱敏 / 含凭证加密） ---------- */
     function exportDialog() {

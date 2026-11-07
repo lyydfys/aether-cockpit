@@ -2289,6 +2289,9 @@ func quotaExhaustedHint(msg string) bool {
 		"freeusagelimiterror", "usage limit exceeded", "gousagelimiterror",
 		"额度已用尽", "额度已耗尽", "积分已用尽",
 		"insufficient account funds", "insufficient funds", "payment required", "余额不足",
+		// 英文渠道的"积分花完"写法：WorkBuddy 14018 = Credits exhausted，
+		// 单独列出来是因为它的文案里没有 quota/limit 这些词。
+		"credits exhausted", "credit exhausted", "no credits", "credits used up",
 	} {
 		if strings.Contains(m, strings.ToLower(sig)) {
 			return true

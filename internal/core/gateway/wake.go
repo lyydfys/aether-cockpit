@@ -265,11 +265,19 @@ func (g *Gateway) wakeCall(accountID, model string, maxTokens int, timeout time.
 	start := time.Now()
 	ch, err := chat.ChatStream(ctx, env, req)
 	if err != nil {
+		// 唤醒走的是渠道直连（不经过 dispatch 的罚分逻辑），所以失败必须在这里
+		// 自己标记账号状态：否则"额度耗尽"只会弹一条 toast，账号仍显示 ready，
+		// 下一次路由照样选它、再撞一次墙。
+		if ae := ir.AsAPIError(err); ae != nil {
+			g.penalizeModel(env, ae, usedModel)
+			return false, wakeFailText(ae), usedModel, time.Since(start).Milliseconds()
+		}
 		return false, err.Error(), usedModel, time.Since(start).Milliseconds()
 	}
 	// 首个有效事件即视为唤醒成功；之后继续把流读完，避免上游 goroutine 阻塞在缓冲通道上。
 	sawEvent := false
 	var firstErr string
+	var firstErrAPI *ir.APIError
 	for {
 		select {
 		case <-ctx.Done():
@@ -283,6 +291,11 @@ func (g *Gateway) wakeCall(accountID, model string, maxTokens int, timeout time.
 					return true, "", usedModel, time.Since(start).Milliseconds()
 				}
 				if firstErr != "" {
+					// 流内错误同样按额度/限流语义处理一次，保证状态与真实可用性一致。
+					if firstErrAPI != nil {
+						g.penalizeModel(env, firstErrAPI, usedModel)
+						firstErr = wakeFailText(firstErrAPI)
+					}
 					return false, firstErr, usedModel, time.Since(start).Milliseconds()
 				}
 				return true, "", usedModel, time.Since(start).Milliseconds()
@@ -290,7 +303,10 @@ func (g *Gateway) wakeCall(accountID, model string, maxTokens int, timeout time.
 			switch ev.Type {
 			case ir.EventError:
 				if firstErr == "" {
-					if ev.Err != nil {
+					if ae := ir.AsAPIError(ev.Err); ae != nil {
+						firstErrAPI = ae
+						firstErr = wakeFailText(ae)
+					} else if ev.Err != nil {
 						firstErr = ev.Err.Error()
 					} else {
 						firstErr = "上游返回错误"
@@ -561,4 +577,36 @@ func truncateWake(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// wakeFailText 把上游错误翻译成"用户能据此行动"的一句话。
+//
+// 直接抛 err.Error() 会出现 `upstream_rate_limited: Qoder 账号额度已用尽（上游 400：
+// {"code":"400","message":"[FAIL]node:agent_router ..."}）` 这种把协议细节糊在脸上的
+// 文案：用户既不知道是不是自己配错了，也不知道该等还是该换账号。
+func wakeFailText(ae *ir.APIError) string {
+	if ae == nil {
+		return "未知错误"
+	}
+	if quotaExhaustedHint(ae.Message) {
+		return "账号额度已用尽，唤醒不会产生流量；充值或换账号后再试（原始信息：" + brief(ae.Message, 120) + "）"
+	}
+	switch ae.Code {
+	case ir.ErrCodeUpstreamRateLimit:
+		return "上游限流，稍后自动重试（" + brief(ae.Message, 120) + "）"
+	case ir.ErrCodeUpstreamAuth:
+		return "登录态失效，请重新导入或粘贴 Token（" + brief(ae.Message, 120) + "）"
+	case ir.ErrCodeUpstreamFailed:
+		return "上游不可达或返回异常（" + brief(ae.Message, 120) + "）"
+	}
+	return ae.Message
+}
+
+// brief 截断长文案（保留头部，超出补省略号）。
+func brief(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if n > 0 && len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
