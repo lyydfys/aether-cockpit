@@ -61,13 +61,15 @@ export function channelNetFields(providerId, baseUrl) {
   const autoPath = input({ value: '' , placeholder: '/v1/models（留空 = /cdn-cgi/trace）' });
   const autoInterval = input({ ...NUM, placeholder: '300' });
   const autoThreshold = input({ ...NUM, placeholder: '150' });
+  const autoHealth = input({ ...NUM, placeholder: '30' });
   const autoStatus = h('div', { class: 'meta', style: 'line-height:1.6' });
   const autoBtn = btn('开启自动切换', { ghost: true, onClick: () => setAuto(true) });
   const autoOff = btn('关闭', { ghost: true, onClick: () => setAuto(false) });
   const autoBlock = h('div', { style: 'display:grid;gap:8px' },
     h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' }, autoPath,
       h('span', { class: 'meta' }, '重扫(秒)'), autoInterval,
-      h('span', { class: 'meta' }, '阈值(ms)'), autoThreshold),
+      h('span', { class: 'meta' }, '阈值(ms)'), autoThreshold,
+      h('span', { class: 'meta' }, '采样(秒)'), autoHealth),
     h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' }, autoBtn, autoOff),
     autoStatus,
     h('div', { class: 'meta', style: 'line-height:1.6' },
@@ -80,6 +82,11 @@ export function channelNetFields(providerId, baseUrl) {
   loadProfile();
   loadPins();
   loadAuto();
+  // 页面打开期间每 15 秒刷新一次运行态（劣化告警），离开后自动停。
+  const poll = setInterval(() => {
+    if (!box.isConnected) { clearInterval(poll); return; }
+    loadAuto();
+  }, 15000);
   return box;
 
   async function loadProfile() {
@@ -151,6 +158,7 @@ export function channelNetFields(providerId, baseUrl) {
       if (cfg.path) autoPath.value = cfg.path;
       if (cfg.interval_sec) autoInterval.value = String(cfg.interval_sec);
       if (cfg.threshold_ms) autoThreshold.value = String(cfg.threshold_ms);
+      if (cfg.health_sec) autoHealth.value = String(cfg.health_sec);
       const pins = (row.pins || []).join(', ');
       const bits = [];
       if (pins) bits.push('当前线路 ' + pins);
@@ -160,7 +168,15 @@ export function channelNetFields(providerId, baseUrl) {
       if (st.switches) bits.push('已切换 ' + st.switches + ' 次');
       if (st.reason) bits.push(st.reason);
       if (st.error) bits.push('错误：' + st.error);
-      autoStatus.append(h('span', null, bits.join(' · ') || '等待首轮检测'));
+      autoStatus.append(h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' },
+        st.degraded ? chip('线路劣化', 'red') : chip(cfg.enabled ? '监控中' : '未监控', cfg.enabled ? 'green' : 'plain'),
+        h('span', null, bits.join(' · ') || '等待首轮检测')));
+      for (const a of (st.alerts || []).slice(0, 3)) {
+        const t2 = new Date((a.at || 0) * 1000);
+        const hhmm = String(t2.getHours()).padStart(2, '0') + ':' + String(t2.getMinutes()).padStart(2, '0');
+        autoStatus.append(h('div', { class: 'meta', style: 'color:' + (a.level === 'warn' ? 'var(--red, #dc2626)' : 'inherit') },
+          hhmm + ' · ' + (a.message || '')));
+      }
     } catch (e) {
       autoStatus.append(h('span', null, '读取失败：' + (e.message || e)));
     }
@@ -176,6 +192,7 @@ export function channelNetFields(providerId, baseUrl) {
         path: autoPath.value.trim(),
         interval_sec: Number(autoInterval.value) || 0,
         threshold_ms: Number(autoThreshold.value) || 0,
+        health_sec: Number(autoHealth.value) || 0,
       });
       toast(enabled ? '已开启，首轮检测在后台进行' : '已关闭自动切换');
       await loadAuto();

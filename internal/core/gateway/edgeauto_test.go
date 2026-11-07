@@ -200,3 +200,21 @@ func TestEdgeAutoConfigPersist(t *testing.T) {
 	}
 	_ = fmt.Sprintf("%v", raw)
 }
+
+// 健康采样间隔：默认 30s，允许调密（最快 5s），也防手滑设成 1s 打爆上游。
+func TestEdgeAutoHealthInterval(t *testing.T) {
+	cases := []struct {
+		sec  int
+		want time.Duration
+	}{
+		{0, 30 * time.Second},
+		{5, 5 * time.Second},
+		{15, 15 * time.Second},
+		{600, 300 * time.Second},
+	}
+	for _, c := range cases {
+		if got := (EdgeAutoConfig{HealthSec: c.sec}).healthInterval(); got != c.want {
+			t.Errorf("HealthSec=%d → %v，want %v", c.sec, got, c.want)
+		}
+	}
+}

@@ -21,12 +21,15 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"aether-cockpit/internal/core/eventbus"
 )
 
 // EdgeAutoConfig 是某个域名的自动切换配置。
@@ -39,6 +42,9 @@ type EdgeAutoConfig struct {
 	IntervalSec int `json:"interval_sec,omitempty"`
 	// ThresholdMS 是切换阈值（毫秒），默认 150。
 	ThresholdMS int `json:"threshold_ms,omitempty"`
+	// HealthSec 是"当前线路健康采样"的间隔（秒），默认 30、最小 5。
+	// 采样越密越快发现劣化，但探测流量也越大。
+	HealthSec int `json:"health_sec,omitempty"`
 }
 
 func (c EdgeAutoConfig) interval() time.Duration {
@@ -48,6 +54,20 @@ func (c EdgeAutoConfig) interval() time.Duration {
 	}
 	if sec < 60 {
 		sec = 60
+	}
+	return time.Duration(sec) * time.Second
+}
+
+func (c EdgeAutoConfig) healthInterval() time.Duration {
+	sec := c.HealthSec
+	if sec <= 0 {
+		sec = 30
+	}
+	if sec < 5 {
+		sec = 5
+	}
+	if sec > 300 {
+		sec = 300
 	}
 	return time.Duration(sec) * time.Second
 }
@@ -78,6 +98,20 @@ type EdgeAutoState struct {
 	LastSwitch int64  `json:"last_switch,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	Error      string `json:"error,omitempty"`
+
+	// 健康监测：两次全量扫描之间的高频采样结果与告警。
+	Degraded   bool        `json:"degraded,omitempty"`
+	HealthMS   int64       `json:"health_ms,omitempty"`
+	BaselineMS int64       `json:"baseline_ms,omitempty"`
+	LastAlert  int64       `json:"last_alert,omitempty"`
+	Alerts     []EdgeAlert `json:"alerts,omitempty"`
+}
+
+// EdgeAlert 是一条线路告警（劣化/恢复），给界面与事件流用。
+type EdgeAlert struct {
+	At      int64  `json:"at"`
+	Level   string `json:"level"` // warn | info
+	Message string `json:"message"`
 }
 
 type edgeAutoRuntime struct {
@@ -86,6 +120,169 @@ type edgeAutoRuntime struct {
 }
 
 var edgeAuto = &edgeAutoRuntime{state: map[string]*EdgeAutoState{}}
+
+// edgeHealthTrack 是「高频健康采样」的滚动窗口。
+//
+// 全量扫描间隔默认 5 分钟，太慢，链路中途劣化时用户早就卡住了。这里用 30 秒一次
+// 的单次采样做劣化检测：连续失败、或明显慢于自身基线时告警，并立刻触发一次切换。
+type edgeHealthTrack struct {
+	mu        sync.Mutex
+	samples   []int64 // 最近的成功样本（毫秒）
+	fails     int     // 连续失败次数
+	lastProbe time.Time
+	lastScan  time.Time
+}
+
+var edgeHealth = struct {
+	mu sync.Mutex
+	m  map[string]*edgeHealthTrack
+}{m: map[string]*edgeHealthTrack{}}
+
+func healthTrackFor(host string) *edgeHealthTrack {
+	edgeHealth.mu.Lock()
+	defer edgeHealth.mu.Unlock()
+	t := edgeHealth.m[host]
+	if t == nil {
+		t = &edgeHealthTrack{}
+		edgeHealth.m[host] = t
+	}
+	return t
+}
+
+// appendEdgeAlert 往状态里追加一条告警（最多保留 10 条，新的在前）。
+func appendEdgeAlert(st *EdgeAutoState, level, msg string, at int64) {
+	if at == 0 {
+		at = time.Now().Unix()
+	}
+	alert := EdgeAlert{At: at, Level: level, Message: msg}
+	st.Alerts = append([]EdgeAlert{alert}, st.Alerts...)
+	if len(st.Alerts) > 10 {
+		st.Alerts = st.Alerts[:10]
+	}
+	st.LastAlert = at
+}
+
+// medianInts 返回中位数（入参会被排序副本，不改原切片）。
+func medianInts(vals []int64) int64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	cp := append([]int64(nil), vals...)
+	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
+	return cp[len(cp)/2]
+}
+
+// checkEdgeHealth 采样一次当前线路，必要时告警并触发切换。
+//
+// 返回 true 表示本轮判定为"劣化且已触发处置"（供测试与日志使用）。
+func (g *Gateway) checkEdgeHealth(ctx context.Context, host string, cfg EdgeAutoConfig) bool {
+	ips := g.hostPins().Get(host)
+	if len(ips) == 0 {
+		return false
+	}
+	t := healthTrackFor(host)
+	t.mu.Lock()
+	t.lastProbe = time.Now()
+	lastScan := t.lastScan
+	t.mu.Unlock()
+
+	probe := g.edgeProbe(ctx, host, ips[0], cfg.Path, 6*time.Second)
+	st := edgeAuto.snapshot(host)
+	st.Host, st.Enabled, st.Path = host, cfg.Enabled, strings.TrimSpace(cfg.Path)
+
+	// 连续失败：链路基本不可用，立即告警并触发切换。
+	if !probe.OK {
+		t.mu.Lock()
+		t.fails++
+		fails := t.fails
+		t.mu.Unlock()
+		if fails >= 2 && !st.Degraded {
+			st.Degraded = true
+			appendEdgeAlert(&st, "warn", "当前线路连续失败（"+probe.Error+"），正在尝试切换", time.Now().Unix())
+			edgeAuto.update(st)
+			eventbus.Default().Publish("network.edge_degraded", map[string]any{
+				"host": host, "reason": probe.Error, "fails": fails,
+			})
+			g.triggerEdgeAutoSwitch(ctx, host, cfg, time.Since(lastScan))
+			return true
+		}
+		st.HealthMS = 0
+		edgeAuto.update(st)
+		return false
+	}
+
+	// 成功样本：更新窗口与基线。
+	t.mu.Lock()
+	t.fails = 0
+	t.samples = append(t.samples, probe.TTFBMS)
+	if len(t.samples) > 5 {
+		t.samples = t.samples[len(t.samples)-5:]
+	}
+	samples := append([]int64(nil), t.samples...)
+	t.mu.Unlock()
+
+	st.HealthMS = probe.TTFBMS
+	if len(samples) >= 3 {
+		// 基线取"除当前这次以外"的历史中位数，避免把劣化值混进基线。
+		st.BaselineMS = medianInts(samples[:len(samples)-1])
+	}
+
+	slow := st.BaselineMS > 0 &&
+		probe.TTFBMS > st.BaselineMS+max(200, st.BaselineMS/2)
+
+	if !st.Degraded && slow {
+		st.Degraded = true
+		appendEdgeAlert(&st, "warn",
+			fmt.Sprintf("当前线路变慢：%dms（基线 %dms），正在评估切换", probe.TTFBMS, st.BaselineMS),
+			time.Now().Unix())
+		edgeAuto.update(st)
+		eventbus.Default().Publish("network.edge_degraded", map[string]any{
+			"host": host, "now_ms": probe.TTFBMS, "baseline_ms": st.BaselineMS,
+		})
+		g.triggerEdgeAutoSwitch(ctx, host, cfg, time.Since(lastScan))
+		return true
+	}
+	if st.Degraded && !slow && len(samples) >= 2 {
+		st.Degraded = false
+		appendEdgeAlert(&st, "info",
+			fmt.Sprintf("当前线路已恢复：%dms（基线 %dms）", probe.TTFBMS, st.BaselineMS),
+			time.Now().Unix())
+		edgeAuto.update(st)
+		eventbus.Default().Publish("network.edge_recovered", map[string]any{
+			"host": host, "now_ms": probe.TTFBMS, "baseline_ms": st.BaselineMS,
+		})
+		return false
+	}
+	edgeAuto.update(st)
+	return false
+}
+
+// triggerEdgeAutoSwitch 在劣化时立刻跑一轮完整扫描（有最小间隔，避免打爆上游）。
+func (g *Gateway) triggerEdgeAutoSwitch(ctx context.Context, host string, cfg EdgeAutoConfig, sinceScan time.Duration) {
+	t := healthTrackFor(host)
+	t.mu.Lock()
+	if time.Since(t.lastScan) < 45*time.Second {
+		t.mu.Unlock()
+		return
+	}
+	t.lastScan = time.Now()
+	t.mu.Unlock()
+
+	go func() {
+		runCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		st := g.runEdgeAutoOnce(runCtx, host, cfg)
+		t.mu.Lock()
+		t.lastScan = time.Now()
+		t.mu.Unlock()
+		if len(st.CurrentIPs) > 0 && st.CurrentIPs[0] != "" {
+			cur := edgeAuto.snapshot(host)
+			appendEdgeAlert(&cur, "info", "已应用新线路 "+strings.Join(st.CurrentIPs, ", "), time.Now().Unix())
+			edgeAuto.update(cur)
+		}
+	}()
+	_ = ctx
+}
 
 func (r *edgeAutoRuntime) snapshot(host string) EdgeAutoState {
 	r.mu.Lock()
@@ -237,6 +434,12 @@ func (g *Gateway) runEdgeAutoOnce(ctx context.Context, host string, cfg EdgeAuto
 		st.CurrentOK = 3
 		st.Switches++
 		st.LastSwitch = time.Now().Unix()
+		// 切完后重置健康窗口：旧基线已经不代表新线路。
+		t := healthTrackFor(host)
+		t.mu.Lock()
+		t.samples = nil
+		t.fails = 0
+		t.mu.Unlock()
 	}
 	edgeAuto.update(st)
 	return st
@@ -287,6 +490,7 @@ func (g *Gateway) StartEdgeAuto(ctx context.Context, tick time.Duration) func() 
 		timer := time.NewTicker(tick)
 		defer timer.Stop()
 		var lastRun = map[string]time.Time{}
+		var lastHealth = map[string]time.Time{}
 		for {
 			select {
 			case <-ctx.Done():
@@ -294,13 +498,25 @@ func (g *Gateway) StartEdgeAuto(ctx context.Context, tick time.Duration) func() 
 			case <-timer.C:
 			}
 			for host, cfg := range g.edgeAutoHosts() {
+				// 高频健康采样：30 秒一次单探针，用于「劣化即时告警」。
+				if time.Since(lastHealth[host]) >= cfg.healthInterval() {
+					lastHealth[host] = time.Now()
+					hCtx, hCancel := context.WithTimeout(ctx, 20*time.Second)
+					go func(host string, cfg EdgeAutoConfig) {
+						defer hCancel()
+						g.checkEdgeHealth(hCtx, host, cfg)
+					}(host, cfg)
+				}
+				// 全量扫描：按域名自己的 interval（默认 300 秒）。
 				if t, ok := lastRun[host]; ok && time.Since(t) < cfg.interval() {
 					continue
 				}
 				lastRun[host] = time.Now()
-				runCtx, runCancel := context.WithTimeout(ctx, 90*time.Second)
-				g.runEdgeAutoOnce(runCtx, host, cfg)
-				runCancel()
+				runCtx, runCancel := context.WithTimeout(ctx, 120*time.Second)
+				go func(host string, cfg EdgeAutoConfig) {
+					defer runCancel()
+					g.runEdgeAutoOnce(runCtx, host, cfg)
+				}(host, cfg)
 			}
 		}
 	}()
@@ -338,6 +554,7 @@ func (g *Gateway) handleEdgeAuto(w http.ResponseWriter, r *http.Request) {
 		Path        string `json:"path"`
 		IntervalSec int    `json:"interval_sec"`
 		ThresholdMS int    `json:"threshold_ms"`
+		HealthSec   int    `json:"health_sec"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体解析失败: " + err.Error()})
@@ -358,6 +575,9 @@ func (g *Gateway) handleEdgeAuto(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.ThresholdMS > 0 {
 		cfg.ThresholdMS = body.ThresholdMS
+	}
+	if body.HealthSec > 0 {
+		cfg.HealthSec = body.HealthSec
 	}
 
 	g.settingsMu.Lock()

@@ -4,6 +4,7 @@ import * as router from './router.js';
 import { createShell } from './shell.js';
 import { toast } from './components.js';
 import { initLocale } from './i18n.js';
+import { startNetAlerts } from './netalerts.js';
 import overview from './views/overview.js';
 
 const lazy = (load) => () => load().then((m) => m.default);
@@ -42,5 +43,7 @@ addEventListener('unhandledrejection', (e) => {
 });
 
 await initLocale();
+// 线路劣化/恢复的全局即时告警（SSE）。
+startNetAlerts();
 const shell = createShell({ navigate: router.navigate });
 router.start((r, view) => shell.onRoute(r, view));
