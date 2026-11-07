@@ -1742,7 +1742,7 @@ internal fun quotaReadLogLine(log: QuotaReadLog): String {
 }
 
 /* ========================================================================== */
-/* 自定义渠道（custom-channels）：注册一个新渠道行（与「自定义供应商」不同）   */
+/* 自定义渠道（custom-channels）：注册一个新渠道行（唯一的新建入口）         */
 /* ========================================================================== */
 
 sealed interface CustomChannelsUiState {

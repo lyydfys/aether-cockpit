@@ -58,6 +58,10 @@ type CustomChannel struct {
 func customChannelProviderID(id string) string { return "custom-" + id }
 
 // slugifyCustomID 把用户输入变成合法 id（小写字母/数字/连字符）。
+//
+// 非 ASCII（中文、日文等）不会被转写——它们直接落到 `default` 分支变成连字符，
+// 于是「公司中转」这类纯中文名字会被清成空串。调用方必须能接受空结果并再挑一个
+// 稳定的回退标识（见 `customChannelSlug`）。
 func slugifyCustomID(raw string) string {
 	raw = strings.ToLower(strings.TrimSpace(raw))
 	var b strings.Builder
@@ -278,13 +282,26 @@ func (g *Gateway) upsertCustomChannelFromDraft(d *providerDraft) (CustomChannel,
 		base, protocol = trimEndpoint(d.Anthropic), "anthropic"
 	}
 
+	// slug 的挑选顺序：
+	//   1. 前端给的 id（已带 custom- 前缀也兼容）
+	//   2. 渠道名
+	//   3. 名字/地址派生：`relay-<地址短哈希>`
+	//
+	// 第 2 步对纯中文名会得到空串（非 ASCII 会被 slugify 清掉），所以必须走到第 3 步。
+	// 第 3 步用**名字**优先派生（同一名字重复保存得到同一 slug），只有名字也为空时才用地址，
+	// 这样「公司中转」这类渠道的 id 至少是 `relay-<name-hash>`，而不是空或不可读的串。
 	slug := slugifyCustomID(strings.TrimPrefix(strings.TrimSpace(d.ID), "custom-"))
 	if slug == "" {
 		slug = slugifyCustomID(d.Name)
 	}
-	if slug == "" && base != "" {
-		// 前端没给 id/name 时用地址派生，保证同一供应商重复保存仍是同一个 slug。
-		slug = slugifyCustomID("relay-" + shortHash(base))
+	if slug == "" {
+		seed := strings.TrimSpace(d.Name)
+		if seed == "" {
+			seed = base
+		}
+		if seed != "" {
+			slug = "relay-" + shortHash(seed)
+		}
 	}
 	if slug == "" {
 		return CustomChannel{}, false, nil
@@ -343,6 +360,8 @@ func (g *Gateway) upsertCustomChannelFromDraft(d *providerDraft) (CustomChannel,
 		// 新渠道的 manifest 立即进入路由表，不用等下一次模型刷新。
 		g.models.Rebuild()
 	}
+	// 模型探测不在这里发起：此时账号还没建，探测拿不到 key。由调用方在
+	// 账号建好之后触发（provider_api 的保存流程 / handleCustomChannelSave）。
 	return norm, true, nil
 }
 
@@ -404,6 +423,9 @@ func (g *Gateway) handleCustomChannelSave(w http.ResponseWriter, r *http.Request
 		return
 	}
 	g.syncCustomChannels()
+	if len(ch.Models) == 0 {
+		g.startCustomChannelModelProbe(ch.ID)
+	}
 	ch.ID = strings.TrimPrefix(ch.ID, "custom-")
 	writeJSON(w, http.StatusOK, map[string]any{"channel": ch})
 }
@@ -439,6 +461,35 @@ func (g *Gateway) handleCustomChannelDelete(w http.ResponseWriter, r *http.Reque
 	}
 	g.syncCustomChannels()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleCustomChannelRefreshModels POST /api/custom-channels/{id}/refresh-models
+//
+// 同步拉一次上游模型清单并写回渠道（手动入口；后台自动探测见 custom_models.go）。
+// 失败返回错误但**不改动**已有清单。
+func (g *Gateway) handleCustomChannelRefreshModels(w http.ResponseWriter, r *http.Request) {
+	id := slugifyCustomID(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "缺少渠道 ID"})
+		return
+	}
+	models, err := g.RefreshCustomChannelModels(id)
+	if err != nil {
+		status := http.StatusBadGateway
+		if err == errCustomChannelNotFound {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]any{"error": err.Error()})
+		return
+	}
+	if len(models) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "count": 0, "models": []string{},
+			"error": "上游没有返回模型；渠道仍支持 custom-xxx/<任意模型> 透传",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(models), "models": models})
 }
 
 // handleCustomChannelProbe POST /api/custom-channels/probe

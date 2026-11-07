@@ -5,6 +5,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -70,6 +72,9 @@ import org.json.JSONObject
 import com.muyuchat.aether.runtime.AccountCheckin
 import com.muyuchat.aether.runtime.AccountQuotaRow
 import com.muyuchat.aether.runtime.AccountSettingsPatch
+import com.muyuchat.aether.runtime.WorkBuddyIdentityApiClient
+import com.muyuchat.aether.runtime.WorkBuddyIdentityState
+import com.muyuchat.aether.runtime.workBuddyIdentityLiveName
 import com.muyuchat.aether.runtime.MAX_ACCOUNT_TAGS
 import com.muyuchat.aether.runtime.RequestPreset
 import com.muyuchat.aether.runtime.parseTagInput
@@ -155,6 +160,13 @@ internal fun ChannelsPage(
     onToggleProvider: (String, Boolean) -> Unit = { _, _ -> },
     /** 打开「接入渠道」页（桌面 `channels.js:176/188` 的入口）；为 null 时不画入口。 */
     onOpenOnboard: (() -> Unit)? = null,
+    /**
+     * 跳到「设置 → 预设」（渠道卡里的「预设」弹窗在空列表时给的入口）。
+     * 为 null 时不画那个按钮，避免点了没反应。
+     */
+    onOpenPresets: (() -> Unit)? = null,
+    /** 跳到「设置 → 网络与共享 → WorkBuddy 出网身份」；为 null 时该行不可点。 */
+    onOpenWorkBuddyIdentity: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -262,7 +274,9 @@ internal fun ChannelsPage(
                     )
                 }
                 AetherPillButton(
-                    text = "自定义渠道",
+                    // 常驻入口（对齐桌面 `channels.js:210` 的「＋ 自定义渠道」）：
+                    // 不依赖账号数量，任何时候都能注册一条第三方中转站渠道。
+                    text = "＋ 自定义渠道",
                     onClick = { showCustomChannels = true },
                 )
             }
@@ -290,8 +304,7 @@ internal fun ChannelsPage(
                     item {
                         StateCard(
                             title = "还没有账号",
-                            detail = "点上方「接入渠道」选择接入方式：Qoder 设备码登录，或导入加密账号包。" +
-                                "想注册一个新渠道行，用「自定义渠道」。",
+                            detail = "点上方「接入渠道」接入内置渠道，或用「＋ 自定义渠道」注册一个第三方中转站。",
                             actionLabel = if (onOpenOnboard != null) "接入渠道" else null,
                             onAction = onOpenOnboard,
                         )
@@ -383,6 +396,8 @@ internal fun ChannelsPage(
                                         selectedIds = (selectedIds + row.accountId).distinct()
                                     }
                                 },
+                                onOpenPresets = onOpenPresets,
+                                onOpenWorkBuddyIdentity = onOpenWorkBuddyIdentity,
                             )
                         }
                     }
@@ -512,6 +527,8 @@ private fun AccountCard(
     onTestProvider: (String) -> Unit,
     onSelect: () -> Unit,
     onLongPress: () -> Unit,
+    onOpenPresets: (() -> Unit)? = null,
+    onOpenWorkBuddyIdentity: (() -> Unit)? = null,
 ) {
     AccountQuotaCard(
         row = row,
@@ -537,6 +554,8 @@ private fun AccountCard(
         onLoadModels = { onLoadModels(row.providerId) },
         onToggleProvider = { enable -> onToggleProvider(row.providerId, enable) },
         onTest = { onTestProvider(row.providerId) },
+        onOpenPresets = onOpenPresets,
+        onOpenWorkBuddyIdentity = onOpenWorkBuddyIdentity,
     )
 }
 
@@ -890,6 +909,10 @@ private fun AccountQuotaCard(
     onLoadModels: () -> Unit,
     onToggleProvider: (Boolean) -> Unit,
     onTest: () -> Unit,
+    /** 跳到「设置 → 预设」；null 时不画按钮（见 `ChannelsPage` 同名参数）。 */
+    onOpenPresets: (() -> Unit)? = null,
+    /** 跳到「设置 → WorkBuddy 出网身份」；null 时该行不可点。 */
+    onOpenWorkBuddyIdentity: (() -> Unit)? = null,
 ) {
     var confirmToggle by remember(row.accountId) { mutableStateOf(false) }
     val busyToggle = action is AccountActionUiState.Busy &&
@@ -1050,6 +1073,17 @@ private fun AccountQuotaCard(
                 )
             }
 
+            // WorkBuddy 系渠道：显示当前出网身份档位（点击进设置页切换）。
+            // 只有接了 workbuddy 渠道才有意义；其它渠道不渲染这一行。
+            if (!selectionMode && provider != null && isWorkBuddyProvider(provider.id)) {
+                Spacer(Modifier.height(8.dp))
+                WorkBuddyIdentitySummary(
+                    status = status,
+                    onOpen = onOpenPresets,
+                    onOpenIdentity = onOpenWorkBuddyIdentity,
+                )
+            }
+
             // 动作行（桌面 `acct-foot` 的右侧动作）：读取额度 + 更多。
             // 查看模型 / 测试 / 启停都收进「更多」菜单，卡片上只留最常用的一颗。
             // 用横滚而不是换行：1.3× 字号下并排两三个中文按钮会被压成竖排单字。
@@ -1126,6 +1160,9 @@ private fun AccountQuotaCard(
         onSetDisabled = onSetDisabled,
         onLoadModels = onLoadModels,
         onConfirmToggleChannel = { confirmToggle = true },
+        onOpenPresets = onOpenPresets ?: {},
+        hasOpenPresets = onOpenPresets != null,
+        onOpenWorkBuddyIdentity = onOpenWorkBuddyIdentity,
     )
 }
 
@@ -1485,8 +1522,10 @@ private fun ProviderModelsDialog(
         title = {
             Text(
                 text = "${provider.name} 的模型",
+                // 1.3× 字号下默认标题会把「型」孤字折到第二行；降一级并强制单行省略。
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         },
@@ -1668,12 +1707,20 @@ private fun ProviderModelsDialog(
                         ) { Text("取消", maxLines = 1) }
                     }
                 } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // 两按钮等宽：1.3× 字号下"从上游刷新"否则会被行宽裁掉最后一个字。
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         McaButton(
                             onClick = { showAdd = true },
                             style = McaButtonStyle.Outlined,
                             enabled = !busy,
-                        ) { Text("+ 添加模型", maxLines = 1) }
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            // 短标签：1.3× 字号下等宽按钮的可用文本宽度放不下「+ 添加模型」。
+                            Text("添加模型", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                         // 桌面 `channels.js:1052-1064` 的「从上游刷新」：
                         // POST /api/providers/{id}/models/refresh，成功后列表就地重读。
                         McaButton(
@@ -1683,7 +1730,12 @@ private fun ProviderModelsDialog(
                             },
                             style = McaButtonStyle.Outlined,
                             enabled = !busy,
-                        ) { Text("从上游刷新", maxLines = 1) }
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            // 桌面文案是「从上游刷新」；1.3× 字号下 5 字会被裁成 4 字，
+                            // 这里用等义短标签，完整说明见下方长文案。
+                            Text("刷新模型", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -2757,6 +2809,9 @@ private fun AccountSheets(
     onSetDisabled: (Boolean) -> Unit,
     onLoadModels: () -> Unit,
     onConfirmToggleChannel: () -> Unit,
+    onOpenPresets: () -> Unit,
+    hasOpenPresets: Boolean,
+    onOpenWorkBuddyIdentity: (() -> Unit)? = null,
 ) {
     if (sheet == CardSheet.NONE) {
         return
@@ -2919,6 +2974,8 @@ private fun AccountSheets(
                         presetsState = presetsState,
                         saving = savingKind == AccountEditKind.PRESETS,
                         onAction = onAction,
+                        onOpenPresets = onOpenPresets,
+                        hasOpenPresets = hasOpenPresets,
                     )
                 }
                 CardSheet.COPY -> {
@@ -3333,6 +3390,11 @@ private fun AccountNoteBody(
  * 服务端是整表替换（`SetModelMapping`，`provider/internal/provider/env.go:585-602`），
  * 所以这里把当前值全量预填、提交全量；"留空 = 清除映射"也要说清楚，否则用户会以为清空没生效。
  */
+private data class MappingRow(
+    val clientModel: String,
+    val upstreamModel: String,
+)
+
 @Composable
 private fun AccountMappingBody(
     row: AccountQuotaRow,
@@ -3342,48 +3404,303 @@ private fun AccountMappingBody(
     onSaved: () -> Unit,
 ) {
     CloseOnSaved(edit, onSaved)
-    var text by remember(row.accountId) {
-        mutableStateOf(formatAccountMappingLines(row.modelMapping))
-    }
-    val parsed = parseAccountMappingLines(text)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ChannelTextField(
-            value = text,
-            onValueChange = { text = it },
-            label = "映射（一行一条）",
-            placeholder = "gpt-4o=gpt-4o-2024-11-20\nclaude-3-5=claude-sonnet-4",
-            singleLine = false,
-            minHeight = 120,
+    
+    // 状态管理：逐行列表 + 原始文本 + Tab 切换
+    var rows by remember(row.accountId) { 
+        mutableStateOf(
+            row.modelMapping.toList().map { MappingRow(it.first, it.second) }
         )
+    }
+    var rawText by remember(rows) { 
+        mutableStateOf(rows.joinToString("\n") { "${it.clientModel}=${it.upstreamModel}" })
+    }
+    var activeTab by remember { mutableStateOf(0) } // 0=逐行编辑，1=原始文本
+    var showClearDialog by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(rows) { rawText = rows.joinToString("\n") { "${it.clientModel}=${it.upstreamModel}" } }
+    
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // 顶部计数
         Text(
-            text = "格式：`客户端模型名=该账号真实上游模型名`，一行一条；`#` 开头是注释。" +
-                "共 ${parsed.size} 条生效。" +
-                "留空提交 = 清除全部映射（服务端整表替换，不是增量）。",
+            text = "当前 ${rows.size} 条生效",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        EditFailureLine(edit, row.accountId, AccountEditKind.MAPPING)
-        McaButton(
-            onClick = {
-                onAction(
-                    ChannelsAction.SetAccountMapping(
-                        providerId = row.providerId,
-                        accountId = row.accountId,
-                        mapping = parsed,
-                    ),
+        
+        // Tab 切换
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (activeTab == 0) "逐行编辑" else "原始文本",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                McaButton(
+                    onClick = { activeTab = 0 },
+                    style = if (activeTab == 0) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                    enabled = !saving,
+                ) { Text("逐行") }
+                McaButton(
+                    onClick = { activeTab = 1 },
+                    style = if (activeTab == 1) McaButtonStyle.Primary else McaButtonStyle.Outlined,
+                    enabled = !saving,
+                ) { Text("文本") }
+            }
+        }
+        
+        Spacer(Modifier.height(8.dp))
+        
+        when (activeTab) {
+            0 -> {
+                // 逐行编辑模式
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    rows.forEachIndexed { index, row ->
+                        val errors = validateMappingRow(row)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .then(if (errors.isNotEmpty()) Modifier.border(1.dp, MaterialTheme.colorScheme.error) else Modifier),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            BasicTextField(
+                                value = row.clientModel,
+                                onValueChange = { 
+                                    rows = rows.toMutableList().apply { set(index, row.copy(clientModel = it)) }
+                                },
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                                textStyle = MaterialTheme.typography.bodySmall.copy(
+                                    color = if (errors.any { it.contains("客户端") }) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                ),
+                            )
+                            Text(" → ", style = MaterialTheme.typography.bodySmall)
+                            BasicTextField(
+                                value = row.upstreamModel,
+                                onValueChange = { 
+                                    rows = rows.toMutableList().apply { set(index, row.copy(upstreamModel = it)) }
+                                },
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                                textStyle = MaterialTheme.typography.bodySmall.copy(
+                                    color = if (errors.any { it.contains("上游") }) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                ),
+                            )
+                            AetherCompactIconButton(
+                                iconRes = R.drawable.ic_close,
+                                contentDescription = "删除这一行",
+                                onClick = { rows = rows.filterIndexed { i, _ -> i != index } },
+                                enabled = !saving,
+                            )
+                        }
+                        if (errors.isNotEmpty()) {
+                            Text(
+                                text = errors.joinToString(", "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    
+                    McaButton(
+                        onClick = { rows = rows + MappingRow("", "") },
+                        style = McaButtonStyle.Outlined,
+                        enabled = !saving,
+                    ) { Text("+ 添加一行") }
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    McaButton(
+                        onClick = {
+                            if (rows.isEmpty()) {
+                                showClearDialog = true
+                            } else {
+                                val mappingMap = rows.associate { it.clientModel to it.upstreamModel }
+                                onAction(ChannelsAction.SetAccountMapping(row.providerId, row.accountId, mappingMap))
+                                onSaved()
+                            }
+                        },
+                        style = McaButtonStyle.Primary,
+                        enabled = !saving && rows.all { it.clientModel.isNotBlank() && it.upstreamModel.isNotBlank() && !it.clientModel.contains("/") && !it.upstreamModel.contains("/") },
+                    ) { Text(if (saving) "保存中…" else "保存") }
+                    McaButton(onClick = onSaved, style = McaButtonStyle.Outlined) { Text("取消") }
+                }
+            }
+            
+            1 -> {
+                // 原始文本模式
+                BasicTextField(
+                    value = rawText,
+                    onValueChange = { 
+                        rawText = it
+                        rows = it.split("\n").filter { line -> line.isNotBlank() }.map { line ->
+                            val parts = line.split("=")
+                            if (parts.size == 2) MappingRow(parts[0].trim(), parts[1].trim()) else MappingRow("", "")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp).padding(8.dp),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 )
+                
+                Spacer(Modifier.height(8.dp))
+                
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    McaButton(
+                        onClick = {
+                            val newRows = rawText.split("\n").filter { it.isNotBlank() }.map { line ->
+                                val parts = line.split("=")
+                                if (parts.size == 2) MappingRow(parts[0].trim(), parts[1].trim()) else MappingRow("", "")
+                            }
+                            rows = newRows
+                        },
+                        style = McaButtonStyle.Outlined,
+                        enabled = !saving,
+                    ) { Text("更新列表") }
+                    McaButton(
+                        onClick = {
+                            if (rawText.isBlank()) {
+                                showClearDialog = true
+                            } else {
+                                val mappingMap = rawText.split("\n").filter { it.isNotBlank() }.map { line ->
+                                    val parts = line.split("=")
+                                    if (parts.size == 2) parts[0].trim() to parts[1].trim() else "" to ""
+                                }.filter { it.first.isNotBlank() && it.second.isNotBlank() }.toMap()
+                                onAction(ChannelsAction.SetAccountMapping(row.providerId, row.accountId, mappingMap))
+                                onSaved()
+                            }
+                        },
+                        style = McaButtonStyle.Primary,
+                        enabled = !saving && rawText.isNotBlank(),
+                    ) { Text("保存") }
+                    McaButton(onClick = onSaved, style = McaButtonStyle.Outlined) { Text("取消") }
+                }
+            }
+        }
+        
+        EditFailureLine(edit, row.accountId, AccountEditKind.MAPPING)
+    }
+    
+    // 清除确认对话框
+    if (showClearDialog) {
+        McaDialog(
+            onDismissRequest = { showClearDialog = false },
+            title = { Text("清空所有映射？", fontWeight = FontWeight.Bold) },
+            text = { Text("这将立即移除所有模型映射，确定吗？") },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        showClearDialog = false
+                        onAction(ChannelsAction.SetAccountMapping(row.providerId, row.accountId, emptyMap()))
+                        onSaved()
+                    },
+                    style = McaButtonStyle.Destructive,
+                ) { Text("清空") }
             },
-            style = McaButtonStyle.Primary,
-            enabled = !saving && parsed != row.modelMapping,
-        ) { Text(if (saving) "保存中…" else "保存映射") }
+            dismissButton = {
+                McaButton(onClick = { showClearDialog = false }, style = McaButtonStyle.Outlined) { Text("取消") }
+            },
+        )
     }
 }
 
+/** WorkBuddy 系渠道判定（`workbuddy-cn` / `workbuddy-intl` 等）。 */
+internal fun isWorkBuddyProvider(providerId: String): Boolean =
+    providerId.trim().lowercase().startsWith("workbuddy")
+
+/**
+ * 账号卡上的出网身份摘要（仅 WorkBuddy 系渠道）。
+ *
+ * 数据来自 `GET /api/providers/workbuddy/identity`（运行中进程**实际生效**的档位，
+ * 不是 settings.json 里的保存值）。读不到就说「未知」，不拿本地常量冒充。
+ */
 @Composable
-private fun AccountPresetsBody(    row: AccountQuotaRow,
+private fun WorkBuddyIdentitySummary(
+    status: GatewayStatus,
+    onOpen: (() -> Unit)?,
+    onOpenIdentity: (() -> Unit)?,
+) {
+    val client = remember { WorkBuddyIdentityApiClient() }
+    var state by remember(status.addr, status.running) {
+        mutableStateOf<WorkBuddyIdentityState?>(null)
+    }
+    var failed by remember(status.addr, status.running) { mutableStateOf(false) }
+    LaunchedEffect(status.addr, status.running) {
+        if (!status.running || status.addr.isBlank()) {
+            state = null
+            failed = false
+            return@LaunchedEffect
+        }
+        runCatching { withContext(Dispatchers.IO) { client.fetch(status) } }
+            .onSuccess { state = it; failed = false }
+            .onFailure { state = null; failed = true }
+    }
+
+    // 快照到本地 val：`state` 是 by remember 的委托属性，无法智能转换。
+    val snapshot = state
+    val live = snapshot?.effective?.let { workBuddyIdentityLiveName(snapshot) } ?: snapshot?.effectiveRaw
+    val pace = snapshot?.paceMs ?: 0
+    val summary = when {
+        live.isNullOrBlank() && failed -> "出网身份 · 未知（读取失败）"
+        live.isNullOrBlank() -> "出网身份 · 未知"
+        pace > 0 -> "出网身份 · $live · ${pace}ms"
+        else -> "出网身份 · $live"
+    }
+    val enabled = live != null && onOpenIdentity != null
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (enabled) Modifier.clickable(onClick = onOpenIdentity!!)
+                else Modifier,
+            )
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = summary,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (live != null) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (enabled) {
+            Text(
+                text = "切换 ›",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+private fun validateMappingRow(row: MappingRow): List<String> {
+    val errors = mutableListOf<String>()
+    if (row.clientModel.isBlank()) errors.add("客户端模型名不能为空")
+    if (row.upstreamModel.isBlank()) errors.add("上游模型名不能为空")
+    if (row.clientModel.contains("/")) errors.add("客户端模型名不能包含 '/'")
+    if (row.upstreamModel.contains("/")) errors.add("上游模型名不能包含 '/'")
+    return errors
+}
+
+@Composable
+private fun AccountPresetsBody(
+    row: AccountQuotaRow,
     presetsState: PresetsUiState,
     saving: Boolean,
     onAction: (ChannelsAction) -> Unit,
+    onOpenPresets: () -> Unit,
+    hasOpenPresets: Boolean,
 ) {
     when (presetsState) {
         PresetsUiState.Idle, PresetsUiState.Loading -> Text(
@@ -3404,10 +3721,17 @@ private fun AccountPresetsBody(    row: AccountQuotaRow,
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (view.presets.isEmpty()) {
                     Text(
-                        text = "还没有预设；先到桌面端「设置 → 预设」新建，再回来挂载。",
+                        text = "还没有预设。预设 = 一组 Body / Headers / 系统提示词，" +
+                            "勾选后对该渠道生效。到「设置 → 预设」新建，或点下面的按钮直接过去。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (hasOpenPresets) {
+                        McaButton(
+                            onClick = onOpenPresets,
+                            style = McaButtonStyle.Outlined,
+                        ) { Text("去设置新建预设") }
+                    }
                 } else {
                     view.presets.forEach { preset ->
                         PresetRow(
@@ -3425,11 +3749,13 @@ private fun AccountPresetsBody(    row: AccountQuotaRow,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                McaButton(
-                    onClick = { onAction(ChannelsAction.AttachPresets(row.providerId, selected.toList())) },
-                    style = McaButtonStyle.Primary,
-                    enabled = !saving,
-                ) { Text(if (saving) "保存中…" else "保存挂载") }
+                if (view.presets.isNotEmpty()) {
+                    McaButton(
+                        onClick = { onAction(ChannelsAction.AttachPresets(row.providerId, selected.toList())) },
+                        style = McaButtonStyle.Primary,
+                        enabled = !saving,
+                    ) { Text(if (saving) "保存中…" else "保存挂载") }
+                }
             }
         }
     }
@@ -3523,11 +3849,12 @@ internal fun accountConfigJson(baseUrl: String, providerId: String, accountLabel
 /* ========================================================================== */
 
 /**
- * 「自定义渠道」弹窗（桌面 `channels.js:177` → `customchannels.js:67` 抽屉）。
+ * 「＋ 自定义渠道」弹窗（桌面 `channels.js:210` 顶部按钮 → `customchannels.js:67` 抽屉）。
  *
- * 与「自定义供应商（走内置协议）」的区别写在顶部说明里：
- * 这里保存的是**新渠道定义**（provider id = `custom-<slug>`），密钥仍在账号里；
- * 探测用的 Key 只用于本次请求，不保存。
+ * 这是**唯一**的新建渠道入口：填了 API Key 就一次完成「建渠道 + 建账号」
+ * （`POST /api/provider/save`，后端 `provider_api.go:206-252` 会先 upsert CustomChannel）；
+ * 不填 Key 则只建渠道定义（`POST /api/custom-channels`），之后再「接入账号」。
+ * 密钥永远不进渠道定义：它存在账号里（加密），删渠道不删账号。
  */
 @Composable
 private fun CustomChannelsDialog(
@@ -3598,13 +3925,14 @@ private fun CustomChannelsDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "把「地址 + 模型名」注册成一个新渠道（provider id = custom-<slug>），保存后会出现在渠道列表与接入流程里。",
+                    text = "把「地址 + 模型名」注册成一个新渠道（provider id = custom-<slug>），保存后会出现在渠道列表与接入流程里。" +
+                        "填了 API Key 时，保存会一次完成「建渠道 + 建账号」。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = "密钥不在这里保存：它只放在账号里；下面的「探测 Key」只用于这一次请求。删除渠道只删定义、不删账号。" +
-                        "若你只是想给已有渠道加一个账号，请用「自定义供应商（走内置协议）」——那不会新增渠道行。",
+                    text = "密钥只存在账号里（加密），不在渠道定义里；删除渠道只删定义、不删账号。" +
+                        "「探测模型」用的就是上面这个 Key，只发一次请求。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -3726,8 +4054,8 @@ private fun CustomChannelsDialog(
                 ChannelTextField(
                     probeKey,
                     { probeKey = it },
-                    "探测用 API Key（不保存）",
-                    "sk-…（只用于本次探测）",
+                    "API Key（填了保存时同时建账号）",
+                    "sk-…（填了 = 建渠道 + 建账号；留空只建渠道）",
                     visualTransformation = PasswordVisualTransformation(),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3762,6 +4090,8 @@ private fun CustomChannelsDialog(
                                     protocol = protocol,
                                     modelsText = modelsText,
                                     headersText = headersText,
+                                    // 填了 Key = 同时建账号（走 provider/save，后端会 upsert 渠道）。
+                                    apiKey = probeKey,
                                 ),
                             ) { saved ->
                                 editingId = saved.id

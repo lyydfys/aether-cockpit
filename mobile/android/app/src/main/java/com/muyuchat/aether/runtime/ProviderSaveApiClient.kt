@@ -32,9 +32,11 @@ internal val CUSTOM_PROVIDER_FORM_PROTOCOLS: List<CustomProviderProtocol> =
     listOf(CustomProviderProtocol.OPENAI_COMPAT, CustomProviderProtocol.ANTHROPIC_COMPAT)
 
 /**
- * 自定义渠道草稿。真实字段：`name` / `key`（API Key）/ 协议字段（`chat` 或 `anthropic`）/
- * 可选 `models` 数组。`id` 留空（服务端空 id 必走「自定义供应商」分支；
- * 若拿内置渠道 id 提交，服务端会去改那个内置渠道的账号，所以默认不发 id）。
+ * 自定义渠道草稿（`POST /api/provider/save`）。真实字段：`name` / `key`（API Key）/
+ * 协议字段（`chat` 或 `anthropic`）/ 可选 `models` 数组。
+ *
+ * `id` 留空时由服务端按名称派生 slug；若拿**内置渠道** id 提交，服务端会去改那个内置渠道
+ * 的账号（`provider_api.go:210-211` 只对未注册 id 才 upsert 自定义渠道），所以默认不发 id。
  */
 data class CustomProviderDraft(
     val id: String = "",

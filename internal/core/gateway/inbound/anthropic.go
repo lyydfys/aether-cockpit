@@ -157,6 +157,11 @@ func decodeAnthropicContent(raw json.RawMessage, role string) ([]ir.UnifiedItem,
 			})
 
 		case "thinking":
+			// 思考块：signature 必须原样保留（否则上游拒绝续轮）；
+			// 只有签名没有明文时也保留一条，避免"签名丢了"。
+			if strings.TrimSpace(p.Thinking) == "" && strings.TrimSpace(p.Signature) == "" {
+				continue
+			}
 			out = append(out, ir.UnifiedItem{
 				Type:             ir.ItemTypeReasoning,
 				Role:             "assistant",

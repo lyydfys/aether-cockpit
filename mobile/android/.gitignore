@@ -7,3 +7,5 @@ local.properties
 .ktK.log
 .ktM.log
 .ktR.log
+
+signing.properties

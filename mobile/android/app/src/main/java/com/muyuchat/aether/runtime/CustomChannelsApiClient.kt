@@ -11,11 +11,12 @@ import java.net.URLEncoder
 /**
  * 自定义渠道（`custom-channels`）：把「地址 + 模型名」注册成一个**新渠道行**。
  *
- * 与 `ProviderSaveApiClient`（自定义**供应商**）的区别：
- * - 本文件对应 `POST /api/custom-channels`：渠道注册进 provider 注册表（id = `custom-<slug>`），
- *   删了就是删渠道定义；**不保存 API Key**，密钥仍在账号里。
- * - `ProviderSaveApiClient` 对应 `POST /api/provider/save`：把账号挂到内置 core provider，
- *   **不会新增渠道行**。
+ * 两个端点的分工（后端已把「自定义供应商」并进来）：
+ * - 只建渠道定义 → `POST /api/custom-channels`（渠道进 provider 注册表，id = `custom-<slug>`）；
+ * - 同时建账号 → `POST /api/provider/save`（后端 `provider_api.go:206-252` 对未注册 id
+ *   先 `upsertCustomChannelFromDraft` 再 `createAccount`，一次请求两件事都做完）。
+ *   草稿填了 `apiKey` 时本客户端就走这条路（见 [CustomChannelDraft.createsAccount]）。
+ * 两条路径都**不把密钥写进渠道定义**：密钥存在账号里（加密），删渠道不删账号。
  *
  * 字段以 `internal/core/gateway/custom_channels.go` 的 `CustomChannel` 为准：
  * `id / name / base_url / protocol / models / headers / created_at`。
@@ -54,7 +55,18 @@ data class CustomChannelDraft(
     val protocol: String = "openai",
     val modelsText: String = "",
     val headersText: String = "",
-)
+    /**
+     * 可选 API Key：填了就走 `POST /api/provider/save`，**一次请求同时建渠道 + 建账号**
+     * （后端 `provider_api.go:206-252` 对未注册 id 先 `upsertCustomChannelFromDraft`
+     * 再 `createAccount`）。留空则只建渠道定义（`POST /api/custom-channels`）。
+     *
+     * 密钥本身不进渠道配置：它存在账号里（加密），删渠道不删账号。
+     */
+    val apiKey: String = "",
+) {
+    /** 是否要「建渠道 + 建账号」一步到位。 */
+    val createsAccount: Boolean get() = apiKey.isNotBlank()
+}
 
 /** 探测结果：`POST /api/custom-channels/probe` 的解析结果。 */
 data class CustomChannelProbe(
@@ -205,8 +217,40 @@ internal fun buildCustomChannelJson(draft: CustomChannelDraft): String {
     return json.toString()
 }
 
-/** 探测请求体：`{base_url, api_key?}`；Key 只用于这一次探测，不落库。 */
-internal fun buildCustomChannelProbeJson(baseUrl: String, apiKey: String): String {
+/**
+ * 「建渠道 + 建账号」的请求体：`POST /api/provider/save`
+ * `{id, name, key, <chat|responses|anthropic>, models?, headers?}`
+ * （`providerDraft` 字段见 `provider_api.go:23-92`）。
+ *
+ * 协议映射：openai → `chat`，anthropic → `anthropic`，responses → `responses`
+ * —— 与 `upsertCustomChannelFromDraft`（`provider_api.go:207-215`）的判断顺序一致。
+ */
+internal fun buildCustomChannelProviderSaveJson(draft: CustomChannelDraft): String {
+    val url = normalizeCustomChannelBaseUrl(draft.baseUrl)
+    val json = JSONObject()
+        .put("name", draft.name.trim())
+        .put("key", draft.apiKey.trim())
+    val id = slugifyCustomChannelId(draft.id.ifBlank { draft.name })
+    if (id.isNotEmpty()) {
+        json.put("id", id)
+    }
+    when (draft.protocol.trim().lowercase()) {
+        "anthropic", "messages" -> json.put("anthropic", url)
+        "responses" -> json.put("responses", url)
+        else -> json.put("chat", url)
+    }
+    val models = parseCustomChannelModels(draft.modelsText)
+    if (models.isNotEmpty()) {
+        json.put("models", JSONArray(models))
+    }
+    val parsedHeaders = parseCustomChannelHeaders(draft.headersText)
+    if (parsedHeaders.headers.isNotEmpty()) {
+        json.put("headers", JSONObject(parsedHeaders.headers))
+    }
+    return json.toString()
+}
+
+/** 探测请求体：`{base_url, api_key?}`；Key 只用于这一次探测，不落库。 */internal fun buildCustomChannelProbeJson(baseUrl: String, apiKey: String): String {
     val json = JSONObject().put("base_url", normalizeCustomChannelBaseUrl(baseUrl))
     val key = apiKey.trim()
     if (key.isNotEmpty()) {
@@ -226,6 +270,11 @@ internal fun validateCustomChannelDraft(draft: CustomChannelDraft): String? {
         return "协议只能是 openai / anthropic / responses"
     }
     parseCustomChannelHeaders(draft.headersText).error?.let { return it }
+    // 填了 Key 就等于要建账号：Key 不能是带空白的半截字符串。
+    val key = draft.apiKey.trim()
+    if (draft.apiKey.isNotBlank() && (key.isEmpty() || key.any { it.isWhitespace() })) {
+        return "API Key 不能包含空白字符"
+    }
     return null
 }
 
@@ -322,10 +371,40 @@ class CustomChannelsApiClient(
     fun list(status: GatewayStatus): List<CustomChannel> =
         parseCustomChannels(request(status, "GET", "/api/custom-channels", null))
 
-    fun save(status: GatewayStatus, draft: CustomChannelDraft): CustomChannel =
-        parseCustomChannel(
-            request(status, "POST", "/api/custom-channels", buildCustomChannelJson(draft)),
+    /**
+     * 保存自定义渠道。
+     *
+     * - 填了 API Key → 走 `POST /api/provider/save`：后端对未注册 id 会先建/更新
+     *   CustomChannel，再把账号挂到 `custom-<slug>`（`provider_api.go:206-252`），
+     *   一次请求完成「建渠道 + 建账号」；
+     * - 没填 Key → 只发 `POST /api/custom-channels`，只建渠道定义。
+     *
+     * 两条路径都会回一份渠道列表，这里统一重读一次，保证返回值是最新的完整定义
+     * （`provider/save` 只回 providers 视图，不含 headers/base_url 的原始定义）。
+     */
+    fun save(status: GatewayStatus, draft: CustomChannelDraft): CustomChannel {
+        if (!draft.createsAccount) {
+            return parseCustomChannel(
+                request(status, "POST", "/api/custom-channels", buildCustomChannelJson(draft)),
+            )
+        }
+        request(
+            status,
+            "POST",
+            "/api/provider/save",
+            buildCustomChannelProviderSaveJson(draft),
         )
+        val slug = slugifyCustomChannelId(draft.id.ifBlank { draft.name })
+        return list(status).firstOrNull { it.id == slug } ?: CustomChannel(
+            id = slug,
+            name = draft.name.trim(),
+            baseUrl = normalizeCustomChannelBaseUrl(draft.baseUrl),
+            protocol = draft.protocol.trim().ifBlank { "openai" },
+            models = parseCustomChannelModels(draft.modelsText),
+            headers = parseCustomChannelHeaders(draft.headersText).headers,
+            createdAt = 0L,
+        )
+    }
 
     fun delete(status: GatewayStatus, id: String) {
         request(

@@ -546,6 +546,19 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                                                 onDismissModels = channelsViewModel::dismissModels,
                                                 onToggleProvider = channelsViewModel::toggleProvider,
                                                 onOpenOnboard = { showOnboard = true },
+                                                // 渠道卡的「预设」弹窗在空列表时给一条去设置新建的捷径。
+                                                // 只设 initialGroup 不会打开设置层，必须同时 showSettings = true。
+                                                onOpenPresets = {
+                                                    selectedTab = MobileTab.MORE
+                                                    settingsInitialGroup = "04"
+                                                    showSettings = true
+                                                },
+                                                // WorkBuddy 渠道卡的「出网身份」→ 设置 → 网络与共享（02）。
+                                                onOpenWorkBuddyIdentity = {
+                                                    selectedTab = MobileTab.MORE
+                                                    settingsInitialGroup = "02"
+                                                    showSettings = true
+                                                },
                                                 modifier = modifier,
                                             )
                                             bundleImport.Host()

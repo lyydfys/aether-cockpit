@@ -243,7 +243,7 @@ internal fun providerModelsSummary(providerModels: ProviderModels): String {
     }
     val origin = when (providerModels.source) {
         "registry" -> " · 内置清单"
-        "vendor" -> " · 供应商实时"
+        "vendor" -> " · 上游实时"
         else -> ""
     }
     return "${providerModels.models.size} 个模型$origin"

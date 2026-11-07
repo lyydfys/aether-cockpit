@@ -104,11 +104,17 @@ func decodeResponsesInput(raw json.RawMessage) ([]ir.UnifiedItem, error) {
 			})
 
 		case "reasoning":
+			text := decodeReasoningItem(w)
+			// 空思考块没有价值，还会在下游被丢弃；只有 encrypted_content 时
+			// 仍然保留（某些上游要求原样回传）。
+			if strings.TrimSpace(text) == "" && w.EncryptedContent == "" {
+				continue
+			}
 			out = append(out, ir.UnifiedItem{
 				ID:               w.ID,
 				Type:             ir.ItemTypeReasoning,
 				Role:             "assistant",
-				Text:             decodeReasoningSummary(w.Summary),
+				Text:             text,
 				EncryptedContent: w.EncryptedContent,
 			})
 
@@ -200,6 +206,10 @@ func decodeResponsesContent(raw json.RawMessage) (string, []ir.MediaAttachment) 
 }
 
 // decodeReasoningSummary 把 summary 数组拼成纯文本。
+//
+// 部分客户端（以及 Codex 的续轮回传）把思考放在 content 里而不是 summary，
+// 只读 summary 会得到空串——等于把 reasoning item 变成空 item，下游丢弃后
+// 上游续轮会缺思考上下文。这里两个字段都读，summary 优先。
 func decodeReasoningSummary(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -213,6 +223,17 @@ func decodeReasoningSummary(raw json.RawMessage) string {
 		sb.WriteString(p.Text)
 	}
 	return sb.String()
+}
+
+// decodeReasoningItem 解析 reasoning item 的文本：summary 优先，其次 content。
+func decodeReasoningItem(w responsesItemWire) string {
+	if s := decodeReasoningSummary(w.Summary); strings.TrimSpace(s) != "" {
+		return s
+	}
+	if s := decodeReasoningSummary(w.Content); strings.TrimSpace(s) != "" {
+		return s
+	}
+	return ""
 }
 
 // decodeFunctionOutput output 可能是字符串，也可能是 content part 数组。

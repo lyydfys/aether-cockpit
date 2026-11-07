@@ -70,8 +70,14 @@ func ParseGemini(body []byte, requestID, model string) (*ir.UnifiedChatRequest, 
 					continue
 				}
 				if strings.TrimSpace(p.Text) != "" {
+					// thought=true 是 Gemini 的思考段：必须作为 reasoning item
+					// 单独保留，混进正文会让下一轮上下文被上游判成"篡改历史"。
+					itemType := ir.ItemTypeMessage
+					if p.Thought {
+						itemType = ir.ItemTypeReasoning
+					}
 					req.Items = append(req.Items, ir.UnifiedItem{
-						Type: ir.ItemTypeMessage, Role: "assistant", Text: p.Text,
+						Type: itemType, Role: "assistant", Text: p.Text,
 					})
 				}
 			}

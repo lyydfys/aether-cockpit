@@ -251,8 +251,11 @@ internal fun PredictiveBackHost(
     }
     val activePrevious = frozenPrevious ?: previousNow
 
+    // 防抖：防止快速连滑两次叠加动画
+    var isAnimating by remember { mutableStateOf(false) }
+    
     if (Build.VERSION.SDK_INT >= PredictiveBackSupportedSdk) {
-        PredictiveBackHandler(enabled = handleBack) { events ->
+        PredictiveBackHandler(enabled = handleBack && !isAnimating) { events ->
             try {
                 // 每来一帧就把进度贴上去：snapTo 不做插值，跟手才不会有滞后感。
                 events.collect { event ->
@@ -261,6 +264,7 @@ internal fun PredictiveBackHost(
                 // 流正常结束 = 手势完成（滑到底）。
                 // 先滑出去再 onBack()，否则页面会"啪"地消失；但动效放在独立作用域里跑，
                 // 避免被系统在手势提交时取消。
+                isAnimating = true
                 settling = true
                 settleScope.launch {
                     try {
@@ -271,6 +275,7 @@ internal fun PredictiveBackHost(
                         repeat(2) { withFrameNanos { } }
                     } finally {
                         settling = false
+                        isAnimating = false
                         // 归零**只在一处**做（下面的 LaunchedEffect(open)）：两处都 snapTo 会互相取消
                         // 正在跑的动画，主线程每帧都在取消/重启 → 真机上表现为"卡死"。
                         if (openState.value) {
@@ -294,6 +299,7 @@ internal fun PredictiveBackHost(
                         )
                     } finally {
                         settling = false
+                        isAnimating = false
                     }
                 }
                 throw e
@@ -301,7 +307,17 @@ internal fun PredictiveBackHost(
         }
     } else {
         // API < 33：没有预测事件可跟手，退回普通返回键（行为与改造前一致）。
-        BackHandler(enabled = handleBack, onBack = onBack)
+        // 防抖用挂起的 scope，不能在 onBack 回调里直接调用 @Composable。
+        BackHandler(enabled = handleBack && !isAnimating, onBack = {
+            if (!isAnimating) {
+                isAnimating = true
+                onBack()
+                settleScope.launch {
+                    kotlinx.coroutines.delay(300)
+                    isAnimating = false
+                }
+            }
+        })
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {

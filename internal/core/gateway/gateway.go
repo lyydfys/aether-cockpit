@@ -335,6 +335,13 @@ type Gateway struct {
 	// 只放内存：启动时会按设置重新注册一遍，不需要落盘。
 	customIDs []string
 
+	// customModelProbe 是"自定义渠道模型自动发现"的去重表（见 custom_models.go）：
+	// 同一渠道同时只跑一次探测，避免启动与保存连点重复打上游 /models。
+	customModelProbe struct {
+		mu       sync.Mutex
+		inflight map[string]bool
+	}
+
 	// 压缩载荷 → 账号绑定（见 compact_pins.go）。
 	compactPin     *compactPinStore
 	compactPinOnce sync.Once
@@ -480,6 +487,9 @@ func New(cfg Config) *Gateway {
 	g.syncChannelNet()
 	// 自定义渠道：按设置把它们注册进 provider 注册表。
 	g.syncCustomChannels()
+	// 模型清单为空的自定义渠道：后台向 {base}/models 探一次（异步，不阻塞启动）。
+	// 没有它，用户不手填模型时 /v1/models 里根本看不到中转站的模型。
+	g.startCustomChannelModelProbe()
 	// 链路优化：DoH 解析 + 多 IP 竞速。跨境渠道的不同边缘 IP 质量差异明显
 	// （实测同一域名两个 Cloudflare 边缘差 100ms+），竞速能稳定挑到当前最优
 	// 的那个；DoH 保证拿到的是真实地址而不是被污染的答案。
@@ -1244,6 +1254,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/custom-channels", g.handleCustomChannelSave)
 	m.HandleFunc("DELETE /api/custom-channels/{id}", g.handleCustomChannelDelete)
 	m.HandleFunc("POST /api/custom-channels/probe", g.handleCustomChannelProbe)
+	// 手动触发：重新向 {base}/models 拉一次并写回清单（客户端"从上游刷新"用）。
+	m.HandleFunc("POST /api/custom-channels/{id}/refresh-models", g.handleCustomChannelRefreshModels)
 	// 网络诊断：把"卡在哪一环"摊开（DNS / TCP / TLS / 首字节）。
 	m.HandleFunc("GET /api/network/diag", g.handleNetDiag)
 	// 边缘优选：扫描候选 IP、测机房与延迟，可钉到该渠道（不写 hosts）。
@@ -2834,7 +2846,57 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 			"owned_by": "aether-cockpit/redirect",
 		})
 	}
+	// 自定义渠道的「可见性兜底」：清单为空且上游探测也没拿到模型时，
+	// 上面那段按 KnownModels 遍历的循环一条都不会产出 —— 客户端会以为这个渠道
+	// 根本不存在（历史上就踩过：中转站建好了、UI 里却搜不到模型）。
+	//
+	// 这里额外列出该渠道的**通配提示项**（`custom-xxx/*`），让客户端至少能发现
+	// 这个渠道是活的；真实调用仍然走 openaicompat 的"已注册前缀透传"规则，
+	// 用户写 `custom-xxx/任意模型名` 就能通。已有模型清单的渠道不受影响。
+	for _, h := range g.customChannelWildcards(hidden, avail) {
+		data = append(data, h)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+// customChannelWildcards 为「清单为空且没有可用模型」的自定义渠道生成一条通配提示项。
+//
+// 只在真的没有任何可发现模型时才出现，避免给已配置好的渠道添噪音。
+func (g *Gateway) customChannelWildcards(hidden map[string]bool, avail map[string]bool) []map[string]any {
+	g.settingsMu.Lock()
+	list := make([]CustomChannel, len(g.settings.CustomChannels))
+	copy(list, g.settings.CustomChannels)
+	g.settingsMu.Unlock()
+
+	out := make([]map[string]any, 0, len(list))
+	for _, c := range list {
+		if len(c.Models) > 0 {
+			continue
+		}
+		pid := customChannelProviderID(c.ID)
+		wildcard := pid + "/*"
+		if hidden[wildcard] || avail[wildcard] {
+			continue
+		}
+		// 渠道名下至少要有一个可用账号，否则这个渠道本来就接不进来。
+		if !g.accountHasProvider(pid) {
+			continue
+		}
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			name = c.ID
+		}
+		out = append(out, map[string]any{
+			"id":       wildcard,
+			"object":   "model",
+			"created":  g.startedAt.Unix(),
+			"owned_by": "aether-cockpit/wildcard",
+			// 非标准字段：客户端 SDK 会忽略，但人能看懂这条是"占位"而不是真模型。
+			"display_name": name + "（任意模型名透传）",
+			"note":         "该渠道模型清单为空且未能从上游获取；填写具体模型名即可直接调用",
+		})
+	}
+	return out
 }
 
 // modelOrderForAgent 返回 Agents 页为某个 Agent 排的模型顺序。

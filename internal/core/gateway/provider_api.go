@@ -310,6 +310,11 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 	if customChannel && d.Models != nil {
 		env.SetAllowedModels(cleanProviderModels(d.Models))
 	}
+	if customChannel {
+		// 账号已就绪（探测才能带 key）：清单为空时后台向 {base}/models 探一次。
+		// 异步执行，保存按钮不会等上游。
+		g.startCustomChannelModelProbe(strings.TrimPrefix(pid, "custom-"))
+	}
 	if d.Proxy != nil || d.AccountProxies != nil {
 		if err := g.setProviderProxy(pid, d.Proxy, d.AccountProxies); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存代理设置失败: " + err.Error()})

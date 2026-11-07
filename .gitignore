@@ -87,3 +87,7 @@ docs/assets/
 *.jks
 *.keystore
 signing.properties
+
+# 站点提案草稿与产物（非本仓交付物）
+/docs/site-proposal/
+/website/

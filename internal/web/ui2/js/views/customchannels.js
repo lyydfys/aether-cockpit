@@ -71,22 +71,22 @@ export function openCustomChannels(opts = {}) {
   const nameIn = input({ placeholder: '例如：公司中转', label: '渠道名称' });
   const baseIn = input({ placeholder: 'https://api.example.com/v1', label: 'Base URL' });
   const protoIn = select(PROTOCOLS, 'openai', () => {}, { label: '协议' });
-  const keyIn = input({ type: 'password', placeholder: 'sk-…（只用于本次探测，不会保存）', label: '探测用 API Key' });
+  const keyIn = input({ type: 'password', placeholder: 'sk-…（保存后成为账号密钥；探测也用它）', label: 'API Key' });
   const modelsIn = textarea({ label: '模型清单', placeholder: '一行一个，或用逗号分隔；留空表示任意模型都透传' });
-  const headersIn = textarea({ label: '额外请求头', placeholder: 'X-Custom-Header: value\nAuthorization: Bearer {{api_key}}' });
+  const headersIn = textarea({ label: '额外请求头（可选）', placeholder: 'X-Custom-Header: value\nAuthorization: Bearer {{api_key}}' });
   const probeBox = h('div');
   const probeBtn = btn('探测模型', { icon: 'refresh', onClick: () => probe() });
-  const attachBtn = btn('接入账号', { ghost: true, disabled: true, onClick: () => attach() });
+  const attachBtn = btn('再加一个账号', { ghost: true, disabled: true, onClick: () => attach() });
   const saveBtn = btn('保存', { primary: true, onClick: () => save() });
 
   const d = drawer('自定义渠道', (body, foot) => {
     body.append(
-      h('div', { class: 'meta' }, '把「地址 + 模型名」注册成渠道。密钥放在账号里（加密存储），删渠道不会删账号。'),
+      h('div', { class: 'meta' }, '把「地址 + 模型名」注册成一个新渠道（供应商 id = custom-<名称>），保存时同时建好一个账号：模型前缀独立、可整条删除、多个中转站互不干扰。'),
       field('已保存', listBox),
       field('名称', nameIn),
       field('Base URL', baseIn),
       field('协议', protoIn),
-      field('探测模型', h('div', { class: 'inline' }, keyIn, probeBtn)),
+      field('API Key', h('div', { class: 'inline' }, keyIn, probeBtn)),
       probeBox,
       field('模型清单', modelsIn),
       h('div', { class: 'meta' }, '一行一个或用逗号分隔；留空表示任意模型名都透传（按渠道 id 前缀对外暴露）。'),
@@ -222,27 +222,49 @@ export function openCustomChannels(opts = {}) {
   async function save() {
     const name = String(nameIn.value || '').trim();
     const base = String(baseIn.value || '').trim();
+    const key = String(keyIn.value || '').trim();
     if (!name) { toast('先给渠道起个名字'); nameIn.focus(); return; }
     if (!base) { toast('Base URL 不能为空'); baseIn.focus(); return; }
 
-    const payload = {
-      name,
-      base_url: base,
-      protocol: protoIn.value,
-      models: splitModels(modelsIn.value),
-      headers: parseHeaders(headersIn.value),
-    };
-    // 有 id 就是更新同一条渠道；首次保存由后端按名称生成 slug。
-    if (state.editing && state.editing.id) payload.id = state.editing.id;
-
     saveBtn.disabled = true;
     try {
-      const out = await api.post('custom-channels', payload);
-      const ch = (out && out.channel) || null;
-      if (ch) state.editing = ch;
+      if (key) {
+        // 填了 API Key：一次请求同时建渠道 + 账号（后端 `provider_api.go:206-252`
+        // 对未注册 id 会 upsert CustomChannel 再 createAccount）。
+        const slug = (state.editing && state.editing.id) ||
+          (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'custom');
+        const draft = {
+          id: slug,
+          name,
+          key,
+          models: splitModels(modelsIn.value),
+          chat: protoIn.value === 'chat' || protoIn.value === 'openai' ? base : '',
+          responses: protoIn.value === 'responses' ? base : '',
+          anthropic: protoIn.value === 'anthropic' ? base : '',
+        };
+        const headers = parseHeaders(headersIn.value);
+        if (Object.keys(headers).length) draft.headers = headers;
+        await api.post('provider/save', draft);
+        toast('自定义渠道已保存，账号已接入');
+        setProbe({ tone: 'ok', text: '已保存「' + name + '」并接入账号；渠道 ID：custom-' + slug });
+      } else {
+        // 只建渠道定义（不建账号），之后用「再加一个账号」接入。
+        const payload = {
+          name,
+          base_url: base,
+          protocol: protoIn.value,
+          models: splitModels(modelsIn.value),
+          headers: parseHeaders(headersIn.value),
+        };
+        if (state.editing && state.editing.id) payload.id = state.editing.id;
+        const out = await api.post('custom-channels', payload);
+        const ch = (out && out.channel) || null;
+        if (ch) state.editing = ch;
+        toast('自定义渠道已保存');
+        setProbe({ tone: 'ok', text: '已保存「' + ((ch && ch.name) || name) + '」，渠道 ID：' + ((ch && ch.id) || '—') + '（未填 API Key，还没有账号）' });
+      }
+      keyIn.value = '';
       refreshAttach();
-      toast('自定义渠道已保存');
-      setProbe({ tone: 'ok', text: '已保存「' + ((ch && ch.name) || name) + '」，渠道 ID：' + ((ch && ch.id) || '—') });
       await loadChannels();
       // 让渠道页重新拉一次 provider 列表，新的 custom-<id> 才会出现。
       if (opts.reload) await opts.reload();

@@ -25,7 +25,7 @@ export default {
   '帮助': 'Help',
   '搜索与命令': 'Search & commands',
   '搜索账号、渠道、模型…': 'Search accounts, channels, models…',
-  '添加账号 / 供应商': 'Add account / provider',
+  '添加账号 / 供应商': 'Add account / custom channel',
   '刷新全部额度': 'Refresh all quota',
   '刷新全部模型目录': 'Refresh all model catalogs',
   '刷新额度': 'Refresh quota',
@@ -134,7 +134,7 @@ export default {
   '账号验证码与恢复码，只保存在本机': 'TOTP codes and recovery codes, stored locally only',
 
   // ---- 高频卡片/动作 ----
-  '供应商与开关': 'Providers & switches',
+  '供应商与开关': 'Channel switches',
   '加备注': 'Add note',
   '可用 AI 积分': 'AI credits',
   '这个账号没有可读的额度窗口。': 'No readable quota for this account.',

@@ -71,6 +71,16 @@ func ParseChatCompletions(body []byte, requestID string) (*ir.UnifiedChatRequest
 			if err != nil {
 				return nil, err
 			}
+			// 思考内容要先于正文与工具调用进入 Items，`openaicompat.toMessages`
+			// 才能把它聚到同一条 assistant 消息的 `reasoning_content` 里。
+			// 丢弃它会让 DeepSeek thinking 模式的工具回合必然 400。
+			if reasoning := firstNonEmpty(m.ReasoningContent, m.Reasoning); reasoning != "" {
+				req.Items = append(req.Items, ir.UnifiedItem{
+					Type: ir.ItemTypeReasoning,
+					Role: "assistant",
+					Text: reasoning,
+				})
+			}
 			if strings.TrimSpace(text) != "" {
 				req.Items = append(req.Items, ir.UnifiedItem{
 					Type: ir.ItemTypeMessage,
@@ -135,22 +145,22 @@ func ParseChatCompletions(body []byte, requestID string) (*ir.UnifiedChatRequest
 // --- wire 结构 ---
 
 type chatRequestWire struct {
-	Model               string            `json:"model"`
-	Messages            []chatMessageWire `json:"messages"`
-	Tools               []chatToolWire    `json:"tools"`
-	Stream              bool              `json:"stream"`
-	Temperature         *float64          `json:"temperature"`
-	TopP                *float64          `json:"top_p"`
+	Model       string            `json:"model"`
+	Messages    []chatMessageWire `json:"messages"`
+	Tools       []chatToolWire    `json:"tools"`
+	Stream      bool              `json:"stream"`
+	Temperature *float64          `json:"temperature"`
+	TopP        *float64          `json:"top_p"`
 	// 重复惩罚：客户端几乎都会带（尤其是 agent），丢了就可能复读。
-	FrequencyPenalty    *float64          `json:"frequency_penalty"`
-	PresencePenalty     *float64          `json:"presence_penalty"`
-	MaxTokens           *int              `json:"max_tokens"`
-	MaxCompletionTokens *int              `json:"max_completion_tokens"`
-	Stop                json.RawMessage   `json:"stop"`
-	ReasoningEffort     string            `json:"reasoning_effort"`
-	ParallelToolCalls   *bool             `json:"parallel_tool_calls"`
-	ToolChoice          json.RawMessage   `json:"tool_choice"`
-	ResponseFormat      json.RawMessage   `json:"response_format"`
+	FrequencyPenalty    *float64        `json:"frequency_penalty"`
+	PresencePenalty     *float64        `json:"presence_penalty"`
+	MaxTokens           *int            `json:"max_tokens"`
+	MaxCompletionTokens *int            `json:"max_completion_tokens"`
+	Stop                json.RawMessage `json:"stop"`
+	ReasoningEffort     string          `json:"reasoning_effort"`
+	ParallelToolCalls   *bool           `json:"parallel_tool_calls"`
+	ToolChoice          json.RawMessage `json:"tool_choice"`
+	ResponseFormat      json.RawMessage `json:"response_format"`
 	// User 是 OpenAI 的终端用户标识，充当会话级亲和的第一级来源。
 	User string `json:"user"`
 }
@@ -161,6 +171,15 @@ type chatMessageWire struct {
 	ToolCalls  []chatToolCallWire `json:"tool_calls"`
 	ToolCallID string             `json:"tool_call_id"`
 	Name       string             `json:"name"`
+	// ReasoningContent 是 DeepSeek / 智谱 等上游的思考内容字段。
+	//
+	// **必须原样带回上游**：DeepSeek 在 thinking 模式下的工具调用回合要求把上一轮的
+	// reasoning_content 一起回传，否则报
+	// `The reasoning_content in the thinking mode must be passed back to the API`（400）。
+	// 以前这里没有这个字段，解析时被静默丢弃 → 任何带思考的模型一旦走工具调用就必然 400。
+	ReasoningContent string `json:"reasoning_content"`
+	// Reasoning 是 OpenRouter 风格的别名字段，同样需要保留。
+	Reasoning string `json:"reasoning"`
 }
 
 type chatToolCallWire struct {
