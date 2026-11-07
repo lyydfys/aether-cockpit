@@ -30,7 +30,7 @@ func (g *Gateway) handleDrift(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	origin := requestOrigin(r, g.PublicAddr())
-	key := strings.TrimSpace(g.cfg.APIKey)
+	key := strings.TrimSpace(g.GatewayKey())
 	if key == "" {
 		key = "aether-local"
 	}
@@ -165,7 +165,7 @@ func (g *Gateway) handleDriftApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	origin := requestOrigin(r, g.PublicAddr())
-	key := strings.TrimSpace(g.cfg.APIKey)
+	key := strings.TrimSpace(g.GatewayKey())
 	if key == "" {
 		key = "aether-local"
 	}

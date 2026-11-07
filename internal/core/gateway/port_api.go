@@ -132,7 +132,7 @@ func (g *Gateway) rewireAgents(origin string) {
 	if mgr == nil {
 		return
 	}
-	key := strings.TrimSpace(g.cfg.APIKey)
+	key := strings.TrimSpace(g.GatewayKey())
 	if key == "" {
 		key = "aether-local"
 	}

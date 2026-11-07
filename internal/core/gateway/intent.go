@@ -264,7 +264,7 @@ func (c *intentClassifier) doClassify(classifyModel, group string, seats []model
 		return -1, err
 	}
 
-	token := c.g.cfg.APIKey
+	token := c.g.GatewayKey()
 	if token == "" {
 		token = "aether-local"
 	}

@@ -105,7 +105,7 @@ func (g *Gateway) profileUseCompat(w http.ResponseWriter, r *http.Request, name 
 	}
 
 	origin := requestOrigin(r, g.PublicAddr())
-	apiKey := strings.TrimSpace(g.cfg.APIKey)
+	apiKey := strings.TrimSpace(g.GatewayKey())
 	if apiKey == "" {
 		apiKey = "aether-local"
 	}

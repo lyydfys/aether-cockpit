@@ -98,7 +98,7 @@ func (g *Gateway) handleClientApply(w http.ResponseWriter, r *http.Request) {
 		}
 		origin = o
 	}
-	apiKey := strings.TrimSpace(g.cfg.APIKey)
+	apiKey := strings.TrimSpace(g.GatewayKey())
 	if apiKey == "" {
 		// 本地免鉴权时给一个非空占位值：多数客户端会拒绝空 Authorization。
 		apiKey = "aether-local"

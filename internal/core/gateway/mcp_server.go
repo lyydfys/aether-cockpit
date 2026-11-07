@@ -25,9 +25,9 @@ var mcpHTMLBlock = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>|<style[^>]
 var mcpHTMLTag = regexp.MustCompile(`(?s)<[^>]*>`)
 
 func (g *Gateway) mcpServerAllowed(r *http.Request) bool {
-	if strings.TrimSpace(g.cfg.APIKey) != "" {
+	if strings.TrimSpace(g.GatewayKey()) != "" {
 		tok := extractToken(r)
-		if tok == g.cfg.APIKey {
+		if tok == g.GatewayKey() {
 			return true
 		}
 		if _, ok := g.callerKeys.match(tok); ok {

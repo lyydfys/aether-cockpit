@@ -175,7 +175,7 @@ func (g *Gateway) handleLauncherLaunch(w http.ResponseWriter, r *http.Request) {
 	// origin 用当前请求的 Host（与 client_api.go 一致）：桌面端端口错开时
 	// cfg.Addr 不是真实地址，浏览器能打开管理界面的地址会话就能连上。
 	origin := requestOrigin(r, g.PublicAddr())
-	apiKey := strings.TrimSpace(g.cfg.APIKey)
+	apiKey := strings.TrimSpace(g.GatewayKey())
 	if apiKey == "" {
 		// 本地免鉴权时给非空占位值：多数客户端拒绝空 Authorization。
 		apiKey = "aether-local"

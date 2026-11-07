@@ -27,7 +27,7 @@ const localGatewayKey = "aether-local"
 // launcherOriginKey 返回客户端应写入的网关地址与密钥。
 func (g *Gateway) launcherOriginKey(r *http.Request) (string, string) {
 	origin := requestOrigin(r, g.PublicAddr())
-	key := strings.TrimSpace(g.cfg.APIKey)
+	key := strings.TrimSpace(g.GatewayKey())
 	if key == "" {
 		key = localGatewayKey
 	}

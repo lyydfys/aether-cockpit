@@ -277,7 +277,18 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 			// capabilities 是内核能力集合；chat 单独再给一个布尔，
 			// 前端（渠道卡/接入弹窗）不必解析 capabilities 就能判断能否反代。
 			"capabilities":     v.Capabilities,
+			// chat 是"这个渠道能不能对话"的**能力布尔**（Android 端按 Boolean 解析，
+			// 桌面端组件也用它决定是否显示唤醒按钮），语义不能改。
 			"chat":             v.Capabilities.Chat,
+			// endpoints 是渠道编辑器要回显的**端点地址**（另一个维度的数据）。
+			// 过去编辑器错读 `chat`（布尔当 URL），回显空白、保存时把 true 发回去，
+			// 被后端判定 Base URL 非法 → 用户看到"保存失败"。这里用独立字段解耦。
+			"endpoints": map[string]string{
+				"chat":      g.providerEndpointView(v.ID, "chat"),
+				"responses": g.providerEndpointView(v.ID, "responses"),
+				"anthropic": g.providerEndpointView(v.ID, "anthropic"),
+				"gemini":    g.providerEndpointView(v.ID, "gemini"),
+			},
 			"auth_form_schema": authSchema, "webview_login_url": webviewLogin, "oauth": hasOAuth,
 			"host": v.Host, "key": v.Key, "keyList": v.KeyList, "accountModels": v.AccountModels, "agents": v.Agents,
 			"icon":                providerIconName(g.providerIcon(v.ID), v.ID),
@@ -687,4 +698,67 @@ func providerIconName(custom, id string) string {
 		return custom
 	}
 	return id + "-color"
+}
+
+// providerEndpointView 返回渠道某个协议端点的 Base URL，供渠道编辑器回显。
+//
+// 取值顺序：自定义渠道存的地址 → 账号上实际配的 base_url → 内置渠道的默认 BaseURL。
+// 全都拿不到时返回空串（编辑器显示占位符），绝不返回布尔或其它非字符串值。
+func (g *Gateway) providerEndpointView(id, kind string) string {
+	// 自定义渠道只存一个地址（+ 协议），按协议对上才回显，避免把 OpenAI 地址
+	// 填进 Anthropic 框里再被保存回去。
+	if ch, ok := g.customChannelForProvider(id); ok {
+		switch protocolOfEndpoint(kind) {
+		case ch.Protocol:
+			return ch.BaseURL
+		}
+		return ""
+	}
+	// 账号级覆盖（用户在接入时填过的地址）。只对 chat 生效：
+	// 账号上的 base_url 是 OpenAI 兼容地址，填进 Anthropic/Gemini 框会把
+	// 用户真实配置覆盖掉（Open Design 这类"一个 Key 多协议"尤其明显）。
+	if kind == "chat" {
+		for _, env := range g.pool.ListByProvider(id) {
+			if u := strings.TrimSpace(env.GetCredential("base_url")); u != "" {
+				return u
+			}
+		}
+	}
+	// 内置渠道：用清单里的默认地址（Manifest.BaseURL），只有 chat 有默认值。
+	if kind == "chat" {
+		if p, ok := provider.Get(id); ok {
+			if def := strings.TrimSpace(p.Manifest().BaseURL); def != "" {
+				return def
+			}
+		}
+	}
+	return ""
+}
+
+// protocolOfEndpoint 把编辑器里的字段名映射成自定义渠道的协议名。
+func protocolOfEndpoint(kind string) string {
+	switch kind {
+	case "responses":
+		return "responses"
+	case "anthropic":
+		return "anthropic"
+	default:
+		return "openai"
+	}
+}
+
+// customChannelForProvider 按 provider id（custom-<slug>）找回自定义渠道。
+func (g *Gateway) customChannelForProvider(providerID string) (CustomChannel, bool) {
+	slug := strings.TrimPrefix(strings.TrimSpace(providerID), "custom-")
+	if slug == "" {
+		return CustomChannel{}, false
+	}
+	g.settingsMu.Lock()
+	defer g.settingsMu.Unlock()
+	for _, ch := range g.settings.CustomChannels {
+		if ch.ID == slug {
+			return ch, true
+		}
+	}
+	return CustomChannel{}, false
 }

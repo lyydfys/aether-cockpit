@@ -484,7 +484,7 @@ func (g *Gateway) applyBundle(bundle *backupBundle) map[string]bool {
 			for _, st := range mgr.List() {
 				status[st.ID] = st
 			}
-			apiKey := strings.TrimSpace(g.cfg.APIKey)
+			apiKey := strings.TrimSpace(g.GatewayKey())
 			if apiKey == "" {
 				apiKey = "aether-local"
 			}

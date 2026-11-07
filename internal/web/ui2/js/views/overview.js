@@ -474,14 +474,53 @@ export default {
       const entryVal = h('span', {
         class: 'entry-url mono', title: lan && lanURL ? lanURL : baseURL,
       }, lan && lanURL ? lanURL : baseURL);
+      // 这个下拉框必须**真的切换监听**，不能只换显示文本。
+      //
+      // 过去选"局域网"只是把文本换成 lanURL（而 lanURL 为空时又退回 baseURL），
+      // 于是地址纹丝不动、后端 lan 仍是 false —— 用户以为开了，其实没开。
+      // 现在选"局域网"会先调 /api/settings 打开监听，再用后端返回的真实地址回填。
       const entrySel = select(
         [{ value: 'local', label: '本机' }, { value: 'lan', label: '局域网' }],
-        lan && lanURL ? 'lan' : 'local',
-        (v) => {
-          const next = v === 'lan' ? (lanURL || baseURL) : baseURL;
-          entryVal.textContent = next;
-          entryVal.title = next;
-        }, { label: '入口' });
+        lan ? 'lan' : 'local',
+        (v) => { void (async () => {
+          if (v === 'local') {
+            entryVal.textContent = baseURL;
+            entryVal.title = baseURL;
+            return;
+          }
+          // 局域网地址要等监听切过去才有（端口是主端口+1），先给个可读提示，
+          // 免得用户对着一个没变的地址以为没生效。
+          entryVal.textContent = '正在开启局域网监听…';
+          try {
+            // 用专门的 /api/settings/lan（不是 /api/settings）：
+            // 只有它才会真正去 SetLAN（重新绑定 0.0.0.0:主端口+1）。
+            await api.post('settings/lan', { on: true });
+            await load();
+            const urls = (state.data.gateway && state.data.gateway.lanURLs) || [];
+            const next = urls[0] || '';
+            if (next) {
+              entryVal.textContent = next;
+              entryVal.title = next;
+              toast('局域网已开启 · ' + next);
+            } else {
+              entryVal.textContent = baseURL;
+              entryVal.title = baseURL;
+              toast('已请求开启局域网，但没拿到网卡地址；请检查网络或防火墙');
+            }
+          } catch (e) {
+            // 最常见的原因是"还没设密钥"——远程请求会被全拒，后端直接拒绝开启。
+            // 把用户导到设置页去做这一步，而不是让他对着一个失败 toast 猜。
+            entryVal.textContent = baseURL;
+            entryVal.title = baseURL;
+            const msg = String(e.message || e);
+            if (/密钥|api key|caller key/i.test(msg)) {
+              toast('开启局域网前需要先设密钥，请到设置页创建');
+              ctx.navigate('settings', { tab: 'network' });
+            } else {
+              toast('开启局域网失败：' + msg);
+            }
+          }
+        })().catch((e) => toast('开启局域网失败：' + (e.message || e))); }, { label: '入口' });
       const copyBtn = iconBtn('copy', '复制入口', () => copyText(entryVal.textContent));
 
       const generateKey = async () => {
@@ -501,7 +540,8 @@ export default {
       };
 
       // 掩码 → 眼睛看明文 → 复制；轮换走破坏性确认
-      const keyRow = secretRow(keyMasked, { onRotate: generateKey, rotateLabel: '轮换' });
+      // keyMasked 已是后端打码值：secretRow 会据此隐藏"显示/复制"，只留轮换。
+      const keyRow = secretRow(keyMasked, { onRotate: generateKey, rotateLabel: '轮换', maskedOnly: !!keyMasked });
 
       // 用 field() 保留 aria-label 关联，再叠成「标签在上、控件在下」——窄宽度下 URL 才读得全
       const entryField = h('div', { class: 'kv-row' },

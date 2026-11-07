@@ -80,7 +80,7 @@ func (g *Gateway) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 	// 1. 监听地址与鉴权
 	addr := g.cfg.Addr
 	if isPublicListen(addr) {
-		if g.cfg.APIKey == "" {
+		if g.GatewayKey() == "" {
 			add("error", "监听所有网卡但未设置 API Key",
 				"当前监听 "+addr+"，同网段任何人都能使用你的账号额度",
 				"改回 127.0.0.1:7860，或设置 api_key")

@@ -105,7 +105,7 @@ export default {
         h('div', { class: 'inset' },
           field('入口', h('div', { class: 'inline' }, h('span', { class: 'mono' }, baseURL()), iconBtn('copy', '复制入口', () => copyText(baseURL())))),
           field('监听范围', h('div', { class: 'inline' }, h('span', null, lan ? '局域网（需密钥）' : '仅本机'), h('span', { class: 'meta' }, lan ? '外部可达' : '外部不可达'))),
-          field('密钥', keyMasked ? secretRow(keyMasked) : h('div', { class: 'inline' }, h('span', { class: 'meta' }, '未设置'))),
+          field('密钥', keyMasked ? secretRow(keyMasked, { maskedOnly: true }) : h('div', { class: 'inline' }, h('span', { class: 'meta' }, '未设置'))),
           field('调用方密钥', h('div', { class: 'inline' }, chip(d.keys.length + ' 把'), h('span', { class: 'meta' }, '也可以在这里生成和管理'))),
         ),
         h('div', { class: 'inset' },

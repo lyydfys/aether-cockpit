@@ -52,6 +52,12 @@ type runtimeSettings struct {
 	// MaxAttempts 是单次请求最多尝试几个账号（0 = 默认 5）。
 	// 账号多、单号额度小的场景调大能显著减少"整体失败"。
 	MaxAttempts int `json:"max_attempts,omitempty"`
+	// APIKey 是网关鉴权密钥的持久副本。
+	//
+	// 之所以要存：密钥原本只能由启动参数给定，设置页写入的密钥没有落点，
+	// 重启后消失、运行期也不生效。现在写在这里，loadSettings 时恢复到
+	// GatewayKey，行为与启动参数一致。
+	APIKey string `json:"api_key,omitempty"`
 	// ListenAddr 是运行中切换后的监听地址（重启后优先于 cockpit.json 的 addr）。
 	ListenAddr string `json:"listen_addr,omitempty"`
 	// GlobalProxy 是运行中可切换的全局代理（http/https/socks5）。
@@ -447,6 +453,10 @@ func (g *Gateway) loadSettings() {
 		return
 	}
 	g.settings = s
+	// 持久化的密钥优先于启动参数：用户在设置页改过的应当生效。
+	if key := strings.TrimSpace(s.APIKey); key != "" {
+		g.SetGatewayKey(key)
+	}
 	g.applyWorkBuddyIdentity()
 	g.applyFailoverSettings()
 }
@@ -586,6 +596,9 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		// FirstByteTimeoutSec / MaxAttempts：故障转移的两个关键旋钮。
 		FirstByteTimeoutSec *int `json:"first_byte_timeout_sec"`
 		MaxAttempts         *int `json:"max_attempts"`
+		// APIKey 是网关鉴权密钥。过去这个字段没有对应分支，前端提交的密钥
+		// 只会落进 settings.ui（永不生效的副本），于是"填了密钥仍然被拒"。
+		APIKey *string `json:"api_key"`
 		// Proxy 在运行中切换全局代理（http/https/socks5），空串关闭。
 		Proxy *string `json:"proxy"`
 		// Port 让设置页整份保存 prefs 时也能切换端口（幂等）。
@@ -669,6 +682,12 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		g.settings.MaxAttempts = *body.MaxAttempts
+	}
+	if body.APIKey != nil {
+		// 空串 = 关闭鉴权（仅本机监听时的合理默认）；否则立即生效，不用重启。
+		key := strings.TrimSpace(*body.APIKey)
+		g.SetGatewayKey(key)
+		g.settings.APIKey = key
 	}
 	if body.ModelPrices != nil {
 		g.settings.ModelPrices = *body.ModelPrices

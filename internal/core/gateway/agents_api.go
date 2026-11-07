@@ -260,7 +260,7 @@ func (g *Gateway) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		origin := requestOrigin(r, g.PublicAddr())
-		key := strings.TrimSpace(g.cfg.APIKey)
+		key := strings.TrimSpace(g.GatewayKey())
 		if key == "" {
 			key = "aether-local"
 		}
@@ -342,7 +342,7 @@ func (g *Gateway) applyAgent(id string, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	key := strings.TrimSpace(g.cfg.APIKey)
+	key := strings.TrimSpace(g.GatewayKey())
 	if key == "" {
 		key = "aether-local"
 	}
@@ -419,7 +419,7 @@ func (g *Gateway) handleAgentPreview(w http.ResponseWriter, r *http.Request) {
 			model = opts[0].Value
 		}
 		origin := requestOrigin(r, g.PublicAddr())
-		key := strings.TrimSpace(g.cfg.APIKey)
+		key := strings.TrimSpace(g.GatewayKey())
 		if key == "" {
 			key = "aether-local"
 		}

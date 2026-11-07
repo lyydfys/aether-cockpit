@@ -335,7 +335,7 @@ func (g *Gateway) handleAetherSet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	baseURL := "http://" + g.publicAddr
-	key := g.cfg.APIKey
+	key := g.GatewayKey()
 	if key == "" {
 		key = "aether"
 	}

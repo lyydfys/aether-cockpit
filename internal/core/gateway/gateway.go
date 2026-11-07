@@ -279,6 +279,13 @@ type Gateway struct {
 	addrMu     sync.RWMutex
 	publicAddr string
 
+	// gatewayKey 是运行中的网关鉴权密钥（原子读写）。
+	//
+	// 为什么不能直接改 cfg.APIKey：它被 20+ 处并发读取（鉴权、注入、MCP、
+	// 备份、启动器等），运行期写入会构成数据竞争。这里用 atomic.Value
+	// 单独持有，cfg.APIKey 只作为启动初值。
+	gatewayKey atomic.Value // string
+
 	// settingsMu 保护 settings；privacy 是按设置编译的遮蔽引擎（nil = 未启用）。
 	settingsMu   sync.Mutex
 	settings     runtimeSettings
@@ -377,6 +384,29 @@ type Gateway struct {
 	startedAt time.Time
 }
 
+// GatewayKey 返回当前网关鉴权密钥（空 = 本机免鉴权）。
+//
+// 未初始化时回落到 cfg.APIKey：New() 会在构造后写入，但测试与部分
+// 内部构造路径会直接赋 cfg 字段，回退保证它们仍然读到正确的值。
+func (g *Gateway) GatewayKey() string {
+	if v, ok := g.gatewayKey.Load().(string); ok {
+		if v != "" {
+			return v
+		}
+		// 已初始化为空串：只有 cfg 里也没有值时才真的返回空。
+	}
+	return strings.TrimSpace(g.cfg.APIKey)
+}
+
+// SetGatewayKey 运行期更新网关鉴权密钥。
+//
+// 过去密钥只能由启动参数决定：设置页填进去的密钥被写进 settings.ui（一份
+// 永不生效的副本），而鉴权读的是 cfg.APIKey，于是"填了密钥却还是没密钥"
+// ——局域网开关也因此一直被拒（它要求先有可用密钥）。
+func (g *Gateway) SetGatewayKey(key string) {
+	g.gatewayKey.Store(strings.TrimSpace(key))
+}
+
 // SetPublicAddr 记录实际监听地址（桌面端端口错开时调用）。
 func (g *Gateway) SetPublicAddr(addr string) {
 	g.addrMu.Lock()
@@ -453,6 +483,8 @@ func New(cfg Config) *Gateway {
 	if g.settingsPath == "" {
 		g.settingsPath = apppaths.Data("settings.json")
 	}
+	g.gatewayKey.Store(strings.TrimSpace(cfg.APIKey))
+
 	g.loadSettings()
 	// 模型重定向是路由层的显式虚拟名，启动时先注入；保存设置后会立即更新。
 	g.models.SetModelRedirects(g.modelRedirects())
@@ -770,7 +802,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		status := http.StatusUnauthorized
 		msg := "管理接口需要 API Key（本机访问默认放行）"
-		if g.cfg.APIKey == "" {
+		if g.GatewayKey() == "" {
 			status = http.StatusForbidden
 			msg = "管理接口仅限本机访问；如需远程管理请设置 api_key"
 		}
@@ -814,7 +846,7 @@ func (g *Gateway) adminAllowed(r *http.Request) bool {
 	if !g.allowIPAllowed(clientIP(r)) {
 		return false
 	}
-	if g.cfg.APIKey == "" {
+	if g.GatewayKey() == "" {
 		return false
 	}
 	token := extractToken(r)
@@ -822,7 +854,7 @@ func (g *Gateway) adminAllowed(r *http.Request) bool {
 		// EventSource 不能自定义请求头，允许 query 参数传递（仅本机或 HTTPS 场景推荐）。
 		token = r.URL.Query().Get("key")
 	}
-	return token == g.cfg.APIKey
+	return token == g.GatewayKey()
 }
 
 // routes 注册全部端点。
@@ -1377,7 +1409,7 @@ func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		// 远程：必须有主 API Key 或启用的网关密钥。
-		if g.cfg.APIKey != "" && token == g.cfg.APIKey {
+		if g.GatewayKey() != "" && token == g.GatewayKey() {
 			next(w, r)
 			return
 		}

@@ -24,7 +24,7 @@ type injectTarget struct {
 // handleInject 返回接入各客户端的配置片段。
 func (g *Gateway) handleInject(w http.ResponseWriter, r *http.Request) {
 	origin := requestOrigin(r, g.PublicAddr())
-	apiKey := strings.TrimSpace(g.cfg.APIKey)
+	apiKey := strings.TrimSpace(g.GatewayKey())
 	if apiKey == "" {
 		// 本地免鉴权时给一个非空占位值：多数客户端会拒绝空 Authorization。
 		apiKey = "aether-local"

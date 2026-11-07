@@ -174,7 +174,7 @@ func (g *Gateway) handleActivateProfile(w http.ResponseWriter, r *http.Request) 
 	}
 
 	origin := requestOrigin(r, g.PublicAddr())
-	apiKey := strings.TrimSpace(g.cfg.APIKey)
+	apiKey := strings.TrimSpace(g.GatewayKey())
 	if apiKey == "" {
 		apiKey = "aether-local"
 	}

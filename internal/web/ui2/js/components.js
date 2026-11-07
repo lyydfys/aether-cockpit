@@ -305,8 +305,27 @@ export function secretDialog(title, secret, opts = {}) {
 }
 
 /* 密钥行：掩码 → 眼睛切换明文，右侧复制；可选轮换按钮 */
+// 后端为了不泄露明文，只回显打码值（如 "sk-………2026"）。
+// secretRow 必须能识别这种情况：否则"眼睛"和"复制"会把掩码当成完整密钥，
+// 用户点了复制拿到一串省略号，还会以为自己的密钥坏了。
+const MASKED_VALUE_RE = /…|\.\.\.|\*{3,}/;
+
+export function isMaskedSecret(v) {
+  return MASKED_VALUE_RE.test(String(v || ''));
+}
+
 export function secretRow(secret, opts = {}) {
   const val = h('span', { class: 'key-val mono' });
+  // 打码值：不提供"显示/复制"，只提示去设置页重新生成或轮换。
+  const maskedOnly = opts.maskedOnly != null ? !!opts.maskedOnly : isMaskedSecret(secret);
+  if (maskedOnly) {
+    val.textContent = String(secret || '');
+    val.title = '只回显打码值；完整密钥不会再次展示';
+    const row = h('div', { class: 'key-row' }, val,
+      h('span', { class: 'meta' }, '已设置（仅显示打码）'),
+      opts.onRotate ? btn(opts.rotateLabel || '轮换', { class: 'sm', onClick: opts.onRotate }) : null);
+    return row;
+  }
   let shown = false;
   const mask = () => secret.slice(0, 3) + '•'.repeat(8) + secret.slice(-4);
   const eye = iconBtn('eye', '显示完整密钥', () => { shown = !shown; paint(); });

@@ -159,7 +159,7 @@ func (g *Gateway) RestoreLAN() {
 	}
 	g.lan.cfgAddr = strings.TrimSpace(addr)
 	// 没有任何可用的远程凭据时不自动打开，避免开出一个全 401 的端口。
-	if g.cfg.APIKey == "" && (g.callerKeys == nil || !g.callerKeys.hasEnabled()) {
+	if g.GatewayKey() == "" && (g.callerKeys == nil || !g.callerKeys.hasEnabled()) {
 		return
 	}
 	if err := g.SetLAN(true); err != nil {
@@ -181,7 +181,7 @@ func (g *Gateway) handleLANSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	on := *body.On
-	if on && g.cfg.APIKey == "" && (g.callerKeys == nil || !g.callerKeys.hasEnabled()) {
+	if on && g.GatewayKey() == "" && (g.callerKeys == nil || !g.callerKeys.hasEnabled()) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "先在网关页创建一个调用方密钥（或设置主 API Key），否则远程请求会全部被拒绝",
 		})
@@ -232,6 +232,10 @@ func (g *Gateway) settingsView() map[string]any {
 	if len(remoteQuotas) > 0 {
 		view["remote_quotas"] = remoteQuotas
 	}
+	// api_key 以运行中的密钥为准（可能来自启动参数，也可能来自设置页），
+	// 并且**不回显明文**：只给一个"已设置 + 尾四位"的提示。
+	view["api_key"] = maskGatewayKey(g.GatewayKey())
+	view["api_key_set"] = g.GatewayKey() != ""
 	view["lan"] = g.LANEnabled()
 	view["lanURLs"] = g.LANURLs()
 	view["desktop_app"] = g.cfg.DesktopApp
@@ -267,4 +271,19 @@ func (g *Gateway) settingsView() map[string]any {
 	view["dir"] = g.configDir()
 	view["portable"] = false
 	return view
+}
+
+// maskGatewayKey 把网关密钥打成 "sk-…abcd" 形态。
+//
+// 设置页只需要知道"有没有设、最后四位是什么"，把明文放回响应里等于
+// 让任何能访问管理接口的人都能顺手抄走密钥。
+func maskGatewayKey(key string) string {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		return ""
+	}
+	if len(k) <= 8 {
+		return strings.Repeat("*", len(k))
+	}
+	return k[:3] + strings.Repeat("…", 3) + k[len(k)-4:]
 }

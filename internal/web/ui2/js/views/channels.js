@@ -967,13 +967,28 @@ export default {
     }
 
     /* ---------- 详情（右侧抽屉，可编辑） ---------- */
+    // endpointOf 读渠道某个协议端点的 Base URL。
+    //
+    // p.endpoints 是后端新给的地址集合；老回包没有这个字段时返回空串，
+    // 让输入框显示占位符——绝不再把 p.chat（布尔）当 URL 用。
+    function endpointOf(p, kind) {
+      const eps = p && p.endpoints;
+      const v = eps && eps[kind];
+      return typeof v === 'string' ? v : '';
+    }
+
     function openDetail(acct) {
       const a = state.accounts.find((x) => x.account_id === (acct.account_id || acct));
       const p = a && providerOf(a.provider_id);
       if (!a || !p) { toast('渠道信息已变化，请刷新后重试'); return; }
       const d = {
         name: p.display_name || p.name || p.id,
-        chat: p.chat || '', responses: p.responses || '', anthropic: p.anthropic || '', gemini: p.gemini || '',
+        // 端点地址统一从 p.endpoints 读：p.chat 是"能否对话"的布尔能力，
+        // 不是 URL（历史上混用过，导致保存时把 true 当 Base URL 发出去直接失败）。
+        chat: endpointOf(p, 'chat'),
+        responses: endpointOf(p, 'responses'),
+        anthropic: endpointOf(p, 'anthropic'),
+        gemini: endpointOf(p, 'gemini'),
         key: '', models: (p.models || []).map((m) => m.id).join(', '),
         modelMode: p.models_mode || 'merge',
         passUserAgent: !!p.passUserAgent, unlisted: !!p.unlisted, insecureTLS: !!p.insecureTLS,
@@ -1187,7 +1202,12 @@ export default {
         const payload = { id: p.id, name: d.name, modelMode: d.modelMode, passUserAgent: d.passUserAgent, unlisted: d.unlisted, insecureTLS: d.insecureTLS, systemPrompt: d.systemPrompt, concatSystem: !!d.concatSystem, fallback: d.fallback.split(',').map((x) => x.trim()).filter(Boolean), priceRate: num(d.priceRate), maxConcurrency: num(d.maxConcurrency), maxRPM: num(d.maxRPM), queueLimit: num(d.queueLimit), queueWait: num(d.queueWait) };
         // 只有模型勾选/倍率真的被改动时才提交，避免无关保存覆盖既有选择。
         if (modelsDirty || ratesDirty) { payload.models = selected; payload.model_rates = rates; }
-        for (const k of ['chat', 'responses', 'anthropic', 'gemini']) if (d[k].trim()) payload[k] = d[k].trim();
+        // 只提交真正填好的端点。空串不提交（保持后端旧值），非字符串一律跳过：
+        // 一旦把布尔/undefined 塞进 payload，后端会判定 Base URL 非法而整单保存失败。
+        for (const k of ['chat', 'responses', 'anthropic', 'gemini']) {
+          const v = d[k];
+          if (typeof v === 'string' && v.trim()) payload[k] = v.trim();
+        }
         if (d.key) payload.key = d.key;
         if (d.proxy.trim()) payload.proxy = d.proxy.trim();
         try { payload.headers = d.headers.trim() ? JSON.parse(d.headers) : {}; } catch { toast('请求头不是合法 JSON'); return; }
