@@ -36,6 +36,19 @@ const FAMILY_LABEL = {
 const familyLabel = (f) => FAMILY_LABEL[f] || f || '其他';
 const hasLogin = (p) => (p.supported_auths || []).some((m) => m !== 'manual_input') || /^minimax-code/.test(p.id);
 
+/**
+ * 打开「自定义渠道」抽屉。
+ *
+ * 用动态 import 而不是顶层 import：customchannels.js 顶层引了本文件的
+ * openProvider，顶层再反向引用就构成循环依赖。函数声明虽然能活，但
+ * 模块初始化顺序一变就容易踩到"未定义"，这里用运行时加载最稳。
+ * @param {{ getProviders?: () => any[], reload?: () => any }} [opts]
+ */
+async function openCustomChannelsDrawer(opts) {
+  const mod = await import('./customchannels.js');
+  mod.openCustomChannels(opts);
+}
+
 export default {
   title: '接入渠道',
   subtitle: '多平台登录：本机导入、浏览器授权、设备码、手动凭据',
@@ -112,6 +125,15 @@ export default {
       });
     }
 
+    // customChannels 打开「自定义渠道」抽屉：把「地址 + 模型名」注册成渠道。
+    // 注入 getProviders/reload，保存后能直接走本页的接入流程，不用跳来跳去。
+    function customChannels() {
+      openCustomChannelsDrawer({
+        getProviders: () => state.providers,
+        reload: async () => { await load(); },
+      }).catch((e) => toast('打开自定义渠道失败：' + (e.message || e)));
+    }
+
     function countOf(pid) {
       const list = state.accounts.filter((a) => a.provider_id === pid);
       return { total: list.length, ready: list.filter((a) => a.state === 'ready').length };
@@ -124,6 +146,7 @@ export default {
         h('span', { class: 'grow', style: 'flex:1' }),
         btn('扫描本机登录态', { icon: 'folder', onClick: discover, class: 'scan' }),
         btn('从 Alma 导入', { icon: 'link', onClick: almaImport }),
+        btn('＋ 自定义渠道', { icon: 'plugin', onClick: customChannels }),
         iconBtn('refresh', '刷新渠道', load));
       bar.querySelector('.scan')?.setAttribute('data-act', 'scan');
       host.append(bar);

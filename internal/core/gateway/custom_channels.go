@@ -163,7 +163,15 @@ func normalizeCustomChannel(in CustomChannel) (CustomChannel, error) {
 	}
 	out.ID = slugifyCustomID(out.ID)
 	if out.ID == "" {
-		return in, fmt.Errorf("渠道标识不能为空（可用字母/数字）")
+		// 纯中文名（"公司中转"）过 slugify 会把所有字符滤掉，标识变成空串。
+		// 直接报"标识不能为空"没有出路：表单上根本没有填标识的位置。
+		// 与 upsertCustomChannelFromDraft 的约定保持一致：relay-<名字短哈希>，
+		// 同一名字总得到同一 id，重复保存不会新建第二条渠道。
+		seed := strings.TrimSpace(out.Name)
+		if seed == "" {
+			seed = strings.TrimSpace(out.BaseURL)
+		}
+		out.ID = "relay-" + shortHash(seed)
 	}
 	return out, nil
 }
