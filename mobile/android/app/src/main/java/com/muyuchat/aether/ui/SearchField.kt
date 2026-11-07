@@ -40,12 +40,15 @@ internal fun SearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     placeholder: String = "搜索功能名称",
+    // 调用方可以限制高度。弹窗内的父级 Column 有时给出的是无界高度，
+    // 圆角 Surface 会被拉成一大块白色（模型弹窗曾因此把列表挤出屏幕）。
+    modifier: Modifier = Modifier,
 ) {
     val dark = isAetherDarkTheme()
     // 清空后焦点回到搜索框：否则用户要继续搜还得再点一次。
     val focusRequester = remember { FocusRequester() }
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .aetherSpecularRim(cornerRadius = 24.dp),
         shape = CircleShape,

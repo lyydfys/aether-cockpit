@@ -1509,6 +1509,9 @@ private fun ProviderModelsDialog(
                     query = query,
                     onQueryChange = { query = it },
                     placeholder = "搜索模型名",
+                    // 锁死高度：弹窗内父级给出无界高度时，圆角 Surface 会被拉成一大块
+                    // 白色遮住整个列表（用户截图里就是这个现象）。
+                    modifier = Modifier.height(52.dp),
                 )
                 Spacer(Modifier.height(6.dp))
                 when (state) {
@@ -1532,7 +1535,7 @@ private fun ProviderModelsDialog(
                         if (visibleModels.isEmpty()) {
                             Text(
                                 text = if (allModels.isEmpty()) {
-                                    "这个渠道没有可用模型"
+                                    "该渠道没有模型"
                                 } else {
                                     "没有匹配「$query」的模型"
                                 },
@@ -1541,11 +1544,12 @@ private fun ProviderModelsDialog(
                             )
                         } else {
                             // —— 可滚动区：只有这一段滚，搜索框与底部按钮不动 ——
-                            // weight(fill=false)：内容少时对话框跟着缩，内容多时吃满剩余高度再滚动。
+                            // 正常 weight：先固定搜索框/底部区，剩余高度全部给清单；
+                            // 不能用 weight(fill=false)（会被固定区挤成 0 高，列表一行都看不到）。
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .weight(1f, fill = false)
+                                    .weight(1f)
                                     .verticalScroll(rememberScrollState()),
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
