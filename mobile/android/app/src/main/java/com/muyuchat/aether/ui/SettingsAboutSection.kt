@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.Build
+import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -82,7 +83,7 @@ import com.muyuchat.aether.runtime.UpdateInstallPhase
 import com.muyuchat.aether.runtime.cachedApkMatches
 import com.muyuchat.aether.runtime.chooseAndroidApkAsset
 import com.muyuchat.aether.runtime.findSha256Asset
-import com.muyuchat.aether.runtime.updateDownloadErrorText
+import com.muyuchat.aether.runtime.updateDownloadFailureText
 import com.muyuchat.aether.runtime.updateDownloadProgressText
 import com.muyuchat.aether.runtime.updateInstallActionLabel
 import kotlinx.coroutines.Job
@@ -480,6 +481,8 @@ internal fun SettingsAboutSection(
     var downloadedApk by remember { mutableStateOf<File?>(null) }
     var awaitingInstallPermission by remember { mutableStateOf(false) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
+    /** 当前下载源名（界面显示「正在从 … 下载」）。 */
+    var downloadSourceLabel by remember { mutableStateOf<String?>(null) }
     /** Release notes 默认折叠：1200 字全文有 8 屏高，展开会把下载/安装按钮挤没。 */
     var showAllNotes by remember { mutableStateOf(false) }
 
@@ -524,33 +527,54 @@ internal fun SettingsAboutSection(
         installError = null
         installPhase = UpdateInstallPhase.DOWNLOADING
         downloadProgress = 0L to asset.sizeBytes
+        downloadSourceLabel = null
         downloadJob = scope.launch {
             try {
-                // 有 SHA256SUMS 就必须校验；拉校验文件失败也要报错，不能"当没有"。
-                val expected = sha256Asset?.let { sums ->
-                    withContext(Dispatchers.IO) {
-                        downloader.fetchSha256Sums(sums)[asset.name]
-                    }
+                // 安全红线：校验值只从**官方**源拿（API 资产端点 → raw.githubusercontent.com），
+                // 镜像只允许下发 APK。拿不到官方校验值就中止，绝不跳过校验去装。
+                val sums = withContext(Dispatchers.IO) {
+                    downloader.fetchOfficialChecksumSums(sha256Asset, latestRelease?.tagName.orEmpty())
                 }
-                val file = downloader.download(asset, expected) { done, total ->
-                    downloadProgress = done to total
+                val expected = sums[asset.name]?.trim().orEmpty().ifBlank {
+                    throw ManagementApiException(
+                        "checksum_unavailable",
+                        "官方校验文件里没有 ${asset.name}，已中止下载",
+                    )
                 }
+                val file = downloader.download(
+                    asset = asset,
+                    expectedSha256 = expected,
+                    onProgress = { done, total -> downloadProgress = done to total },
+                    onSource = { source, index, total ->
+                        downloadSourceLabel = if (source.isMirror) {
+                            "镜像 ${source.name.removePrefix("镜像 ")}（${index + 1}/$total）"
+                        } else {
+                            "${source.name}（${index + 1}/$total）"
+                        }
+                    },
+                )
                 downloadedApk = file
                 installPhase = UpdateInstallPhase.DOWNLOADED
+                downloadSourceLabel = null
                 launchInstaller(file)
             } catch (e: ManagementApiException) {
+                Log.w("AetherUpdate", "更新下载失败：${e.code} ${e.message}")
                 if (e.code == "cancelled") {
                     installPhase = UpdateInstallPhase.IDLE
                     installError = null
                 } else {
                     installPhase = UpdateInstallPhase.FAILED
-                    installError = updateDownloadErrorText(e.code, e.message)
+                    // 保证非空：界面上必须能看到失败原因（之前只看到「重试下载」就是这里空过）。
+                    installError = updateDownloadFailureText(e.code, e.message)
                 }
+                downloadSourceLabel = null
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Log.w("AetherUpdate", "更新下载异常", e)
                 installPhase = UpdateInstallPhase.FAILED
                 installError = "下载失败：${e.message ?: "未知错误"}"
+                downloadSourceLabel = null
             }
         }
     }
@@ -871,7 +895,11 @@ internal fun SettingsAboutSection(
                 }
                 installPhase == UpdateInstallPhase.DOWNLOADING -> {
                     Text(
-                        text = updateDownloadProgressText(downloadProgress.first, downloadProgress.second),
+                        text = updateDownloadProgressText(
+                            downloaded = downloadProgress.first,
+                            total = downloadProgress.second,
+                            sourceLabel = downloadSourceLabel,
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -896,6 +924,15 @@ internal fun SettingsAboutSection(
                     ) { Text("取消下载") }
                 }
                 else -> {
+                    // 失败原因放在按钮**上方**：之前放在按钮下面，真机上被当成"没有原因文字"。
+                    installError?.takeIf { it.isNotBlank() }?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                    }
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -921,14 +958,6 @@ internal fun SettingsAboutSection(
                             text = "已下载，可重新安装；在系统安装界面点取消不会报错。",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    installError?.let { message ->
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                 }

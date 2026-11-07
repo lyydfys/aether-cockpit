@@ -146,4 +146,95 @@ class UpdateDownloaderTest {
         assertEquals(listOf("armeabi-v7a", "armv7", "armeabi"), abiAliases("armeabi-v7a"))
         assertEquals(listOf("x86_64", "x86-64"), abiAliases("x86_64"))
     }
+
+    @Test
+    fun parsesAssetIdAndApiUrl() {
+        val release = parseGitHubReleaseJson(
+            """
+            {"tag_name":"v0.3.1","assets":[
+              {"id":123456,"name":"AetherCockpit-0.3.1-android-arm64-v8a.apk",
+               "browser_download_url":"https://github.com/o/r/releases/download/v0.3.1/a.apk",
+               "url":"https://api.github.com/repos/o/r/releases/assets/123456","size":100}
+            ]}
+            """.trimIndent(),
+        )
+        val asset = release.assets.single()
+        assertEquals(123456L, asset.id)
+        assertEquals("https://api.github.com/repos/o/r/releases/assets/123456", asset.apiUrl)
+    }
+
+    @Test
+    fun downloadSourcesAreApiThenMirrorsThenDirect() {
+        val asset = asset("AetherCockpit-0.3.1-android-arm64-v8a.apk").copy(
+            apiUrl = "https://api.github.com/repos/o/r/releases/assets/42",
+        )
+        val sources = downloadSources(asset)
+        assertEquals("GitHub API", sources.first().name)
+        assertTrue(sources.first().url.startsWith("https://api.github.com/"))
+        // 三个镜像按声明顺序跟随其后，都指向原始 GitHub 地址。
+        val mirrors = sources.filter { it.isMirror }
+        assertEquals(3, mirrors.size)
+        assertEquals(
+            listOf("镜像 ghfast.top", "镜像 gh-proxy.com", "镜像 hub.gitmirror.com"),
+            mirrors.map { it.name },
+        )
+        assertEquals(
+            "https://ghfast.top/https://github.com/o/r/releases/download/v1/AetherCockpit-0.3.1-android-arm64-v8a.apk",
+            mirrors.first().url,
+        )
+        // 直连兜底。
+        assertEquals("GitHub 直连", sources.last().name)
+        assertFalse(sources.last().url.startsWith("https://ghfast.top/"))
+    }
+
+    @Test
+    fun mirrorUrlOnlyWrapsGithubHttpsUrls() {
+        assertNull(mirrorDownloadUrl("https://ghfast.top/", "http://github.com/a/b.apk"))
+        assertNull(mirrorDownloadUrl("https://ghfast.top/", "https://evil.example.com/a.apk"))
+        assertEquals(
+            "https://gh-proxy.com/https://github.com/a/b.apk",
+            mirrorDownloadUrl("https://gh-proxy.com/", "https://github.com/a/b.apk"),
+        )
+    }
+
+    @Test
+    fun officialChecksumUrlsNeverUseMirrors() {
+        val shaAsset = asset("SHA256SUMS.txt").copy(
+            apiUrl = "https://api.github.com/repos/o/r/releases/assets/9",
+        )
+        val urls = officialChecksumUrls(shaAsset, "v0.3.1")
+        // API 资产端点优先，其次是 raw.githubusercontent.com。
+        assertEquals("https://api.github.com/repos/o/r/releases/assets/9", urls.first())
+        assertTrue(urls.any { it.startsWith("https://raw.githubusercontent.com/") })
+        // 安全红线：任何镜像域名都不能出现在校验文件来源里。
+        urls.forEach { url ->
+            assertTrue("校验文件不得走镜像: $url", !url.contains("ghfast.top") &&
+                !url.contains("gh-proxy.com") && !url.contains("hub.gitmirror.com"))
+        }
+    }
+
+    @Test
+    fun trustedHostsCoverOfficialAndMirrors() {
+        assertTrue(isTrustedGitHubUrl("https://api.github.com/repos/o/r/releases/assets/1"))
+        assertTrue(isTrustedGitHubUrl("https://raw.githubusercontent.com/o/r/v1/SHA256SUMS.txt"))
+        assertTrue(isTrustedGitHubUrl("https://ghfast.top/https://github.com/o/r/a.apk"))
+        // 非 https、带 userinfo、非白名单域名一律拒绝。
+        assertFalse(isTrustedGitHubUrl("http://ghfast.top/x"))
+        assertFalse(isTrustedGitHubUrl("https://user:pw@ghfast.top/x"))
+        assertFalse(isTrustedGitHubUrl("https://example.com/x"))
+    }
+
+    @Test
+    fun failureTextIsNeverBlankAndProgressCarriesSource() {
+        // 界面上必须看到原因：空消息也要有兜底文案。
+        assertEquals("下载失败，请重试", updateDownloadFailureText("unknown_code", ""))
+        assertTrue(updateDownloadFailureText("io_error", null).contains("下载失败"))
+        assertTrue(updateDownloadFailureText("all_sources_failed", "已尝试 5 个源，均失败：超时").contains("5 个源"))
+
+        val text = updateDownloadProgressText(1L, 100L, "镜像 ghfast.top（3/5）")
+        assertTrue(text.startsWith("正在从 镜像 ghfast.top（3/5） 下载"))
+        assertTrue(text.contains("1%"))
+        // 没有源名时退回「下载中」。
+        assertTrue(updateDownloadProgressText(1L, 100L, null).startsWith("下载中 "))
+    }
 }

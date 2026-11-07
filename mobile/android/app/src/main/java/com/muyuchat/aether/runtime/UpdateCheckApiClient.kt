@@ -42,6 +42,10 @@ internal data class GitHubReleaseAsset(
     val name: String,
     val downloadUrl: String,
     val sizeBytes: Long,
+    /** GitHub 资产 id：`/releases/assets/{id}` 官方下载端点要用（`admin` 之外的 API 路径）。 */
+    val id: Long = 0L,
+    /** 资产 API 地址（JSON `url`）：`https://api.github.com/repos/.../assets/{id}`。 */
+    val apiUrl: String = "",
 )
 
 internal data class GitHubRelease(
@@ -152,6 +156,8 @@ internal fun parseGitHubReleaseJson(raw: String): GitHubRelease {
                     name = name,
                     downloadUrl = url,
                     sizeBytes = asset.optLong("size", 0L).coerceAtLeast(0L),
+                    id = asset.optLong("id", 0L),
+                    apiUrl = asset.optString("url").trim(),
                 ),
             )
         }
@@ -294,16 +300,35 @@ internal fun updateDownloadTarget(
 internal fun updateAvailableLabel(version: String, hasPlatformAsset: Boolean): String =
     "发现 v$version（${if (hasPlatformAsset) "含本平台安装包" else "本平台无安装包"}）"
 
-/** 只信任 GitHub 的 HTTPS 地址（与 MCA `isTrustedGitHubDownloadUrl` 同一份白名单）。 */
-internal fun isTrustedGitHubUrl(raw: String): Boolean {    val uri = runCatching { URI(raw) }.getOrNull() ?: return false
+/**
+ * 只信任 GitHub 的 HTTPS 地址（与 MCA `isTrustedGitHubDownloadUrl` 同一份白名单）。
+ *
+ * 允许的域名 = GitHub 官方域名 + 三个下载镜像域名（国内直连 GitHub CDN 常被拦）：
+ * - 官方：`api.github.com`（发布检查/API 资产端点）、`github.com`、
+ *   `objects.githubusercontent.com`、`release-assets.githubusercontent.com`、
+ *   `github-releases.githubusercontent.com`、`raw.githubusercontent.com`（只用于官方校验文件）；
+ * - 镜像：`ghfast.top`、`gh-proxy.com`、`hub.gitmirror.com`（只用于 APK，绝不用于校验文件）。
+ *
+ * 仍然只接受 `https`、443 端口、不允许 userinfo。
+ */
+private val TRUSTED_GITHUB_HOSTS = setOf(
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "github-releases.githubusercontent.com",
+    "api.github.com",
+    "raw.githubusercontent.com",
+    "ghfast.top",
+    "gh-proxy.com",
+    "hub.gitmirror.com",
+)
+
+internal fun isTrustedGitHubUrl(raw: String): Boolean {
+    val uri = runCatching { URI(raw) }.getOrNull() ?: return false
     if (!uri.scheme.equals("https", ignoreCase = true)) return false
     if (!uri.userInfo.isNullOrBlank() || (uri.port != -1 && uri.port != 443)) return false
     val host = uri.host?.lowercase(Locale.US) ?: return false
-    return host == "github.com" ||
-        host == "objects.githubusercontent.com" ||
-        host == "release-assets.githubusercontent.com" ||
-        host == "github-releases.githubusercontent.com" ||
-        host == "api.github.com"
+    return host in TRUSTED_GITHUB_HOSTS
 }
 
 /** GitHub 拉取结果：带 ETag 时服务端可能回 304，此时用本机缓存的 JSON。 */
