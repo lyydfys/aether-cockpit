@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,23 +42,146 @@ func (p *Provider) traeQuotaHosts() []string {
 	return []string{"https://api.trae.ai"}
 }
 
-// traeEntUsage 是 /pay/ide_user_ent_usage 的响应。
+// Trae 套餐额度的响应形状（2026-11-07 实测）。
+//
+// v2 `/trae/api/v2/pay/ide_user_ent_usage` 是**扁平结构**，真正的套餐额度在顶层
+// usage_summary：
+//
+//	{"is_credits_billing":true,
+//	 "usage_summary":{"consumed_amount":212.74,"total_amount":1400,"consumption_ratio":0.152},
+//	 "user_entitlement_pack_list":[{"display_desc":"签到奖励","usage":{"credits_amount":100}}, ...]}
+//
+// pack 里的 quota 只有 credits_limit（签到/赠送包），basic_usage_limit 恒为 0。
+// 旧实现只认 basic_usage_limit，于是在 v2 上判定"没有额度包"，退回签到积分（100）——
+// 这就是卡片显示 100 而不是 1400-212.74 的原因。
+//
+// v1 是嵌套结构（data.user_entitlement_pack_list[].entitlement_base_info.quota.
+// basic_usage_limit + usage.basic_usage_amount），保留作为老账号兜底。
+
+// traeUsageSummary 是 v2 顶层额度汇总。
+type traeUsageSummary struct {
+	ConsumedAmount   float64 `json:"consumed_amount"`
+	TotalAmount      float64 `json:"total_amount"`
+	ConsumptionRatio float64 `json:"consumption_ratio"`
+}
+
+// traePackQuota 是 pack 里的额度声明。
+type traePackQuota struct {
+	BasicUsageLimit float64 `json:"basic_usage_limit"`
+	BonusUsageLimit float64 `json:"bonus_usage_limit"`
+	CreditsLimit    float64 `json:"credits_limit"`
+}
+
+// traePackUsage 是 pack 的已用量。
+type traePackUsage struct {
+	BasicUsageAmount float64 `json:"basic_usage_amount"`
+	BonusUsageAmount float64 `json:"bonus_usage_amount"`
+	CreditsAmount    float64 `json:"credits_amount"`
+}
+
+// traePackBaseInfo 是 pack 的基础信息（含到期时间）。
+type traePackBaseInfo struct {
+	Quota   traePackQuota `json:"quota"`
+	EndTime flexUnix      `json:"end_time"`
+}
+
+// traeEntPack 是一个额度包。
+type traeEntPack struct {
+	DisplayDesc string           `json:"display_desc"`
+	BaseInfo    traePackBaseInfo `json:"entitlement_base_info"`
+	Usage       traePackUsage    `json:"usage"`
+}
+
+// traeEntUsage 兼容 v1（data 包裹）与 v2（顶层扁平）两种形状。
 type traeEntUsage struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-	Data    struct {
-		Packs []struct {
-			BaseInfo struct {
-				Quota struct {
-					BasicUsageLimit float64 `json:"basic_usage_limit"`
-				} `json:"quota"`
-				EndTime string `json:"end_time"`
-			} `json:"entitlement_base_info"`
-			Usage struct {
-				BasicUsageAmount float64 `json:"basic_usage_amount"`
-			} `json:"usage"`
-		} `json:"user_entitlement_pack_list"`
+
+	// v2 顶层
+	IsCreditsBilling bool              `json:"is_credits_billing"`
+	UsageSummary     *traeUsageSummary `json:"usage_summary"`
+	PacksV2          []traeEntPack     `json:"user_entitlement_pack_list"`
+
+	// v1 嵌套
+	Data struct {
+		Packs []traeEntPack `json:"user_entitlement_pack_list"`
 	} `json:"data"`
+}
+
+// packs 返回两种形状里的 pack 列表（v2 优先）。
+func (u traeEntUsage) packs() []traeEntPack {
+	if len(u.PacksV2) > 0 {
+		return u.PacksV2
+	}
+	return u.Data.Packs
+}
+
+// summary 返回 v2 的顶层汇总（v1 没有）。
+func (u traeEntUsage) summary() *traeUsageSummary {
+	if u.UsageSummary == nil || u.UsageSummary.TotalAmount <= 0 {
+		return nil
+	}
+	return u.UsageSummary
+}
+
+// packsTotal 汇总 pack 里的额度（v1 口径）。
+//
+// 只统计有 basic_usage_limit 的包：签到奖励包给的是 credits_limit，含义是
+// "这个包最多兑这么多积分"，与套餐额度是两套东西，加进来会把 1400 撑成 2000+。
+func (u traeEntUsage) packsTotal() (total, used float64, resetAt int64, ok bool) {
+	for _, pk := range u.packs() {
+		limit := pk.BaseInfo.Quota.BasicUsageLimit
+		if limit <= 0 {
+			continue
+		}
+		ok = true
+		total += limit
+		used += pk.Usage.BasicUsageAmount
+		if ts := int64(pk.BaseInfo.EndTime); ts > 0 && (resetAt == 0 || ts < resetAt) {
+			resetAt = ts
+		}
+	}
+	return
+}
+
+// latestEnd 返回所有 pack 里最晚的到期时间（套餐按月续，取最早会显示成某个签到包）。
+func (u traeEntUsage) latestEnd() int64 {
+	var out int64
+	for _, pk := range u.packs() {
+		if ts := int64(pk.BaseInfo.EndTime); ts > out {
+			out = ts
+		}
+	}
+	return out
+}
+
+// flexUnix 解析"秒 / 毫秒 / RFC3339 / 数字字符串"四种写法。
+//
+// 上游不同版本混用：v2 给秒级数字，v1 给 RFC3339，个别老接口给毫秒。
+// 用普通 int64 字段会解析失败变 0，界面上就是"没有重置时间"。
+type flexUnix int64
+
+func (f *flexUnix) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(strings.Trim(string(b), "\""))
+	if s == "" || s == "null" {
+		*f = 0
+		return nil
+	}
+	if n, err := strconv.ParseFloat(s, 64); err == nil && n > 0 {
+		if n > 1e12 { // 毫秒
+			n /= 1000
+		}
+		*f = flexUnix(int64(n))
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05"} {
+		if ts, err := time.Parse(layout, s); err == nil {
+			*f = flexUnix(ts.Unix())
+			return nil
+		}
+	}
+	*f = 0
+	return nil
 }
 
 // QueryQuota 读取 Trae 的套餐额度用量。
@@ -120,32 +244,39 @@ func (p *Provider) queryEntUsage(ctx context.Context, env *provider.AccountEnv, 
 //
 // 上游只给 limit 与 amount，不给剩余，所以剩余靠减法并夹到 0；
 // 多个包（月付 + 加量）按"总量相加、已用相加"合并，重置时间取最早的一个。
+// entUsageToQuota 把额度响应换算成 QuotaStatus。
+//
+// 两代口径优先级：
+//  1. v2 顶层 usage_summary（total_amount / consumed_amount）——实测 Trae CN 的真实
+//     套餐额度只在这里（1400 / 212.74），pack 里的 basic_usage_limit 恒为 0；
+//  2. v1 的 pack 列表（basic_usage_limit + basic_usage_amount）；
+//  3. 都没有则返回 nil，让调用方退回签到积分。
 func entUsageToQuota(out traeEntUsage) *provider.QuotaStatus {
 	var total, used float64
 	var resetAt int64
-	seen := false
-	for _, pk := range out.Data.Packs {
-		limit := pk.BaseInfo.Quota.BasicUsageLimit
-		if limit <= 0 {
-			continue
+
+	if sum := out.summary(); sum != nil {
+		total = sum.TotalAmount
+		used = sum.ConsumedAmount
+		resetAt = out.latestEnd()
+	} else {
+		t, u, at, ok := out.packsTotal()
+		if !ok {
+			return nil
 		}
-		seen = true
-		total += limit
-		used += pk.Usage.BasicUsageAmount
-		if ts := parseTraeTime(pk.BaseInfo.EndTime); ts > 0 && (resetAt == 0 || ts < resetAt) {
-			resetAt = ts
-		}
+		total, used, resetAt = t, u, at
 	}
-	if !seen {
+	if total <= 0 {
 		return nil
 	}
 	if used < 0 {
 		used = 0
 	}
-	remain := total - used
-	if remain < 0 {
-		remain = 0
+	if used > total {
+		used = total
 	}
+	remain := total - used
+
 	q := &provider.QuotaStatus{
 		ReadAt:      time.Now().Unix(),
 		Total:       int(total),
@@ -155,6 +286,7 @@ func entUsageToQuota(out traeEntUsage) *provider.QuotaStatus {
 		Balance:     remain,
 		BalanceUnit: "credits",
 		Until:       resetAt,
+		ExpiresAt:   resetAt,
 	}
 	q.Windows = append(q.Windows, provider.QuotaWindow{
 		Name:     "套餐额度",
