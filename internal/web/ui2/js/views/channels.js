@@ -47,6 +47,11 @@ export default {
         state.presets = pr || { presets: [], provider_presets: {}, route_presets: {} };
         // 官转率（按响应 id 前缀推定）单独取，失败不影响渠道页。
         state.routing = await api.get('routing-stats').catch(() => ({ providers: {} }));
+        // WorkBuddy 出网身份：账号卡片要展示的摘要。必须在这里预取——
+        // acctCard 是同步渲染函数，里面不能 await（否则整个模块语法错误、页面回退到概览）。
+        if (state.accounts.some((x) => String(x.provider_id || '').startsWith('workbuddy'))) {
+          state.wbIdentity = await api.get('providers/workbuddy/identity').catch(() => null);
+        }
         render();
         try {
           if (sessionStorage.getItem('aether.addProvider') === '1') { sessionStorage.removeItem('aether.addProvider'); addProviderDialog(); }
@@ -351,11 +356,29 @@ export default {
       if (a.priority) metaBits.push('优先级 ' + a.priority);
       if ((a.weight || 1) !== 1) metaBits.push('权重 ' + a.weight);
       if (a.concurrency != null) metaBits.push('并发 ' + a.concurrency);
+      
+      // WorkBuddy 出网身份摘要（仅 workbuddy 系渠道）。
+      // 数据来自 load() 的预取：这里必须同步，不能 await。
+      let wbIdentitySummary = null;
+      if (p && String(p.id).startsWith('workbuddy') && state.wbIdentity) {
+        const st = state.wbIdentity;
+        const titleMap = { cli: '官方 CLI', desktop: '桌面端', quiet: '安静', browser: '浏览器' };
+        const displayName = titleMap[st.identity] || st.identity || '未知';
+        const latency = st.pace_ms ? st.pace_ms + 'ms' : '—';
+        wbIdentitySummary = h('div', {
+          class: 'wb-identity-summary clickable',
+          style: 'color:var(--primary);cursor:pointer;font-size:0.85em;margin-top:4px;',
+          title: '点开设置里的 WorkBuddy 出网身份',
+          onclick: () => ctx.navigate('settings', { tab: 'network' }),
+        }, ['出网身份 · ', displayName, ' · ', latency]);
+      }
+      
       // 光秃秃一个日期没人知道是什么：补上语义，并去掉时分（入库看日期就够，完整时间留给 title）
       const foot = h('div', { class: 'acct-foot' },
         h('span', { title: a.created_at ? '账号入库时间 ' + fmtDate(a.created_at) : '没有入库时间记录' },
           a.created_at ? '入库 ' + fmtDate(a.created_at, false) : fmtDate(a.created_at)),
         metaBits.length ? h('span', { class: 'meta', style: 'margin-left:8px' }, metaBits.join(' · ')) : null);
+      if (wbIdentitySummary) foot.append(wbIdentitySummary);
       foot.append(h('span', { class: 'grow' }));
       const acts = h('span', { class: 'acct-acts' });
       const moreBtn = iconBtn('more', '更多操作', () => menu(moreBtn, [

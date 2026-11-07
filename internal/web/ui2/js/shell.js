@@ -73,6 +73,9 @@ export function createShell({ navigate }) {
   let filter = { seg: 'all', query: '', layout: 'grid', sortQuota: false, tag: null, more: { quota: false, calls: false, off: false } };
   let currentId = '';
   let currentView = null;
+  // routeParams 是当前路由的 query（如 #/settings?tab=network）。
+  // 视图通过 ctx.store.get().routeParams 读取，用来直达某个子页/分组。
+  let routeParams = {};
   let queryTimer = 0;
   let chrome = null;
 
@@ -416,7 +419,7 @@ export function createShell({ navigate }) {
     viewHost.replaceWith(nextHost);
     viewHost = nextHost;
     const ctx = {
-      store: { get: () => ({ filter, meta }), set: setFilter },
+      store: { get: () => ({ filter, meta, routeParams }), set: setFilter },
       navigate,
       refresh: () => mountView(currentId, currentView, false),
       refreshAll,
@@ -470,6 +473,8 @@ export function createShell({ navigate }) {
 
   function onRoute(r, view) {
     if (!view) return;
+    // 把 query 传给视图：视图 mount 时从 ctx.store.get().routeParams 取。
+    routeParams = r && r.params ? Object.fromEntries(r.params.entries()) : {};
     mountView(r.id, view, true);
   }
 
