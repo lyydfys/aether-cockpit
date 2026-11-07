@@ -23,7 +23,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
@@ -35,7 +34,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.invisibleToUser
@@ -65,6 +66,15 @@ import androidx.compose.ui.semantics.semantics
  * API < 33 没有预测事件：退回普通 [BackHandler]，页面不做位移（不闪、不崩）。
  */
 internal const val PredictiveBackSupportedSdk = 33
+
+/**
+ * 提交返回后等 `open` 变 false 的上限（毫秒）。
+ *
+ * 正常情况下 `onBack()` 下一两帧就会把 `open` 置 false（`LaunchedEffect(open)` 负责归零）；
+ * 超过这个时间还没关，说明调用方忘了改状态，才由兜底逻辑强制归零。**不要**改成"等两帧"——
+ * 两帧不足以覆盖慢设备，会在内容还没切走时提前释放底层截图（真机上表现为闪第二下）。
+ */
+internal const val BackSettleOpenTimeoutMs = 500L
 
 /** 手指滑到底时页面的缩放（1 → 0.96）。 */
 internal const val BackOverlayRestScale = 0.96f
@@ -271,15 +281,19 @@ internal fun PredictiveBackHost(
                         // 快滑时 motion 已经接近 1：从当前值补到 1，不会再"弹回原位再滑出"。
                         motion.animateTo(targetValue = 1f, animationSpec = backSettleOutSpec())
                         onBack()
-                        // onBack() 只是改状态，真正换内容要等下一帧；等两帧更稳。
-                        repeat(2) { withFrameNanos { } }
+                        // onBack() 只是改状态，真正换内容要等下一帧。**不要**在这里 snapTo(0f)：
+                        // 归零只由 LaunchedEffect(open) 做。这里若抢先归零，gestureActive 会从
+                        // true 翻 false，底层截图在旧内容还没消失时就撤掉 → 真机上就是"闪第二下"。
+                        withTimeoutOrNull(BackSettleOpenTimeoutMs) {
+                            snapshotFlow { openState.value }.first { !it }
+                        }
                     } finally {
                         settling = false
                         isAnimating = false
-                        // 归零**只在一处**做（下面的 LaunchedEffect(open)）：两处都 snapTo 会互相取消
-                        // 正在跑的动画，主线程每帧都在取消/重启 → 真机上表现为"卡死"。
+                        // 兜底只在**调用方始终没把 open 置 false**时触发（动画已滑到 1f，
+                        // 页面却不走 → 会一直停在"滑出去"的空白态）。超时后再归零，
+                        // 并且先 stop 再 snapTo，避免和 LaunchedEffect(open) 抢同一个 Animatable。
                         if (openState.value) {
-                            // 调用方没关掉页面时给一个非挂起的兜底：直接 stop，不排队新的动画。
                             runCatching { motion.stop() }
                             runCatching { motion.snapTo(0f) }
                         }

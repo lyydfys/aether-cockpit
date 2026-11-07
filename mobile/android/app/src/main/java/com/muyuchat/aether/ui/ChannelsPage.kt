@@ -48,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -130,6 +131,14 @@ import kotlin.math.roundToInt
 /** 卡片上一屏最多铺三个额度窗口：再多就该去桌面端看，手机不堆到看不清。 */
 private const val MAX_QUOTA_WINDOWS = 3
 
+/**
+ * 模型弹窗里默认展示的模型行数；超过就折进「展开全部」。
+ *
+ * 3 是根据弹窗剩余高度定的：三段内容（清单 / 添加 / 映射）要在一屏内都露出来，
+ * 清单最多占三行。搜索时不做收纳——用户已经在收敛结果，再藏会让"搜不到"变成假象。
+ */
+internal const val MODEL_LIST_COLLAPSED_ROWS = 3
+
 /** 从未读过额度时的值；`read_at` 为 0 / 缺失 / 脏值都归到这一句，绝不编时间。 */
 internal const val QUOTA_READ_NEVER_COPY = "从未读过"/** 点过「读取额度」、请求也回来了，但这次没读到额度（服务端 quota_read=false）。 */
 internal const val QUOTA_READ_EMPTY_COPY = "无（这次读取没返回额度）"
@@ -186,6 +195,13 @@ internal fun ChannelsPage(
     val customProbe by customVm.probe.collectAsStateWithLifecycle()
     val customError by customVm.error.collectAsStateWithLifecycle()
     var showCustomChannels by rememberSaveable { mutableStateOf(false) }
+    /**
+     * 「模型」弹窗是哪个账号打开的（providerId → accountId）。
+     *
+     * 合并后弹窗里要嵌「模型映射」，而映射是**账号级**的；渠道级打开（没有账号上下文）
+     * 就不显示那一段。
+     */
+    var modelsAccountOf by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     LaunchedEffect(showCustomChannels) {
         if (showCustomChannels) {
             customVm.clearError()
@@ -387,6 +403,10 @@ internal fun ChannelsPage(
                                 selectedIds = selectedIds,
                                 onAction = onAction,
                                 onLoadModels = onLoadModels,
+                                onOpenModelsForAccount = { providerId, accountId ->
+                                    modelsAccountOf = modelsAccountOf + (providerId to accountId)
+                                    onLoadModels(providerId)
+                                },
                                 onToggleProvider = onToggleProvider,
                                 onTestProvider = onTestProvider,
                                 onSelect = { selectedIds = toggleSelection(selectedIds, row.accountId) },
@@ -464,6 +484,10 @@ internal fun ChannelsPage(
         ready.providers.forEach { provider ->
             val openModels = models[provider.id]
             if (openModels != null) {
+                val mappingAccountId = modelsAccountOf[provider.id]
+                val mappingRow = mappingAccountId?.let { id ->
+                    ready.accounts.firstOrNull { it.accountId == id }
+                }
                 ProviderModelsDialog(
                     provider = provider,
                     state = openModels,
@@ -471,7 +495,22 @@ internal fun ChannelsPage(
                     action = ready.accountAction,
                     onAction = onAction,
                     onReload = { onLoadModels(provider.id) },
-                    onDismiss = { onDismissModels(provider.id) },
+                    onDismiss = {
+                        modelsAccountOf = modelsAccountOf - provider.id
+                        onDismissModels(provider.id)
+                    },
+                    mapping = mappingRow?.let { account ->
+                        ProviderModelsMappingSection(
+                            accountId = account.accountId,
+                            providerId = account.providerId,
+                            mapping = account.modelMapping,
+                            edit = ready.accountEdit,
+                            saving = (ready.accountEdit as? AccountEditUiState.Saving)
+                                ?.let { it.accountId == account.accountId && it.kind == AccountEditKind.MAPPING }
+                                ?: false,
+                            onAction = onAction,
+                        )
+                    },
                 )
             }
         }
@@ -523,6 +562,8 @@ private fun AccountCard(
     selectedIds: List<String>,
     onAction: (ChannelsAction) -> Unit,
     onLoadModels: (String) -> Unit,
+    /** 「模型」弹窗：带上账号 id，弹窗里才会嵌「模型映射」那一段。 */
+    onOpenModelsForAccount: (providerId: String, accountId: String) -> Unit = { _, _ -> },
     onToggleProvider: (String, Boolean) -> Unit,
     onTestProvider: (String) -> Unit,
     onSelect: () -> Unit,
@@ -552,6 +593,7 @@ private fun AccountCard(
         onCheckin = { onAction(ChannelsAction.CheckinAccount(row.accountId)) },
         onReadQuota = { onAction(ChannelsAction.ReadAccountQuota(row.accountId)) },
         onLoadModels = { onLoadModels(row.providerId) },
+        onOpenModelsForAccount = { onOpenModelsForAccount(row.providerId, row.accountId) },
         onToggleProvider = { enable -> onToggleProvider(row.providerId, enable) },
         onTest = { onTestProvider(row.providerId) },
         onOpenPresets = onOpenPresets,
@@ -909,6 +951,8 @@ private fun AccountQuotaCard(
     onLoadModels: () -> Unit,
     onToggleProvider: (Boolean) -> Unit,
     onTest: () -> Unit,
+    /** 「模型」弹窗：带上账号 id，弹窗里才会嵌「模型映射」。 */
+    onOpenModelsForAccount: () -> Unit = {},
     /** 跳到「设置 → 预设」；null 时不画按钮（见 `ChannelsPage` 同名参数）。 */
     onOpenPresets: (() -> Unit)? = null,
     /** 跳到「设置 → WorkBuddy 出网身份」；null 时该行不可点。 */
@@ -1159,6 +1203,7 @@ private fun AccountQuotaCard(
         onTest = onTest,
         onSetDisabled = onSetDisabled,
         onLoadModels = onLoadModels,
+        onOpenModelsForAccount = onOpenModelsForAccount,
         onConfirmToggleChannel = { confirmToggle = true },
         onOpenPresets = onOpenPresets ?: {},
         hasOpenPresets = onOpenPresets != null,
@@ -1460,10 +1505,15 @@ private fun ProbeStatusText(probe: ChannelProbe?, probing: Boolean) {
 }
 
 /**
- * 模型清单弹窗（桌面 `channels.js:1093-1129` 的「暴露的模型」）。
+ * 模型弹窗（桌面 `channels.js:1011-1129` 的「模型」tab）。
  *
- * 布局三段固定：标题 → **搜索框**（不随列表滚动）→ **可滚动清单** → 底部按钮（固定）。
- * 清单用 `verticalScroll + heightIn(max)`：一个渠道可能有上百个模型，1.3× 字号下也必须能滑到底。
+ * 三段内容：模型清单（勾选/倍率/删除手动项）、添加缺失模型、模型映射。
+ *
+ * 布局约束：**整页统一滚动**。
+ * 早先的写法是"清单 weight(1f) 自己滚、其余固定"，但固定区（说明文案 + 保存行 +
+ * 嵌进来的映射编辑器）总高度远超 420dp，结果是清单被压成 0 高、映射整块被裁到窗外，
+ * 用户既看不到模型也填不了映射。现在只有一层 verticalScroll，所有段落都在里面，
+ * 弹窗高度按屏幕可用高度取上限（而不是写死的 420dp）。
  *
  * 增删只走**已存在**的端点 `POST /api/providers/{id}/models/extra {model, action}`
  * （`internal/core/gateway/provider_extra_models.go:111`）。它只能增/删**手动添加**的模型；
@@ -1477,8 +1527,13 @@ private fun ProviderModelsDialog(
     onAction: (ChannelsAction) -> Unit,
     onReload: () -> Unit,
     onDismiss: () -> Unit,
+    /** 「模型映射」那一栏：只有从某个账号打开的弹窗才有（渠道级打开时为 null）。 */
+    mapping: ProviderModelsMappingSection? = null,
 ) {
     var query by remember(provider.id) { mutableStateOf("") }
+    // 模型清单的收纳状态：默认收起（只显示前几个）。一次打开把几十个模型全铺开，
+    // 会把下面的「添加缺失模型」「模型映射」两段推到很远，用户以为它们不存在。
+    var modelsExpanded by remember(provider.id) { mutableStateOf(false) }
     var showAdd by remember(provider.id) { mutableStateOf(false) }
     var draftModel by remember(provider.id) { mutableStateOf("") }
     var feedback by remember(provider.id) { mutableStateOf<String?>(null) }
@@ -1530,9 +1585,17 @@ private fun ProviderModelsDialog(
             )
         },
         text = {
-            // 整块限高：1.3× 字号 + 小屏时对话框不能长到超出屏幕（超出部分会被裁掉、且不能滑）。
-            Column(Modifier.heightIn(max = 420.dp)) {
-                // —— 固定：结论行 ——
+            // 高度按屏幕可用空间取上限（最低也给 520dp），避免固定 420dp 时内容被裁。
+            // 真正的滚动由下面这层 verticalScroll 承担——整页一起滚，不只是清单。
+            val maxDialogHeight = (LocalConfiguration.current.screenHeightDp.dp - 220.dp)
+                .coerceAtLeast(520.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxDialogHeight)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                // —— 固定语义（但跟着整页滚）：结论行 ——
                 Text(
                     text = if (state is ProviderModelsUiState.Ready) {
                         providerModelsSummary(state.models)
@@ -1582,17 +1645,26 @@ private fun ProviderModelsDialog(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         } else {
-                            // —— 可滚动区：只有这一段滚，搜索框与底部按钮不动 ——
-                            // 正常 weight：先固定搜索框/底部区，剩余高度全部给清单；
-                            // 不能用 weight(fill=false)（会被固定区挤成 0 高，列表一行都看不到）。
+                            // 清单不再自己滚：外层整页已经有 verticalScroll，
+                            // 嵌套滚动会让内层吃掉手势、外层永远滑不动。
+                            // 这里只负责排布，高度由内容决定。
+                            //
+                            // 收纳：默认只显示前 MODEL_LIST_COLLAPSED_ROWS 个，
+                            // 剩下的折进「展开全部（N 个）」。一个渠道常有几十上百个模型，
+                            // 全量铺开会把下面的「添加/映射」两段推到很远。
+                            // 注意：搜索时**不做收纳** —— 用户已经在收敛结果，
+                            // 再把命中项藏起来会让"搜不到"变成假象。
+                            val collapseEnabled = query.isBlank() && visibleModels.size > MODEL_LIST_COLLAPSED_ROWS
+                            val shownModels = if (collapseEnabled) {
+                                if (modelsExpanded) visibleModels else visibleModels.take(MODEL_LIST_COLLAPSED_ROWS)
+                            } else {
+                                visibleModels
+                            }
                             Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f)
-                                    .verticalScroll(rememberScrollState()),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
-                                visibleModels.forEach { model ->
+                                shownModels.forEach { model ->
                                     // 桌面 `channels.js:1101-1120`：只有 `st.manual` 的行有「删除」，
                                     // 目录/上游返回的模型服务端没有删除接口（provider_extra_models.go）。
                                     // 但**勾选与倍率对目录模型同样可改**（桌面就是这个行为）。
@@ -1656,13 +1728,34 @@ private fun ProviderModelsDialog(
                                         }
                                     }
                                 }
+                                // 收纳开关：只在「可收纳且当前不是搜索态」时出现。
+                                // 折叠时提示被藏起来的数量，展开后给「收起」，避免展开后回不去。
+                                if (collapseEnabled) {
+                                    Spacer(Modifier.height(4.dp))
+                                    McaButton(
+                                        onClick = { modelsExpanded = !modelsExpanded },
+                                        style = McaButtonStyle.Outlined,
+                                        enabled = !busy,
+                                    ) {
+                                        Text(
+                                            text = if (modelsExpanded) {
+                                                "收起"
+                                            } else {
+                                                "展开全部（${visibleModels.size} 个）"
+                                            },
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                // —— 固定：添加区（桌面 `channels.js:1081-1092` 的「添加缺失模型」） ——
+                // —— 第二段：添加缺失模型（桌面 `channels.js:1081-1092`；同一页的次要动作）——
                 // 桌面没有"自定义前缀"这个概念：模型对外永远是「渠道 id/模型名」，这里不自造字段。
+                // 合并前这是独立弹窗「添加缺失模型」，现在折在模型页底部，避免用户不知道点哪个。
                 if (showAdd) {
                     ChannelTextField(
                         value = draftModel,
@@ -1797,7 +1890,31 @@ private fun ProviderModelsDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-            }
+                // —— 第三段：模型映射（桌面 `channels.js:1011-1060` 的同一个「模型」tab）——
+                // 以前是独立弹窗，用户不知道「查看模型 / 添加缺失模型 / 模型映射」该点哪个；
+                // 现在三段在同一页，从账号打开时把映射嵌在最后，渠道级打开时没有这一段。
+                if (mapping != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = "模型映射（客户端名 → 上游名）",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    AccountMappingBody(
+                        accountId = mapping.accountId,
+                        providerId = mapping.providerId,
+                        modelMapping = mapping.mapping,
+                        edit = mapping.edit,
+                        saving = mapping.saving,
+                        onAction = mapping.onAction,
+                        // 嵌在模型弹窗里：保存成功后不关窗，用户可能还要接着改勾选。
+                        onSaved = {},
+                        embedded = true,
+                    )
+                }            }
         },
         confirmButton = {
             McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
@@ -2235,10 +2352,8 @@ internal enum class CardSheet {
     DETAILS,
     TAGS,
     NOTE,
-    MAPPING,
     PRESETS,
     COPY,
-    EXTRA_MODELS,
 }
 
 /* ==========================================================================
@@ -2252,10 +2367,8 @@ internal enum class CardSheet {
 internal enum class AccountMoreAction {
     Details,
     Settings,
+    /** 「模型」：清单 + 添加缺失模型 + 模型映射三段合一（桌面 `channels.js:1011-1060`）。 */
     Models,
-    ModelMapping,
-    // 桌面 channels.js:1018-1034 的「添加缺失模型」：上游 /models 漏报时手工追加。
-    ExtraModels,
     Presets,
     Tags,
     Note,
@@ -2368,21 +2481,11 @@ internal fun accountMoreMenuItems(
             detail = "决定路由优先级、负载权重与并发上限",
         ),
         AccountMoreItem(
+            // 桌面把「清单 / 添加缺失模型 / 映射」放在同一个「模型」tab（`channels.js:1011-1060`）。
+            // 手机端原来拆成三条，用户不知道点哪个；现在合并成一条，进去三段都在。
             action = AccountMoreAction.Models,
-            label = "查看模型",
-            detail = "这个渠道声明了哪些模型、是否已启用",
-        ),
-        AccountMoreItem(
-            action = AccountMoreAction.ExtraModels,
-            label = "添加缺失模型",
-            // 菜单里用一句话；完整桌面原话（含"添加后参与路由与 /v1/models"）放在弹窗正文，
-        // 因为菜单行只放得下一句话（ChannelsMoreMenuTest 有 ≤48 字的约束）。
-        detail = "上游 /models 漏报时手工追加",
-        ),
-        AccountMoreItem(
-            action = AccountMoreAction.ModelMapping,
-            label = if (mappingCount > 0) "模型映射（$mappingCount 条）" else "模型映射",
-            detail = "把客户端模型名改成该账号真正请求的上游模型名",
+            label = if (mappingCount > 0) "模型（含 $mappingCount 条映射）" else "模型",
+            detail = "模型清单 / 添加缺失模型 / 模型映射 都在这里",
         ),
         AccountMoreItem(
             action = AccountMoreAction.Presets,
@@ -2609,102 +2712,12 @@ private fun AccountFieldEditor(
 
 
 /**
- * 额外模型弹窗（桌面 `channels.js:1018-1034`）：说明 + 已登记模型（可删）+ 添加输入框。
+ * 「添加缺失模型」已并入「模型」弹窗（桌面 `channels.js:1011-1060` 的同一个 tab）。
+ * 原来它是独立弹窗，用户被「查看模型 / 添加缺失模型 / 模型映射」三个入口搞混。
+ * 合并后这三段在同一个弹窗里：清单（含删除手动项）→ 添加输入框 → 模型映射。
  *
- * 复用卡片既有的 [AccountActionUiState] 通道（`AccountActionKind.EXTRA_MODEL`），
- * 不额外引入状态：进行中禁用、失败贴服务端原文。
+ * 桌面端一样的小输入框：Surface(hairline) + BasicTextField，自己撑到 48dp。
  */
-@Composable
-private fun ExtraModelsBody(
-    provider: ProviderSummary?,
-    action: AccountActionUiState,
-    onAction: (ChannelsAction) -> Unit,
-) {
-    var input by remember(provider?.id) { mutableStateOf("") }
-    val busy = action is AccountActionUiState.Busy && action.kind == AccountActionKind.EXTRA_MODEL
-    val failure = (action as? AccountActionUiState.Failed)
-        ?.takeIf { it.kind == AccountActionKind.EXTRA_MODEL }
-    val invalid = if (input.isBlank()) null else validateExtraModelName(input)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            text = extraModelNote(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        val models = provider?.modelIds.orEmpty()
-        if (models.isEmpty()) {
-            Text(
-                text = "还没有额外模型",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                models.forEach { model ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = model,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        McaButton(
-                            onClick = {
-                                onAction(
-                                    ChannelsAction.ExtraModel(
-                                        providerId = provider?.id.orEmpty(),
-                                        model = model,
-                                        action = ExtraModelAction.Remove,
-                                    ),
-                                )
-                            },
-                            style = McaButtonStyle.Outlined,
-                            size = McaButtonSize.CardAction,
-                            enabled = !busy,
-                        ) { Text(if (busy) "处理中…" else "删除", maxLines = 1) }
-                    }
-                }
-            }
-        }
-        ChannelTextField(
-            value = input,
-            onValueChange = { input = it },
-            label = "模型名",
-            placeholder = "例如 deepseek-v4.1-flash",
-        )
-        invalid?.let { problem ->
-            Text(
-                text = problem,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        McaButton(
-            onClick = {
-                onAction(
-                    ChannelsAction.ExtraModel(
-                        providerId = provider?.id.orEmpty(),
-                        model = input,
-                        action = ExtraModelAction.Add,
-                    ),
-                )
-            },
-            style = McaButtonStyle.Primary,
-            enabled = !busy && invalid == null && input.isNotBlank(),
-        ) { Text(if (busy) "处理中…" else "添加", maxLines = 1) }
-        failure?.let {
-            Text(
-                text = it.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-    }
-}
-
-/** 桌面端一样的小输入框：Surface(hairline) + BasicTextField，自己撑到 48dp。 */
 @Composable
 private fun ChannelTextField(
     value: String,
@@ -2808,6 +2821,8 @@ private fun AccountSheets(
     onTest: () -> Unit,
     onSetDisabled: (Boolean) -> Unit,
     onLoadModels: () -> Unit,
+    /** 打开合并后的「模型」弹窗（带账号上下文，弹窗里会嵌「模型映射」）。 */
+    onOpenModelsForAccount: () -> Unit = {},
     onConfirmToggleChannel: () -> Unit,
     onOpenPresets: () -> Unit,
     hasOpenPresets: Boolean,
@@ -2827,9 +2842,7 @@ private fun AccountSheets(
                     CardSheet.DETAILS -> "账号详情 · ${row.label}"
                     CardSheet.TAGS -> "标签 · ${row.label}"
                     CardSheet.NOTE -> "备注 · ${row.label}"
-                    CardSheet.MAPPING -> "模型映射 · ${row.label}"
                     CardSheet.PRESETS -> "渠道预设 · ${provider?.name ?: row.providerId}"
-                    CardSheet.EXTRA_MODELS -> "添加缺失模型 · ${provider?.name ?: row.providerId}"
                     CardSheet.COPY -> "复制配置 · ${row.label}"
                     else -> "更多 · ${row.label}"
                 },
@@ -2891,15 +2904,14 @@ private fun AccountSheets(
                                         AccountMoreAction.Details,
                                         AccountMoreAction.Settings,
                                         -> onOpen(CardSheet.DETAILS)
-                                        AccountMoreAction.ExtraModels -> onOpen(CardSheet.EXTRA_MODELS)
                                         AccountMoreAction.Presets -> onOpen(CardSheet.PRESETS)
                                         AccountMoreAction.Models -> {
+                                            // 合并后「模型」是唯一的模型入口：清单 + 添加 + 映射都在同一页。
                                             onClose()
-                                            onLoadModels()
+                                            onOpenModelsForAccount()
                                         }
                                         AccountMoreAction.Tags -> onOpen(CardSheet.TAGS)
                                         AccountMoreAction.Note -> onOpen(CardSheet.NOTE)
-                                        AccountMoreAction.ModelMapping -> onOpen(CardSheet.MAPPING)
                                         AccountMoreAction.CopyConfig -> onOpen(CardSheet.COPY)
                                         AccountMoreAction.Test -> {
                                             onClose()
@@ -2960,13 +2972,6 @@ private fun AccountSheets(
                     onAction = onAction,
                     onSaved = onClose,
                 )
-                CardSheet.MAPPING -> AccountMappingBody(
-                    row = row,
-                    edit = edit,
-                    saving = savingKind == AccountEditKind.MAPPING,
-                    onAction = onAction,
-                    onSaved = onClose,
-                )
                 CardSheet.PRESETS -> {
                     LaunchedEffect(row.providerId) { onAction(ChannelsAction.LoadPresets) }
                     AccountPresetsBody(
@@ -3003,11 +3008,6 @@ private fun AccountSheets(
                         ) { Text("复制到剪贴板") }
                     }
                 }
-                CardSheet.EXTRA_MODELS -> ExtraModelsBody(
-                    provider = provider,
-                    action = action,
-                    onAction = onAction,
-                )
                 CardSheet.NONE -> Unit
                 else -> Unit
                 }
@@ -3397,18 +3397,24 @@ private data class MappingRow(
 
 @Composable
 private fun AccountMappingBody(
-    row: AccountQuotaRow,
+    accountId: String,
+    providerId: String,
+    modelMapping: Map<String, String>,
     edit: AccountEditUiState,
     saving: Boolean,
     onAction: (ChannelsAction) -> Unit,
     onSaved: () -> Unit,
+    /** 嵌入「模型」弹窗时由外层控制高度，正文自己不再占满一屏。 */
+    embedded: Boolean = false,
 ) {
-    CloseOnSaved(edit, onSaved)
+    if (!embedded) {
+        CloseOnSaved(edit, onSaved)
+    }
     
     // 状态管理：逐行列表 + 原始文本 + Tab 切换
-    var rows by remember(row.accountId) { 
+    var rows by remember(accountId) {
         mutableStateOf(
-            row.modelMapping.toList().map { MappingRow(it.first, it.second) }
+            modelMapping.toList().map { MappingRow(it.first, it.second) }
         )
     }
     var rawText by remember(rows) { 
@@ -3456,12 +3462,19 @@ private fun AccountMappingBody(
         
         when (activeTab) {
             0 -> {
-                // 逐行编辑模式
+                // 逐行编辑模式。
+                // 嵌进「模型」弹窗时**不能再套 verticalScroll**：外层整页已经在滚，
+                // 内层滚动会把滑动手势全部吃掉，用户看到的是"映射完全滑不动、加行也看不到"。
+                // 独立弹窗（非 embedded）才用 weight(1f) 自己滚，因为那时没有外层滚动。
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
+                    modifier = if (embedded) {
+                        Modifier.fillMaxWidth()
+                    } else {
+                        Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    },
                 ) {
                     rows.forEachIndexed { index, row ->
                         val errors = validateMappingRow(row)
@@ -3525,7 +3538,7 @@ private fun AccountMappingBody(
                                 showClearDialog = true
                             } else {
                                 val mappingMap = rows.associate { it.clientModel to it.upstreamModel }
-                                onAction(ChannelsAction.SetAccountMapping(row.providerId, row.accountId, mappingMap))
+                                onAction(ChannelsAction.SetAccountMapping(providerId, accountId, mappingMap))
                                 onSaved()
                             }
                         },
@@ -3574,7 +3587,7 @@ private fun AccountMappingBody(
                                     val parts = line.split("=")
                                     if (parts.size == 2) parts[0].trim() to parts[1].trim() else "" to ""
                                 }.filter { it.first.isNotBlank() && it.second.isNotBlank() }.toMap()
-                                onAction(ChannelsAction.SetAccountMapping(row.providerId, row.accountId, mappingMap))
+                                onAction(ChannelsAction.SetAccountMapping(providerId, accountId, mappingMap))
                                 onSaved()
                             }
                         },
@@ -3586,7 +3599,7 @@ private fun AccountMappingBody(
             }
         }
         
-        EditFailureLine(edit, row.accountId, AccountEditKind.MAPPING)
+        EditFailureLine(edit, accountId, AccountEditKind.MAPPING)
     }
     
     // 清除确认对话框
@@ -3599,7 +3612,7 @@ private fun AccountMappingBody(
                 McaButton(
                     onClick = {
                         showClearDialog = false
-                        onAction(ChannelsAction.SetAccountMapping(row.providerId, row.accountId, emptyMap()))
+                        onAction(ChannelsAction.SetAccountMapping(providerId, accountId, emptyMap()))
                         onSaved()
                     },
                     style = McaButtonStyle.Destructive,
@@ -3693,6 +3706,21 @@ private fun validateMappingRow(row: MappingRow): List<String> {
     return errors
 }
 
+/**
+ * 「模型」弹窗里「模型映射」那一栏需要的上下文。
+ *
+ * 桌面端把「清单 / 添加缺失模型 / 映射」放在同一个「模型」tab 里
+ * （`channels.js:1011-1060`），手机端以前拆成三个弹窗、用户不知道点哪个，
+ * 现在合成一个：清单为主，映射作为第三段嵌进来。
+ */
+internal data class ProviderModelsMappingSection(
+    val accountId: String,
+    val providerId: String,
+    val mapping: Map<String, String>,
+    val edit: AccountEditUiState,
+    val saving: Boolean,
+    val onAction: (ChannelsAction) -> Unit,
+)
 @Composable
 private fun AccountPresetsBody(
     row: AccountQuotaRow,

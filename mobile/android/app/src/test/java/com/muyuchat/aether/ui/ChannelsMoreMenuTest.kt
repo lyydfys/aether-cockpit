@@ -42,11 +42,9 @@ class ChannelsMoreMenuTest {
             listOf(
                 AccountMoreAction.Details,
                 AccountMoreAction.Settings,
+                // 「模型」是唯一入口：清单 + 添加缺失模型 + 模型映射合并成一条
+                // （桌面 channels.js:1011-1060 的同一个「模型」tab）。
                 AccountMoreAction.Models,
-                // 「添加缺失模型」紧跟「查看模型」（桌面 channels.js:1018-1034）
-                AccountMoreAction.ExtraModels,
-                // 账号级模型映射（POST /api/provider/accountmapping，整表替换）
-                AccountMoreAction.ModelMapping,
                 AccountMoreAction.Presets,
                 AccountMoreAction.Tags,
                 AccountMoreAction.Note,
@@ -72,8 +70,6 @@ class ChannelsMoreMenuTest {
                 AccountMoreAction.Details,
                 AccountMoreAction.Settings,
                 AccountMoreAction.Models,
-                AccountMoreAction.ExtraModels,
-                AccountMoreAction.ModelMapping,
                 AccountMoreAction.Presets,
                 AccountMoreAction.Tags,
                 AccountMoreAction.Note,
