@@ -25,6 +25,10 @@ var reservedSettingKeys = map[string]bool{
 	// workbuddy_identity 由内核结构化消费（handleUpdateSettings + settings.json），
 	// 不能再顺手落进 settings.ui 里形成两份真相。
 	"workbuddy_identity": true,
+	// 故障转移旋钮同样由内核结构化消费（applyFailoverSettings），
+	// 否则会被当成 UI 偏好塞进 settings.ui，改了不起作用。
+	"first_byte_timeout_sec": true,
+	"max_attempts":           true,
 }
 
 const uiPrefsMaxBytes = 512 << 10

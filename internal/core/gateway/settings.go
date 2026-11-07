@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"aether-cockpit/internal/core/eventbus"
 	"aether-cockpit/internal/providers/workbuddy"
@@ -42,6 +43,15 @@ type ModelPrice struct {
 // runtimeSettings 是 data/settings.json 的形态。
 type runtimeSettings struct {
 	Privacy PrivacyMaskConfig `json:"privacy_mask"`
+	// FirstByteTimeoutSec 是"上游多久没吐第一个字节就换账号"的秒数。
+	//
+	// 为什么需要调：默认 60 秒对慢上游等于"卡满一分钟再报错"，用户体感就是
+	// 请求断了；调小（15~25 秒）能让故障转移在用户失去耐心前发生。
+	// 0 = 保持默认（60 秒）。
+	FirstByteTimeoutSec int `json:"first_byte_timeout_sec,omitempty"`
+	// MaxAttempts 是单次请求最多尝试几个账号（0 = 默认 5）。
+	// 账号多、单号额度小的场景调大能显著减少"整体失败"。
+	MaxAttempts int `json:"max_attempts,omitempty"`
 	// ListenAddr 是运行中切换后的监听地址（重启后优先于 cockpit.json 的 addr）。
 	ListenAddr string `json:"listen_addr,omitempty"`
 	// GlobalProxy 是运行中可切换的全局代理（http/https/socks5）。
@@ -438,6 +448,20 @@ func (g *Gateway) loadSettings() {
 	}
 	g.settings = s
 	g.applyWorkBuddyIdentity()
+	g.applyFailoverSettings()
+}
+
+// applyFailoverSettings 把"故障转移"相关设置应用到运行中的网关。
+//
+// 这两个值直接决定用户体感：首字节超时越长，"卡住"越久；重试次数越少，
+// "一个号没额度导致整体失败"的概率越高。以前它们只能编译期写死。
+func (g *Gateway) applyFailoverSettings() {
+	if sec := g.settings.FirstByteTimeoutSec; sec >= 5 && sec <= 300 {
+		g.cfg.FirstByteTimeout = time.Duration(sec) * time.Second
+	}
+	if n := g.settings.MaxAttempts; n >= 1 && n <= 20 {
+		g.cfg.MaxAttempts = n
+	}
 }
 
 // applyWorkBuddyIdentity 把 settings.json 的 workbuddy_identity 应用到
@@ -559,6 +583,9 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		KeepAwake *bool `json:"keep_awake"`
 		// WSLDisabled 开启/关闭 WSL 接入（关掉后不枚举发行版）。
 		WSLDisabled *bool `json:"wsl_disabled"`
+		// FirstByteTimeoutSec / MaxAttempts：故障转移的两个关键旋钮。
+		FirstByteTimeoutSec *int `json:"first_byte_timeout_sec"`
+		MaxAttempts         *int `json:"max_attempts"`
 		// Proxy 在运行中切换全局代理（http/https/socks5），空串关闭。
 		Proxy *string `json:"proxy"`
 		// Port 让设置页整份保存 prefs 时也能切换端口（幂等）。
@@ -626,6 +653,22 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	g.settingsMu.Lock()
 	if body.Privacy != nil {
 		g.settings.Privacy = *body.Privacy
+	}
+	if body.FirstByteTimeoutSec != nil {
+		if v := *body.FirstByteTimeoutSec; v < 5 || v > 300 {
+			g.settingsMu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "首字节超时应在 5~300 秒之间"})
+			return
+		}
+		g.settings.FirstByteTimeoutSec = *body.FirstByteTimeoutSec
+	}
+	if body.MaxAttempts != nil {
+		if v := *body.MaxAttempts; v < 1 || v > 20 {
+			g.settingsMu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "重试次数应在 1~20 之间"})
+			return
+		}
+		g.settings.MaxAttempts = *body.MaxAttempts
 	}
 	if body.ModelPrices != nil {
 		g.settings.ModelPrices = *body.ModelPrices
@@ -700,6 +743,8 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	g.syncHooks()
 	// 渠道网络档位与边缘固定表同样跟着设置走。
 	g.syncChannelNet()
+	// 故障转移旋钮（首字节超时 / 重试次数）立即生效，不必重启。
+	g.applyFailoverSettings()
 	if body.Proxy != nil {
 		if _, err := g.applyGlobalProxy(*body.Proxy); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})

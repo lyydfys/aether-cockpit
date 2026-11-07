@@ -223,7 +223,34 @@ export default {
         ]),
         channelNetSection(),
         workbuddyIdentitySection(),
+        failoverSection(s),
       ];
+    }
+
+    // failoverSection 暴露"一个账号挂了会不会自动换号"的两个关键旋钮。
+    //
+    // 它们直接决定用户体感：
+    //   - 首字节超时太长（默认 60s）→ 慢上游会把请求卡满一分钟，看起来像"断了"；
+    //   - 重试次数太少（默认 5）→ 账号多、单号额度小时容易整体失败。
+    function failoverSection(s) {
+      const fb = Number(s.first_byte_timeout_sec || 0);
+      const ma = Number(s.max_attempts || 0);
+      const fbCtl = select(
+        [[0, '默认（60 秒）'], [10, '10 秒'], [15, '15 秒'], [20, '20 秒'], [30, '30 秒'], [45, '45 秒']]
+          .map(([value, label]) => ({ value, label })),
+        fb || 0,
+        (val) => save({ first_byte_timeout_sec: Number(val) }, '首字节超时'));
+      const maCtl = select(
+        [3, 5, 8, 10, 15].map((n) => ({ value: n, label: String(n) + ' 次' })),
+        ma || 5,
+        (val) => save({ max_attempts: Number(val) }, '重试次数'));
+      return section('请求失败自动换号', [
+        line('首字节超时', '上游多久没吐第一个字就换账号；调小能更快失败转移，但慢模型容易被误判', fbCtl),
+        line('最多尝试账号数', '单个请求最多试几个账号；账号越多、单号额度越小，可以调大', maCtl),
+        h('div', { class: 'meta', style: 'line-height:1.6;padding:2px 0 6px' },
+          '额度耗尽、限流、登录失效、上游 5xx 都会自动换下一个账号；'
+          + '只有请求本身非法（400 参数错误、模型不存在）才直接报错。'),
+      ]);
     }
 
     // workbuddyIdentitySection 暴露 WorkBuddy 渠道的「出网身份」档位。

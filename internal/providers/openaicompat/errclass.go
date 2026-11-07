@@ -50,6 +50,14 @@ func classifyUpstream(code int, body string, hdr http.Header) *ir.APIError {
 		return ir.NewAPIError(ir.ErrCodeUpstreamFailed, "上游账户余额不足（402）：换一个账号可能可用"+msg).
 			WithRetryable(true).WithStatus(code)
 	case code == http.StatusBadRequest || code == http.StatusUnprocessableEntity:
+		// 400 不全是"用户请求写错了"：相当多渠道把**额度耗尽**也报成 400
+		// （Qoder 的 agent_router、部分中转的 "insufficient_quota"）。
+		// 把这类当成确定性错误直接抛给客户端，就等于"一个号没额度 → 整个请求断掉"，
+		// 而它其实是可以换账号继续的。
+		if quotaExhaustedBody(body) {
+			return ir.NewAPIError(ir.ErrCodeUpstreamRateLimit, "上游账号额度已用尽（"+itoaStatus(code)+"）"+msg).
+				WithRetryable(true).WithStatus(http.StatusTooManyRequests)
+		}
 		return ir.NewAPIError(ir.ErrCodeBadRequest, "上游拒绝请求（"+itoaStatus(code)+"）"+msg).
 			WithStatus(code)
 	case code >= 500:
@@ -136,4 +144,23 @@ func itoaStatus(code int) string {
 		code /= 10
 	}
 	return string(b[i:])
+}
+
+// quotaExhaustedBody 判断 400 响应体是不是"额度耗尽"而不是"请求非法"。
+//
+// 判据只用**明确表示额度/余额用完**的文案，不含 quota 之类的泛词
+// （否则 "quota_for_model_not_allowed" 这种权限错误会被误判成可重试）。
+func quotaExhaustedBody(body string) bool {
+	b := strings.ToLower(body)
+	for _, kw := range []string{
+		"flow nodes", "insufficient_quota", "quota exhausted", "credits exhausted",
+		"credit exhausted", "no credits", "usage limit exceeded", "exceeded the quota",
+		"exceeded your current quota", "额度已用尽", "额度已耗尽", "积分已用尽",
+		"insufficient account funds", "余额不足", "free usage limit reached",
+	} {
+		if strings.Contains(b, kw) {
+			return true
+		}
+	}
+	return false
 }
