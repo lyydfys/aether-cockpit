@@ -192,7 +192,7 @@ func edgeBlockedResponse(status int, body string) bool {
 	return false
 }
 
-// defaultEdgeCandidates 生成默认候选 IP。
+// defaultEdgeCandidates 生成默认候选 IP（自动切换日常使用）。
 //
 // 三段轮流出点，固定步长（可复现，不随机）：
 //   - 162.159.0.0/16、104.26.0.0/16：最常出香港/近端机房的段，按 /24 步长 4 抽样；
@@ -200,15 +200,31 @@ func edgeBlockedResponse(status int, body string) bool {
 //
 // 扫更多收益为零（能到近端的 IP 总量固定），所以限制总候选数而不是无限扩池。
 func defaultEdgeCandidates(limit int) []string {
+	return edgeCandidates(limit, 4)
+}
+
+// defaultEdgeCandidatesDense 是全量候选池：两段 /16 按 /24 步长 2 抽样 +
+// SJC 段，共 288 个（社区脚本的默认口径）。
+//
+// 只在用户手动点「全量扫描」时使用：耗时约为默认池的 3 倍，日常自动切换不需要。
+func defaultEdgeCandidatesDense(limit int) []string {
+	return edgeCandidates(limit, 2)
+}
+
+// edgeCandidates 按给定步长生成候选（两段主流 /16 + SJC 段，轮流取点）。
+func edgeCandidates(limit, step int) []string {
 	if limit <= 0 {
 		limit = 24
+	}
+	if step <= 0 {
+		step = 4
 	}
 	groups := []struct {
 		prefix           string
 		start, end, step int
 	}{
-		{"162.159.", 0, 256, 4},
-		{"104.26.", 0, 256, 4},
+		{"162.159.", 0, 256, step},
+		{"104.26.", 0, 256, step},
 		{"104.17.", 128, 160, 1},
 	}
 	out := make([]string, 0, limit)
@@ -356,8 +372,15 @@ func (g *Gateway) handleEdgeScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "缺少或非法的 host 参数"})
 		return
 	}
+	// full=1 是全量扫描：288 个候选（两段 /16 隔 1 + SJC 段），用于怀疑默认池
+	// 漏掉好 IP 时的手动兜底。耗时约为默认池的 3 倍。
+	full := q.Get("full") == "1"
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	if limit <= 0 || limit > 64 {
+	if full {
+		if limit <= 0 || limit > 320 {
+			limit = 288
+		}
+	} else if limit <= 0 || limit > 96 {
 		limit = 24
 	}
 	timeoutMS, _ := strconv.Atoi(q.Get("timeout_ms"))
@@ -365,11 +388,23 @@ func (g *Gateway) handleEdgeScan(w http.ResponseWriter, r *http.Request) {
 	if timeoutMS >= 500 && timeoutMS <= 15000 {
 		timeout = time.Duration(timeoutMS) * time.Millisecond
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	ctxTimeout := 40 * time.Second
+	if full {
+		ctxTimeout = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), ctxTimeout)
 	defer cancel()
 
 	start := time.Now()
-	results := scanEdges(ctx, host, defaultEdgeCandidates(limit), 12, timeout)
+	candidates := defaultEdgeCandidates(limit)
+	if full {
+		candidates = defaultEdgeCandidatesDense(limit)
+	}
+	concurrency := 12
+	if full {
+		concurrency = 24
+	}
+	results := scanEdgesPath(ctx, host, "/cdn-cgi/trace", candidates, concurrency, timeout)
 	best := make([]edgeCandidate, 0, 3)
 	if len(results) > 3 {
 		best = results[:3]
@@ -379,6 +414,7 @@ func (g *Gateway) handleEdgeScan(w http.ResponseWriter, r *http.Request) {
 
 	out := map[string]any{
 		"host":       host,
+		"full":       full,
 		"scanned":    limit,
 		"usable":     len(results),
 		"best":       best,

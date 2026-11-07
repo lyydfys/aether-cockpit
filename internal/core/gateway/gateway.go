@@ -1468,6 +1468,11 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, proto ir.Protoco
 	defer func() {
 		entry.DurationMS = tm.totalMS()
 		entry.FirstByteMS = tm.firstByteMS()
+		// 真实请求的首 token 时间用来校准线路健康基线（只取成功请求）：
+		// 探针只能反映网络往返，上游变慢只有真实请求看得见。
+		if entry.Status == "ok" && entry.FirstByteMS > 0 && entry.ProviderID != "" {
+			g.noteEdgeLiveTTFT(entry.ProviderID, entry.FirstByteMS)
+		}
 		// 先结算账本，把 token/费用回填到日志，再入环形缓冲；
 		// 否则日志会被 Push 在 finalize 之前，详情抽屉永远缺 token。
 		if led != nil {

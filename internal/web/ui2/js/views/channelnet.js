@@ -46,7 +46,8 @@ export function channelNetFields(providerId, baseUrl) {
     h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' },
       hostInput,
       btn('测一下', { ghost: true, onClick: () => diagnose() }),
-      btn('扫描并钉住', { ghost: true, onClick: () => scan() })),
+      btn('扫描并钉住', { ghost: true, onClick: () => scan() }),
+      btn('全量扫描', { ghost: true, onClick: () => scan(true) })),
     result,
     pinRow,
     h('div', { class: 'meta', style: 'line-height:1.6' },
@@ -166,6 +167,7 @@ export function channelNetFields(providerId, baseUrl) {
       if (st.best_ip) bits.push('最优 ' + st.best_ip + '（' + (st.best_ms || 0) + 'ms）');
       if (st.usable) bits.push('可用 ' + st.usable + '/' + (st.scanned || 0));
       if (st.switches) bits.push('已切换 ' + st.switches + ' 次');
+      if (st.live_ms) bits.push('真实首 token ' + st.live_ms + 'ms' + (st.live_baseline_ms ? '（基线 ' + st.live_baseline_ms + 'ms）' : ''));
       if (st.reason) bits.push(st.reason);
       if (st.error) bits.push('错误：' + st.error);
       autoStatus.append(h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' },
@@ -220,18 +222,19 @@ export function channelNetFields(providerId, baseUrl) {
     }
   }
 
-  async function scan() {
+  async function scan(full) {
     const host = hostInput.value.trim();
     if (!host) { toast('先填上游域名'); return; }
     clear(result);
-    result.append(h('div', { class: 'meta' }, '正在扫描候选边缘（约 5–20 秒）…'));
+    result.append(h('div', { class: 'meta' },
+      full ? '正在全量扫描 288 个候选（约 20–60 秒）…' : '正在扫描候选边缘（约 5–20 秒）…'));
     try {
-      const r = await api.get('network/edge-scan?host=' + encodeURIComponent(host) + '&apply=1');
+      const r = await api.get('network/edge-scan?host=' + encodeURIComponent(host) + (full ? '&full=1' : '') + '&apply=1');
       clear(result);
       const applied = (r.applied || []).join(', ');
       result.append(h('div', { class: 'meta', style: 'line-height:1.6' },
         '可用 ' + (r.usable || 0) + ' / 扫描 ' + (r.scanned || 0) + ' 个，用时 ' + (r.elapsed_ms || 0) + ' ms'
-        + (applied ? '；已钉住 ' + applied : '')));
+        + (r.full ? '（全量池）' : '') + (applied ? '；已钉住 ' + applied : '')));
       for (const ip of r.best || []) {
         result.append(ipLine({ ...ip, ok: true }));
       }

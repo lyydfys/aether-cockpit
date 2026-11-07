@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"aether-cockpit/internal/core/eventbus"
+	"aether-cockpit/internal/provider"
 )
 
 // EdgeAutoConfig 是某个域名的自动切换配置。
@@ -105,6 +107,11 @@ type EdgeAutoState struct {
 	BaselineMS int64       `json:"baseline_ms,omitempty"`
 	LastAlert  int64       `json:"last_alert,omitempty"`
 	Alerts     []EdgeAlert `json:"alerts,omitempty"`
+
+	// 真实请求观测：用网关自己的首 token 时间校准，而不是只看探针。
+	LiveMS       int64 `json:"live_ms,omitempty"`
+	LiveBaseline int64 `json:"live_baseline_ms,omitempty"`
+	LiveSamples  int   `json:"live_samples,omitempty"`
 }
 
 // EdgeAlert 是一条线路告警（劣化/恢复），给界面与事件流用。
@@ -131,6 +138,10 @@ type edgeHealthTrack struct {
 	fails     int     // 连续失败次数
 	lastProbe time.Time
 	lastScan  time.Time
+
+	// liveSamples 是"真实请求首 token 时间"的滚动窗口（最多 8 个）。
+	liveSamples    []int64
+	liveSlowStreak int
 }
 
 var edgeHealth = struct {
@@ -610,3 +621,92 @@ func (g *Gateway) settingsEdgeAutoLocked() map[string]EdgeAutoConfig {
 // edgeProbeFunc / edgeScanFunc 允许测试注入假探测，避免单测打真实网络。
 type edgeProbeFunc func(ctx context.Context, host, ip, path string, timeout time.Duration) edgeCandidate
 type edgeScanFunc func(ctx context.Context, host, path string, candidates []string, concurrency int, timeout time.Duration) []edgeCandidate
+
+// noteEdgeLiveTTFT 用一次真实请求的首 token 时间校准线路健康度。
+//
+// 为什么需要它：探针测的是"网络往返"，而用户体感是"首 token 时间"，后者里
+// 90% 是上游模型时间（社区两个项目也验证了这一点）。只用探针会导致两种误判：
+//  1. 上游变慢时我们毫无感知（探针仍然很快）；
+//  2. 上游偶尔思考久一点被当成线路劣化（探针没变但 TTFT 变高）。
+//
+// 所以这里单独维护一条"真实请求"基线，并且用更宽的阈值（>2x 且多 800ms），
+// 连续两次才升级为告警——避免把模型自身的思考波动算到线路上。
+func (g *Gateway) noteEdgeLiveTTFT(providerID string, ttftMS int64) {
+	if ttftMS <= 0 {
+		return
+	}
+	p, ok := provider.Get(providerID)
+	if !ok {
+		return
+	}
+	host := hostOfBaseURL(p.Manifest().BaseURL)
+	if host == "" {
+		return
+	}
+	cfg := g.edgeAutoConfig(host)
+	if !cfg.Enabled {
+		return
+	}
+
+	t := healthTrackFor(host)
+	t.mu.Lock()
+	t.liveSamples = append(t.liveSamples, ttftMS)
+	if len(t.liveSamples) > 8 {
+		t.liveSamples = t.liveSamples[len(t.liveSamples)-8:]
+	}
+	samples := append([]int64(nil), t.liveSamples...)
+	t.mu.Unlock()
+
+	st := edgeAuto.snapshot(host)
+	st.LiveMS = ttftMS
+	st.LiveSamples = len(samples)
+	var baseline int64
+	if len(samples) >= 3 {
+		baseline = medianInts(samples[:len(samples)-1])
+		st.LiveBaseline = baseline
+	} else {
+		baseline = st.LiveBaseline
+	}
+
+	if baseline <= 0 {
+		edgeAuto.update(st)
+		return
+	}
+	slow := ttftMS > baseline*2 && ttftMS > baseline+800
+
+	t.mu.Lock()
+	if slow {
+		t.liveSlowStreak++
+	} else {
+		t.liveSlowStreak = 0
+	}
+	streak := t.liveSlowStreak
+	t.mu.Unlock()
+
+	if slow && streak >= 2 && !st.Degraded {
+		st.Degraded = true
+		appendEdgeAlert(&st, "warn",
+			fmt.Sprintf("真实请求首 token 变慢：%dms（基线 %dms），正在评估切换", ttftMS, baseline),
+			time.Now().Unix())
+		edgeAuto.update(st)
+		eventbus.Default().Publish("network.edge_degraded", map[string]any{
+			"host": host, "live_ms": ttftMS, "live_baseline_ms": baseline, "source": "live_request",
+		})
+		g.triggerEdgeAutoSwitch(context.Background(), host, cfg, 0)
+		return
+	}
+	edgeAuto.update(st)
+}
+
+// hostOfBaseURL 从渠道 Base URL 里取主机名（失败返回空）。
+func hostOfBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
