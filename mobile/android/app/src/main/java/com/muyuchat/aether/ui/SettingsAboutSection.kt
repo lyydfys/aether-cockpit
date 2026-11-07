@@ -480,6 +480,8 @@ internal fun SettingsAboutSection(
     var downloadedApk by remember { mutableStateOf<File?>(null) }
     var awaitingInstallPermission by remember { mutableStateOf(false) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
+    /** Release notes 默认折叠：1200 字全文有 8 屏高，展开会把下载/安装按钮挤没。 */
+    var showAllNotes by remember { mutableStateOf(false) }
 
     val androidApkAsset: GitHubReleaseAsset? = remember(latestRelease) {
         latestRelease?.let { chooseAndroidApkAsset(it.assets, Build.SUPPORTED_ABIS.toList()) }
@@ -849,54 +851,9 @@ internal fun SettingsAboutSection(
                 ) { Text("稍后") }
             }
         }
-        val notes = aboutReleaseNotesText(state.releaseNotes)
-        if (notes.isNotEmpty() && state.status != AppUpdateStatus.IDLE) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = notes,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        // ——— 块 2 明细：安装包字节数 + 元信息 `·` 行（取不到就整行不显示） ———
-        state.assetsBytes?.let { bytes ->
-            Text(
-                text = "安装包：${formatUpdateAssetSize(bytes)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } ?: Text(
-            text = "安装包：未找到本平台安装包",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        @Composable
-        fun metaLine(text: String?) {
-            if (!text.isNullOrBlank()) {
-                Text(
-                    text = "· $text",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        metaLine(state.publishedAt?.let { "发布于 $it" })
-        metaLine(state.previousVersionCode?.let { "上一版本 v${state.latestVersionName ?: "-"} (versionCode $it)" })
-        metaLine("本版本 v$versionName (versionCode $versionCode)")
-        metaLine(state.applicableDevices)
-        metaLine(state.license)
-
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            McaButton(
-                onClick = { scope.launch { runCheck(manual = true) } },
-                style = McaButtonStyle.Outlined,
-                enabled = !checking,
-            ) { Text(if (checking) "检查中…" else "检查更新") }
-        }
         // ——— App 内更新：下载 + 进度 + 安装（不再跳 GitHub 网页） ———
+        // 放在「更新内容」之前：1200 字的 Release notes 会占满 8 屏，按钮若排在它后面，
+        // 用户会以为"根本没有下载按钮"（真机复验就是这么被误导的）。
         if (state.status == AppUpdateStatus.AVAILABLE) {
             Spacer(Modifier.height(10.dp))
             when {
@@ -986,6 +943,73 @@ internal fun SettingsAboutSection(
                     openUrl(state.releaseUrl.ifBlank { GITHUB_RELEASE_PAGE_URL })
                 },
             )
+        }
+        // ——— 块 2 明细：安装包字节数 + 元信息 `·` 行（取不到就整行不显示） ———
+        state.assetsBytes?.let { bytes ->
+            Text(
+                text = "安装包：${formatUpdateAssetSize(bytes)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } ?: Text(
+            text = "安装包：未找到本平台安装包",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        @Composable
+        fun metaLine(text: String?) {
+            if (!text.isNullOrBlank()) {
+                Text(
+                    text = "· $text",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        metaLine(state.publishedAt?.let { "发布于 $it" })
+        metaLine(state.previousVersionCode?.let { "上一版本 v${state.latestVersionName ?: "-"} (versionCode $it)" })
+        metaLine("本版本 v$versionName (versionCode $versionCode)")
+        metaLine(state.applicableDevices)
+        metaLine(state.license)
+
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            McaButton(
+                onClick = { scope.launch { runCheck(manual = true) } },
+                style = McaButtonStyle.Outlined,
+                enabled = !checking,
+            ) { Text(if (checking) "检查中…" else "检查更新") }
+        }
+        // 更新内容放最后且默认折叠：它只是补充信息，不能把上面的下载/安装按钮挤出首屏。
+        val notes = aboutReleaseNotesText(state.releaseNotes)
+        if (notes.isNotEmpty() && state.status != AppUpdateStatus.IDLE) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "更新内容",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(2.dp))
+            val collapsedLimit = 280
+            val shown = if (showAllNotes || notes.length <= collapsedLimit) {
+                notes
+            } else {
+                notes.take(collapsedLimit).trimEnd() + "…"
+            }
+            Text(
+                text = shown,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (notes.length > collapsedLimit) {
+                McaButton(
+                    onClick = { showAllNotes = !showAllNotes },
+                    style = McaButtonStyle.Text,
+                    size = McaButtonSize.CardAction,
+                ) { Text(if (showAllNotes) "收起" else "展开全部（${notes.length} 字）", maxLines = 1) }
+            }
         }
         }
     }
