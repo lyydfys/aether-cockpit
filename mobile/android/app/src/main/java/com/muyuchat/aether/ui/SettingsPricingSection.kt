@@ -31,7 +31,9 @@ import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaChip
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 设置 → 定价（桌面 `settings.js:710-806` 的「模型定价」卡片）。
@@ -53,15 +55,18 @@ internal fun SettingsPricingSection(
     var pricing by remember { mutableStateOf<PricingCatalog?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
+    // 重试按钮也要能重新触发读取：LaunchedEffect 的 key 里带一个递增计数。
+    var reload by remember { mutableStateOf(0) }
 
-    LaunchedEffect(status.running, status.addr) {
+    LaunchedEffect(status.running, status.addr, reload) {
         if (!status.running) {
             pricing = null
             error = null
             return@LaunchedEffect
         }
         error = null
-        runCatching { client.fetchPricing(status) }
+        // LaunchedEffect 跑在 Main 调度器：先切到 IO，再发起阻塞式 HttpURLConnection。
+        runCatching { withContext(Dispatchers.IO) { client.fetchPricing(status) } }
             .onSuccess { pricing = it }
             .onFailure { error = it.message ?: "读取价格表失败" }
     }
@@ -79,7 +84,14 @@ internal fun SettingsPricingSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
-            McaButton(onClick = { error = null }, style = McaButtonStyle.Outlined) { Text("重试") }
+            McaButton(
+                onClick = {
+                    // 只清 error 不会让 LaunchedEffect 重跑：递增 reload 才能真正重新读取。
+                    error = null
+                    reload++
+                },
+                style = McaButtonStyle.Outlined,
+            ) { Text("重试") }
             return@DeepCard
         }
         if (current == null) {
@@ -105,7 +117,7 @@ internal fun SettingsPricingSection(
                         saving = true
                         scope.launch {
                             try {
-                                pricing = client.saveCurrency(status, code)
+                                pricing = withContext(Dispatchers.IO) { client.saveCurrency(status, code) }
                             } catch (e: ManagementApiException) {
                                 error = "切换币种失败：${e.message}（错误码：${e.code}）"
                             } catch (_: Exception) {

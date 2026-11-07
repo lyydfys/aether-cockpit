@@ -1171,18 +1171,11 @@ private fun RoutingEditorField(
             color = MaterialTheme.colorScheme.surface,
             border = McaHairline.stroke(),
         ) {
-            BasicTextField(
+            ClearableTextField(
                 value = value,
                 onValueChange = onValueChange,
-                singleLine = true,
+                contentDescription = label,
                 textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    // BasicTextField 不吃 Compose 的触摸目标扩展，自己撑到 48dp。
-                    .heightIn(min = 48.dp)
-                    .wrapContentHeight(Alignment.CenterVertically)
-                    .padding(horizontal = 12.dp)
-                    .semantics { contentDescription = label },
             )
         }
     }

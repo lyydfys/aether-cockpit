@@ -8,7 +8,36 @@ import (
 	"testing"
 
 	"aether-cockpit/internal/provider"
+	"aether-cockpit/internal/providers/openaicompat"
 )
+
+// 自定义渠道表单里的附加请求头必须真的下发给 provider（此前只保存不生效，
+// 需要额外头鉴权/选路的中转站会因此 401/403）。
+func TestCustomChannelHeadersReachProvider(t *testing.T) {
+	g := New(Config{SettingsPath: t.TempDir() + "/settings.json", UsagePath: "-"})
+	defer provider.Unregister("custom-hdr-relay")
+
+	body := `{"name":"Hdr Relay","base_url":"https://relay.example.com/v1","protocol":"openai",
+		"models":["gpt-4o"],"headers":{"X-Tenant":"t1","X-Key-Echo":"{{api_key}}"}}`
+	rec := httptest.NewRecorder()
+	g.handleCustomChannelSave(rec, httptest.NewRequest(http.MethodPost, "/api/custom-channels", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("保存失败：%d %s", rec.Code, rec.Body.String())
+	}
+
+	p, ok := provider.Get("custom-hdr-relay")
+	if !ok {
+		t.Fatal("保存后应注册成 provider")
+	}
+	cp, ok := p.(*openaicompat.Provider)
+	if !ok {
+		t.Fatalf("provider 类型 = %T", p)
+	}
+	cfg := cp.Config()
+	if cfg.Headers["X-Tenant"] != "t1" || cfg.Headers["X-Key-Echo"] != "{{api_key}}" {
+		t.Fatalf("附加头未下发到 provider: %+v", cfg.Headers)
+	}
+}
 
 // 自定义渠道保存后必须真的注册成 provider，并且模型名带渠道前缀。
 func TestCustomChannelSaveRegistersProvider(t *testing.T) {

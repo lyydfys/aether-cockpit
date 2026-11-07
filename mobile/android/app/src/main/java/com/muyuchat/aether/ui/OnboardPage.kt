@@ -359,42 +359,70 @@ internal fun OnboardPage(
     }
 
     connect?.let { current ->
-        OnboardConnectDialog(
-            state = current,
-            qoderLoginState = qoderLoginState,
-            onStartQoderLogin = onStartQoderLogin,
-            onOpenQoderLogin = onOpenQoderLogin,
-            onCancelQoderLogin = onCancelQoderLogin,
-            onDismissQoderLogin = onDismissQoderLogin,
-            onSelectMethod = viewModel.connect::selectMethod,
-            onLabel = viewModel.connect::setLabel,
-            onCallbackInput = viewModel.connect::setCallbackInput,
-            onTokenInput = viewModel.connect::setTokenInput,
-            onManualValue = viewModel.connect::setManualValue,
-            onWindsurfEmail = viewModel.connect::setWindsurfEmail,
-            onWindsurfPassword = viewModel.connect::setWindsurfPassword,
-            onDismissError = viewModel.connect::dismissError,
-            onStartAuth = { viewModel.connect.startAuth(onRefresh) },
-            onSubmitCallback = { viewModel.connect.submitCallback() },
-            onCommitAuth = { viewModel.connect.commitAuth(onRefresh) },
-            onCancelAuth = viewModel.connect::cancelAuth,
-            onStartDevice = { viewModel.connect.startDevice(onRefresh) },
-            onCancelDevice = viewModel.connect::cancelDevice,
-            onSubmitTokenJson = { viewModel.connect.submitTokenJson(onRefresh) },
-            onSubmitManual = { viewModel.connect.submitManual(onRefresh) },
-            onSubmitWindsurf = { viewModel.connect.submitWindsurf(onRefresh) },
-            onOpenCustomForm = {
-                viewModel.connect.close()
-                onDismissQoderLogin()
-                viewModel.openForm()
-            },
-            onOpenUrl = onOpenQoderLogin,
-            onNudgeAuthPoll = viewModel.connect::nudgeAuthPoll,
-            onDismiss = {
-                viewModel.connect.close()
-                onDismissQoderLogin()
-            },
-        )
+        val result = current.result
+        if (result != null) {
+            // 结果窗口：成功/失败都**显式弹出来**（不再只改接入弹窗里的一行小字）。
+            // 与接入弹窗二选一渲染，避免两个 McaDialog 叠在一起。
+            OnboardConnectResultDialog(
+                result = result,
+                onRetry = { kind ->
+                    // 先收起结果面板（否则接入弹窗被它挡住），再重放同一种接入方式。
+                    viewModel.connect.dismissResult()
+                    when (kind) {
+                        OnboardPrimaryKind.StartAuth -> viewModel.connect.startAuth(onRefresh)
+                        OnboardPrimaryKind.CommitAuth -> viewModel.connect.commitAuth(onRefresh)
+                        OnboardPrimaryKind.SubmitCallback -> viewModel.connect.submitCallback()
+                        OnboardPrimaryKind.StartDevice -> viewModel.connect.startDevice(onRefresh)
+                        OnboardPrimaryKind.SubmitTokenJson -> viewModel.connect.submitTokenJson(onRefresh)
+                        OnboardPrimaryKind.SubmitManual -> viewModel.connect.submitManual(onRefresh)
+                        OnboardPrimaryKind.SubmitWindsurf -> viewModel.connect.submitWindsurf(onRefresh)
+                        OnboardPrimaryKind.None -> Unit
+                    }
+                },
+                onDismiss = viewModel.connect::dismissResult,
+                onDone = {
+                    viewModel.connect.close()
+                    onDismissQoderLogin()
+                },
+            )
+        } else {
+            OnboardConnectDialog(
+                state = current,
+                qoderLoginState = qoderLoginState,
+                onStartQoderLogin = onStartQoderLogin,
+                onOpenQoderLogin = onOpenQoderLogin,
+                onCancelQoderLogin = onCancelQoderLogin,
+                onDismissQoderLogin = onDismissQoderLogin,
+                onSelectMethod = viewModel.connect::selectMethod,
+                onLabel = viewModel.connect::setLabel,
+                onCallbackInput = viewModel.connect::setCallbackInput,
+                onTokenInput = viewModel.connect::setTokenInput,
+                onManualValue = viewModel.connect::setManualValue,
+                onWindsurfEmail = viewModel.connect::setWindsurfEmail,
+                onWindsurfPassword = viewModel.connect::setWindsurfPassword,
+                onDismissError = viewModel.connect::dismissError,
+                onStartAuth = { viewModel.connect.startAuth(onRefresh) },
+                onSubmitCallback = { viewModel.connect.submitCallback() },
+                onCommitAuth = { viewModel.connect.commitAuth(onRefresh) },
+                onCancelAuth = viewModel.connect::cancelAuth,
+                onStartDevice = { viewModel.connect.startDevice(onRefresh) },
+                onCancelDevice = viewModel.connect::cancelDevice,
+                onSubmitTokenJson = { viewModel.connect.submitTokenJson(onRefresh) },
+                onSubmitManual = { viewModel.connect.submitManual(onRefresh) },
+                onSubmitWindsurf = { viewModel.connect.submitWindsurf(onRefresh) },
+                onOpenCustomForm = {
+                    viewModel.connect.close()
+                    onDismissQoderLogin()
+                    viewModel.openForm()
+                },
+                onOpenUrl = onOpenQoderLogin,
+                onNudgeAuthPoll = viewModel.connect::nudgeAuthPoll,
+                onDismiss = {
+                    viewModel.connect.close()
+                    onDismissQoderLogin()
+                },
+            )
+        }
     }
     draft?.let { current ->
         OnboardCustomProviderDialog(
@@ -1016,30 +1044,20 @@ private fun OnboardField(
             color = MaterialTheme.colorScheme.surface,
             border = McaHairline.stroke(),
         ) {
-            BasicTextField(
+            // 统一输入组件：有内容时右侧出现 ×；密码字段也一样（切换按钮在标签行，不冲突）。
+            ClearableTextField(
                 value = value,
                 onValueChange = onValueChange,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .wrapContentHeight(Alignment.CenterVertically)
-                    .padding(horizontal = 12.dp)
-                    .semantics { contentDescription = label },
-                decorationBox = { inner ->
-                    Box {
-                        if (value.isEmpty() && placeholder.isNotEmpty() && !password) {
-                            Text(
-                                text = placeholder,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        inner()
-                    }
+                placeholder = if (password) "" else placeholder,
+                minHeight = 48.dp,
+                contentDescription = label,
+                textStyle = MaterialTheme.typography.bodySmall.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                ),
+                visualTransformation = if (password) {
+                    PasswordVisualTransformation()
+                } else {
+                    VisualTransformation.None
                 },
             )
         }
@@ -1323,6 +1341,166 @@ private fun OnboardConnectDialog(
     }
 }
 
+/**
+ * 登录/接入结束后的结果窗口。
+ *
+ * 为什么需要它（线上投诉「登录成功没有明显的弹窗提示」）：过去成功后只把接入弹窗底部
+ * 的 `statusLine` 改成「账号已接入」，用户看不到明确的完成反馈。现在：
+ *  - 成功：标题「登录成功」+ 渠道名 / 账号备注 / 本次入库数 / 该渠道现有账号数 + 「完成」；
+ *  - 失败：标题「登录失败」+ 可复制的失败原因与错误码 + 「重试」「关闭」。
+ *
+ * 内容里没有凭据：只有渠道名、备注、数量与错误原文。
+ */
+@Composable
+private fun OnboardConnectResultDialog(
+    result: OnboardResultPanel,
+    onRetry: (OnboardPrimaryKind) -> Unit,
+    onDismiss: () -> Unit,
+    onDone: () -> Unit,
+) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    // 只按"原因 + 错误码"重置：账号数异步补回来时不该把「已复制」又弹掉。
+    var copied by remember(result.reason, result.code) { mutableStateOf(false) }
+    McaDialog(
+        onDismissRequest = { if (result.success) onDone() else onDismiss() },
+        title = {
+            Text(
+                text = onboardResultTitle(result),
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AetherStatusChip(
+                        text = if (result.success) "已入库" else "未完成",
+                        kind = if (result.success) AetherChipKind.SUCCESS else AetherChipKind.DANGER,
+                        showDot = true,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = result.providerName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (result.success) {
+                    OnboardResultLine("本次入库", "${result.addedAccounts} 个账号")
+                    if (result.accountLabel.isNotBlank()) {
+                        OnboardResultLine("账号备注", result.accountLabel)
+                    }
+                    // 账号总数异步补；没回来时如实写"正在刷新"，不猜一个数字。
+                    OnboardResultLine(
+                        "现有账号",
+                        result.accountCount?.let { "$it 个" } ?: "正在刷新…",
+                    )
+                    if (result.note.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = result.note,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AetherColors.warning(),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "账号已保存到本机网关；点「完成」后可在渠道列表里看到它。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    OnboardResultLine("接入方式", onboardMethodLabel(result.method))
+                    OnboardResultLine("失败原因", result.reason.ifBlank { "未知原因" })
+                    if (result.code.isNotBlank()) {
+                        OnboardResultLine("错误码", result.code)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        McaButton(
+                            onClick = {
+                                // 只复制渠道/方式/原因/错误码：token、密码、设备码都不进剪贴板。
+                                clipboard.setText(AnnotatedString(onboardResultCopyText(result)))
+                                copied = true
+                            },
+                            style = McaButtonStyle.Outlined,
+                            size = McaButtonSize.CardAction,
+                        ) { Text("复制失败原因") }
+                        if (copied) {
+                            Spacer(Modifier.width(6.dp))
+                            AetherStatusChip(text = "已复制", kind = AetherChipKind.SUCCESS)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "可以先点「重试」；连续失败时把这行原因复制给支持排查（日志里不含任何密钥）。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (result.success) {
+                McaButton(onClick = onDone, style = McaButtonStyle.Primary) { Text("完成") }
+            } else if (result.retry != OnboardPrimaryKind.None) {
+                McaButton(
+                    onClick = { onRetry(result.retry) },
+                    style = McaButtonStyle.Primary,
+                ) { Text("重试") }
+            }
+        },
+        dismissButton = {
+            if (!result.success) {
+                McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
+            }
+        },
+    )
+}
+
+/** 结果窗口里的一行「标签 + 值」：标签定宽，长原因换行而不是把标签挤没。 */
+@Composable
+private fun OnboardResultLine(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.width(72.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** 进行中提示：低饱和胶囊 + 呼吸点，明确告诉用户"还在等授权"，不是卡住了。 */
+@Composable
+private fun OnboardWaitingBadge(text: String) {
+    AetherStatusChip(
+        text = text,
+        kind = AetherChipKind.ACCENT,
+        showDot = true,
+        pulsingDot = true,
+    )
+}
+
 /** 浏览器授权 / 通用设备码：`/api/auth` 三段式（start → 轮询 → commit）。 */
 @Composable
 private fun OnboardAuthMethodBody(
@@ -1419,6 +1597,17 @@ private fun OnboardAuthMethodBody(
         ) { onCallbackInput(it) }
         // 「我已授权，继续」在弹窗 footer（`confirmButton`）。
     }
+    // 轮询中：显式的「进行中」态 + 取消（footer 此时没有主按钮，不能只留一个不动的弹窗）。
+    if (state.waiting) {
+        Spacer(Modifier.height(10.dp))
+        OnboardWaitingBadge("等待授权中…")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "在浏览器/登录页完成授权后这里会自动继续；也可以随时取消。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     Spacer(Modifier.height(8.dp))
     McaButton(onClick = onCancel, style = McaButtonStyle.Outlined, size = McaButtonSize.CardAction) {
         Text("取消授权")
@@ -1441,6 +1630,11 @@ private fun OnboardDeviceMethodBody(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // 创建会话那一下也要有可见的"进行中"，否则点完「开始登录」像是没反应。
+        if (state.busy) {
+            Spacer(Modifier.height(8.dp))
+            OnboardWaitingBadge("正在创建登录会话…")
+        }
         // 「开始登录」在弹窗 footer（`confirmButton`）。
         return
     }
@@ -1500,6 +1694,17 @@ private fun OnboardDeviceMethodBody(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+    // 轮询中：显式的「进行中」态 + 取消。登录成功后会弹独立结果窗，不会静默地只是变一行字。
+    if (state.waiting) {
+        Spacer(Modifier.height(10.dp))
+        OnboardWaitingBadge("等待授权中…")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "在登录页完成授权后会自动入库，并弹出「登录成功」；等待期间可以随时取消。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
     Spacer(Modifier.height(8.dp))
     McaButton(onClick = onCancel, style = McaButtonStyle.Outlined, size = McaButtonSize.CardAction) {
@@ -1613,27 +1818,13 @@ private fun OnboardTextArea(value: String, placeholder: String, onValueChange: (
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        BasicTextField(
+        ClearableTextField(
             value = value,
             onValueChange = onValueChange,
+            singleLine = false,
+            minHeight = 96.dp,
+            placeholder = placeholder,
             textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 96.dp)
-                .padding(12.dp),
-            decorationBox = { inner ->
-                Box {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    inner()
-                }
-            },
         )
     }
 }

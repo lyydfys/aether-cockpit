@@ -3,8 +3,6 @@ package workbuddy
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,12 +67,6 @@ var (
 	wbSessions = map[string]*LoginSession{}
 )
 
-func randomHex(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
 // loginAPIBase 返回某渠道登录链路所在的站点根。
 //
 // 登录接口（auth/state → auth/token → login/account）挂在站点根上，路径固定为
@@ -107,7 +99,7 @@ func StartLogin(providerID string) (*LoginSession, error) {
 
 	// 关键：登录站点跟着渠道走（国际版走 www.workbuddy.ai），不能固定国内域名。
 	apiBase := loginAPIBase(p)
-	state, authURL, err := requestLoginState(apiBase)
+	state, authURL, err := requestLoginState(apiBase, p.profile.intl)
 	if err != nil {
 		return nil, err
 	}
@@ -139,8 +131,8 @@ func StartLogin(providerID string) (*LoginSession, error) {
 	return s, nil
 }
 
-func requestLoginState(base string) (string, string, error) {
-	body, err := httpJSON("POST", base+"/v2/plugin/auth/state?platform=workbuddy", map[string]any{}, false)
+func requestLoginState(base string, intl bool) (string, string, error) {
+	body, err := httpJSON("POST", base+"/v2/plugin/auth/state?platform=workbuddy", map[string]any{}, false, intl)
 	if err != nil {
 		return "", "", fmt.Errorf("请求 WorkBuddy auth/state 失败: %w", err)
 	}
@@ -230,9 +222,10 @@ func pollLogin(s *LoginSession) {
 		}
 		state := s.state
 		base := s.base
+		intl := isIntlProvider(s.ProviderID)
 		wbMu.Unlock()
 
-		body, err := httpJSON("GET", base+"/v2/plugin/auth/token?state="+url.QueryEscape(state), nil, false)
+		body, err := httpJSON("GET", base+"/v2/plugin/auth/token?state="+url.QueryEscape(state), nil, false, intl)
 		if err != nil {
 			continue
 		}
@@ -253,7 +246,7 @@ func pollLogin(s *LoginSession) {
 		}
 		refresh := firstString(data, "refreshToken", "refresh_token")
 		domain := firstString(data, "domain")
-		uid, nickname, email, enterprise := fetchAccount(base, state, token, domain)
+		uid, nickname, email, enterprise := fetchAccount(base, state, token, domain, intl)
 
 		wbMu.Lock()
 		if s.State != "pending" {
@@ -268,26 +261,34 @@ func pollLogin(s *LoginSession) {
 	}
 }
 
-func fetchAccount(base, state, token, domain string) (uid, nickname, email, enterprise string) {
+// isIntlProvider 判断登录会话属于国际版（决定 Accept-Language / 默认域名）。
+func isIntlProvider(providerID string) bool {
+	return providerID == intlProfile.id
+}
+
+func fetchAccount(base, state, token, domain string, intl bool) (uid, nickname, email, enterprise string) {
 	req, err := http.NewRequest(http.MethodGet, base+"/v2/plugin/login/account?state="+url.QueryEscape(state), nil)
 	if err != nil {
 		return
 	}
+	lang := "zh-CN"
+	if intl {
+		lang = "en-US"
+	}
+	origin := regionOrigin(intl)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", lang)
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Referer", origin+"/")
+	setPluginHeaders(req.Header, currentIdentity())
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-No-User-Id", "true")
 	req.Header.Set("X-No-Enterprise-Id", "true")
 	req.Header.Set("X-No-Department-Info", "true")
-	req.Header.Set("User-Agent", userAgent)
-	setPluginHeaders(req.Header)
-	req.Header.Set("Accept", "application/json")
-	if domain != "" {
-		req.Header.Set("X-Domain", domain)
+	if domain == "" {
+		domain = regionDefaultDomain(intl)
 	}
-	if u, err := url.Parse(base); err == nil && u.Host != "" {
-		origin := u.Scheme + "://" + u.Host
-		req.Header.Set("Origin", origin)
-		req.Header.Set("Referer", origin+"/")
-	}
+	req.Header.Set("X-Domain", domain)
 	resp, err := (&http.Client{Timeout: 12 * time.Second}).Do(req)
 	if err != nil {
 		return
@@ -315,7 +316,7 @@ func fetchAccount(base, state, token, domain string) (uid, nickname, email, ente
 // httpJSON 发一次登录链路请求。
 //
 // endpoint 不能用名为 url 的参数：会遮蔽 net/url 包（历史坑）。
-func httpJSON(method, endpoint string, payload any, authorized bool) (map[string]any, error) {
+func httpJSON(method, endpoint string, payload any, authorized bool, intl bool) (map[string]any, error) {
 	var body io.Reader
 	if payload != nil {
 		raw, _ := json.Marshal(payload)
@@ -327,18 +328,20 @@ func httpJSON(method, endpoint string, payload any, authorized bool) (map[string
 	if err != nil {
 		return nil, err
 	}
+	lang := "zh-CN"
+	if intl {
+		lang = "en-US"
+	}
+	origin := regionOrigin(intl)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	// 登录链路同样按官方客户端形态发：UA / 插件头 / Accept-Language /
-	// Origin / Referer。缺这些头时，auth/state 这条链路看起来就不像官方客户端。
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept-Language", "zh-CN")
-	setPluginHeaders(req.Header)
-	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
-		origin := u.Scheme + "://" + u.Host
-		req.Header.Set("Origin", origin)
-		req.Header.Set("Referer", origin+"/")
-	}
+	// 对齐参考实现 LoginApi.noAuth：UA（按身份档位）+ 插件头 +
+	// Accept-Language / Origin / Referer / X-Domain（区域默认域名）。
+	req.Header.Set("Accept-Language", lang)
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Referer", origin+"/")
+	setPluginHeaders(req.Header, currentIdentity())
+	req.Header.Set("X-Domain", regionDefaultDomain(intl))
 	if !authorized {
 		req.Header.Set("X-No-Authorization", "true")
 		req.Header.Set("X-No-User-Id", "true")

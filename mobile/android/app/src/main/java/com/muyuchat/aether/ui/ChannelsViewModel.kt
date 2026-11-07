@@ -145,6 +145,8 @@ enum class BatchKind {
     ENABLE,
     DISABLE,
     CHECKIN,
+    // 批量删除：桌面 `channels.js:193-203` 的垃圾桶，走 `POST /api/accounts/batch {"action":"delete"}`。
+    DELETE,
 }
 
 /** 批量动作进行/结果的真实计数（全部来自逐条回包，不推断、不美化）。 */
@@ -262,6 +264,19 @@ sealed interface ChannelsAction {
     data class BatchRefresh(val ids: List<String>) : ChannelsAction
     data class BatchSetDisabled(val ids: List<String>, val disabled: Boolean) : ChannelsAction
     data class BatchCheckin(val ids: List<String>) : ChannelsAction
+    /** 批量删除账号（桌面 `channels.js:193`）；二次确认由页面负责。 */
+    data class BatchDelete(val ids: List<String>) : ChannelsAction
+    /** 从上游刷新某渠道的模型目录（桌面 `channels.js:1056`）。 */
+    data class RefreshModels(val providerId: String) : ChannelsAction
+    /**
+     * 保存「暴露的模型 + 倍率」：`POST /api/provider/save {id, models, model_rates}`
+     * （桌面 `channels.js:1178-1191`）。`models` 是完整目标集合，空 = 一个都不暴露。
+     */
+    data class SaveModelSelection(
+        val providerId: String,
+        val models: List<String>,
+        val rates: Map<String, Double>,
+    ) : ChannelsAction
     data object DismissBatch : ChannelsAction
 }
 
@@ -431,7 +446,10 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 emit(ChannelsUiState.Loading)
                 try {
                     val (providers, accounts) = withContext(Dispatchers.IO) {
-                        val p = cachedProviders ?: client.fetchProviders(input.status)
+                        // 带 `include_empty=1`：与桌面接入渠道页一致（`onboard.js:51`），
+                        // 让「已注册但还没接入」的渠道也出现在目录里，否则 DeepSeek 这类
+                        // 未接入过的渠道整条不显示，用户会以为手机上根本没有。
+                        val p = cachedProviders ?: client.fetchProvidersIncludingEmpty(input.status)
                         val a = cachedAccounts ?: accountsClient.fetchAccounts(input.status)
                         // 渠道清单的离线缓存由**数据层**写：网关只要跑起来拉到过清单，磁盘上就有，
                         // 与"用户有没有点进接入渠道页"解耦（OnboardPage 只负责读缓存）。
@@ -618,6 +636,75 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     fun dismissModels(providerId: String) {
         _models.value = _models.value - providerId
     }
+
+    /**
+     * 保存模型勾选 + 倍率（桌面 `channels.js:1178-1191`）。
+     *
+     * 成功后整页重拉 + 重读模型清单：勾选状态来自 providers 视图，不能本地乐观改写。
+     */
+    fun saveModelSelection(providerId: String, models: List<String>, rates: Map<String, Double>) {
+        val status = repository.status.value
+        if (!status.running) {
+            _models.value = _models.value + (
+                providerId to ProviderModelsUiState.Failed("gateway_not_running", "网关未启动")
+                )
+            return
+        }
+        _models.value = _models.value + (providerId to ProviderModelsUiState.Loading)
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { modelsClient.saveSelection(status, providerId, models, rates) }
+                val result = withContext(Dispatchers.IO) { modelsClient.fetchModels(status, providerId) }
+                _models.value = _models.value + (providerId to ProviderModelsUiState.Ready(result))
+                // 勾选/倍率来自 providers 视图：整页重拉，让弹窗拿到新的 baseline。
+                invalidate()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _models.value = _models.value + (providerId to ProviderModelsUiState.Failed(e.code, e.message))
+            } catch (_: Exception) {
+                _models.value = _models.value +
+                    (providerId to ProviderModelsUiState.Failed("unknown", "保存模型选择失败，请重试"))
+            }
+        }
+    }
+
+    /**
+     * 从上游刷新该渠道的模型目录，然后重新读一次清单。
+     *
+     * 对齐桌面 `channels.js:1052-1064`：「目录模式」那一行的「从上游刷新」按钮，
+     * `POST /api/providers/{id}/models/refresh`（`handleRefreshProviderModels`），
+     * 成功后 toast 刷到几个模型并重新打开详情。手机端把结果直接体现在模型弹窗里：
+     * 置 Loading → 重新 `loadModels`；失败把服务端原文留在弹窗的错误行。
+     */
+    fun refreshModels(providerId: String) {
+        if (providerId.isBlank() || _models.value[providerId] is ProviderModelsUiState.Loading) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _models.value = _models.value + (
+                providerId to ProviderModelsUiState.Failed("gateway_not_running", "网关未启动")
+                )
+            return
+        }
+        _models.value = _models.value + (providerId to ProviderModelsUiState.Loading)
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { modelsClient.refreshModels(status, providerId) }
+                val result = withContext(Dispatchers.IO) { modelsClient.fetchModels(status, providerId) }
+                _models.value = _models.value + (providerId to ProviderModelsUiState.Ready(result))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _models.value = _models.value + (providerId to ProviderModelsUiState.Failed(e.code, e.message))
+            } catch (_: Exception) {
+                _models.value = _models.value + (
+                    providerId to ProviderModelsUiState.Failed("unknown", "刷新模型目录失败，请重试")
+                    )
+            }
+        }
+    }
     fun onAction(action: ChannelsAction) {
         when (action) {
             ChannelsAction.Refresh -> invalidate()
@@ -639,6 +726,10 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
             is ChannelsAction.BatchSetDisabled ->
                 runBatch(if (action.disabled) BatchKind.DISABLE else BatchKind.ENABLE, action.ids)
             is ChannelsAction.BatchCheckin -> runBatch(BatchKind.CHECKIN, action.ids)
+            is ChannelsAction.BatchDelete -> runBatch(BatchKind.DELETE, action.ids)
+            is ChannelsAction.RefreshModels -> refreshModels(action.providerId)
+            is ChannelsAction.SaveModelSelection ->
+                saveModelSelection(action.providerId, action.models, action.rates)
             ChannelsAction.DismissBatch -> dismissBatch()
         }
     }
@@ -668,6 +759,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                         BatchKind.ENABLE -> accountsClient.batchSetDisabled(status, ids, disabled = false)
                         BatchKind.DISABLE -> accountsClient.batchSetDisabled(status, ids, disabled = true)
                         BatchKind.CHECKIN -> accountsClient.batchCheckin(status, ids)
+                        BatchKind.DELETE -> accountsClient.batchDelete(status, ids)
                     }
                 }
                 if (outcome.updatedRows.isNotEmpty()) {
@@ -676,8 +768,9 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
                 if (outcome.checkins.isNotEmpty()) {
                     mergeCheckinRows(outcome.checkins)
                 }
-                if (kind == BatchKind.REFRESH) {
-                    // 额度读数变了但批量回包不带新值：重拉账号列表（渠道列表留在 override，不整页重建）。
+                if (kind == BatchKind.REFRESH || kind == BatchKind.DELETE) {
+                    // 额度读数变了 / 行被删了但批量回包不带新列表：
+                    // 重拉账号列表（渠道列表留在 override，不整页重建）。
                     refetchAccounts()
                 }
                 batch.value = BatchUiState.Done(

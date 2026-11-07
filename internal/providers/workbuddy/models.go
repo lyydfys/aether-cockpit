@@ -121,12 +121,16 @@ func (p *Provider) ListModelInfos(ctx context.Context, env *provider.AccountEnv)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeInternal, "构造 WorkBuddy 配置请求失败").WithCause(err)
 	}
+	prof := currentIdentity()
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-User-Id", userID)
 	req.Header.Set("X-Domain", p.domain(env))
-	setPluginHeaders(req.Header)
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("X-Agent-Purpose", "conversation")
+	setPluginHeaders(req.Header, prof)
+	for k, v := range machineHeadersFor(prof, env.GetCredential) {
+		req.Header.Set(k, v)
+	}
 	resp, err := env.Client().Do(req)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "WorkBuddy 配置请求失败").

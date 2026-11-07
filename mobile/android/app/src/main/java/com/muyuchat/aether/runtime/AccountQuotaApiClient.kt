@@ -294,6 +294,27 @@ class AccountQuotaApiClient(
     }
 
     /**
+     * 批量删除账号：桌面 `channels.js:193-203` 的垃圾桶按钮，走**真批量端点**
+     * `POST /api/accounts/batch {"action":"delete","ids":[…]}`（`accounts_api.go` 的
+     * `handleAccountBatch` 认 delete/refresh/ready）。回 `{"results":[…],"ok":N,"total":M}`。
+     */
+    fun batchDelete(status: GatewayStatus, ids: List<String>): AccountBatchOutcome {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateBatchIds(ids)?.let { code -> throw ManagementApiException(code, "批量删除没有可执行的账号") }
+        val response = request(
+            status = status,
+            method = "POST",
+            path = accountsBatchPath(),
+            body = buildAccountBatchJson(BATCH_ACTION_DELETE, ids),
+            timeoutMs = batchReadTimeoutMs,
+        )
+        return parseAccountBatch(response)
+    }
+
+    /**
      * 批量启用/停用：服务端**没有**批量启停端点（`handleAccountBatch` 只认 delete/refresh/ready），
      * 所以这里按 id **顺序**逐个打 `POST /api/accounts/{id}/settings`，逐条记真实结果，
      * 并把每次回包的账号快照带回，供卡片就地更新。
@@ -501,12 +522,42 @@ class AccountQuotaApiClient(
     }
 
     /**
+     * 官方渠道绑定信息：`GET /api/accounts/{id}/binding`（桌面 `channels.js:594`）。
+     *
+     * 回 `{account_id, provider_id, binding:{official,account_id,email,plan,expires_at},
+     * official, paused, pause_reason, paused_at}`（`binding_api.go:45-53`）。
+     * 渠道不支持时服务端回 **409 `{error}`** —— 这不是错误，页面显示"该渠道不提供绑定信息"。
+     */
+    fun fetchBinding(status: GatewayStatus, accountId: String): AccountBinding {
+        val guard = guardOf(status)
+        if (guard != null) {
+            throw guard
+        }
+        validateAccountId(accountId)?.let { code -> throw ManagementApiException(code, "账号 id 不合法") }
+        val response = try {
+            request(
+                status = status,
+                method = "GET",
+                path = accountBindingPath(accountId),
+                body = null,
+                timeoutMs = readTimeoutMs,
+            )
+        } catch (e: ManagementApiException) {
+            // 409 = 这个渠道没有"官方绑定"能力（`binding_api.go:41`）：当成"不适用"，不弹红字。
+            if (e.code == "http_409") {
+                return AccountBinding(supported = false, reason = e.message)
+            }
+            throw e
+        }
+        return parseAccountBinding(response)
+    }
+
+    /**
      * 立即唤醒：`POST /api/wake/run {"account_id":…}`（桌面 `channels.js:427`）。
      *
      * 语义（桌面 tooltip 原话）：「发一个最小请求，提前触发额度重置」。
      * 仅 `capabilities.chat` 为真的渠道显示该动作，调用方负责判定。
-     */
-    fun wakeAccount(status: GatewayStatus, accountId: String) {
+     */    fun wakeAccount(status: GatewayStatus, accountId: String) {
         val guard = guardOf(status)
         if (guard != null) {
             throw guard
@@ -709,6 +760,57 @@ internal fun accountSettingsPath(accountId: String): String =
 /** 删除账号路径（`DELETE /api/accounts/{id}`，`gateway.go:873`）。 */
 internal fun accountPath(accountId: String): String =
     "/api/accounts/${encodeAccountSegment(accountId)}"
+
+/** 官方绑定信息路径（`GET /api/accounts/{id}/binding`，桌面 `channels.js:594`）。 */
+internal fun accountBindingPath(accountId: String): String =
+    "/api/accounts/${encodeAccountSegment(accountId)}/binding"
+
+/**
+ * 账号的「渠道绑定」结果。
+ *
+ * `supported == false` 表示**这个渠道没有官方绑定能力**（服务端 409，`binding_api.go:41`），
+ * 不是错误；页面要显示"该渠道不提供绑定信息"，不要弹红字。
+ * `bound` 为 false 而 supported 为 true 时显示「未绑定」。
+ */
+data class AccountBinding(
+    val supported: Boolean = true,
+    val official: Boolean = false,
+    val boundAccountId: String = "",
+    val email: String = "",
+    val plan: String = "",
+    /** unix 秒；0 = 没上报。 */
+    val expiresAt: Long = 0L,
+    val paused: Boolean = false,
+    val pauseReason: String = "",
+    /** unix 秒；0 = 没上报。 */
+    val pausedAt: Long = 0L,
+    val reason: String = "",
+) {
+    /** 有绑定的官方账号/邮箱才算"已绑定"。 */
+    val bound: Boolean
+        get() = boundAccountId.isNotBlank() || email.isNotBlank()
+}
+
+internal fun parseAccountBinding(body: String): AccountBinding {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "绑定信息返回格式不正确")
+    }
+    val binding = root.optJSONObject("binding")
+    return AccountBinding(
+        supported = true,
+        official = root.optBoolean("official", false) ||
+            (binding?.optBoolean("official", false) ?: false),
+        boundAccountId = binding?.optString("account_id")?.trim().orEmpty(),
+        email = binding?.optString("email")?.trim().orEmpty(),
+        plan = binding?.optString("plan")?.trim().orEmpty(),
+        expiresAt = binding?.optLong("expires_at", 0L)?.coerceAtLeast(0L) ?: 0L,
+        paused = root.optBoolean("paused", false),
+        pauseReason = root.optString("pause_reason").trim(),
+        pausedAt = root.optLong("paused_at", 0L).coerceAtLeast(0L),
+    )
+}
 
 /** 立即唤醒路径（`POST /api/wake/run`，桌面 `channels.js:427`）。 */
 internal fun wakeRunPath(): String = "/api/wake/run"
@@ -1151,6 +1253,9 @@ internal fun buildAccountBatchJson(action: String, ids: List<String>): String {
 }
 
 internal const val BATCH_ACTION_REFRESH = "refresh"
+
+/** 批量删除（`handleAccountBatch` 认 delete/refresh/ready，`accounts_api.go`）。 */
+internal const val BATCH_ACTION_DELETE = "delete"
 
 /** 空列表或含非法 id 时在发请求前就拒掉，避免打一轮空批量。 */
 internal fun validateBatchIds(ids: List<String>): String? {

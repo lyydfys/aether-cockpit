@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 系统级悬浮窗（app 外显）：运行期还要 Settings.canDrawOverlays + 系统设置授权。 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- App 内更新：下载 APK 后调起系统安装器。Android 8+ 还要用户在系统设置里
+         为本应用打开「安装未知应用」（运行期通过 canRequestPackageInstalls 检查）。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"

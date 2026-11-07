@@ -7,4 +7,7 @@
     <cache-path name="backups" path="backups/" />
     <!-- 本机自检摘要：临时诊断产物，导出即分享，不长期保留。 -->
     <cache-path name="reports" path="reports/" />
+    <!-- App 内更新：下载到 cacheDir/updates 的 APK 通过 FileProvider 交给系统安装器。
+         只暴露这一层目录，安装包大小有限、重启后自然失效。 -->
+    <cache-path name="updates" path="updates/" />
 </paths>

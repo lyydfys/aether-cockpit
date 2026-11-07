@@ -1020,6 +1020,8 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                                             val preferredPortSaving by settingsViewModel.preferredPortSaving.collectAsStateWithLifecycle()
                                             val preferredPortError by settingsViewModel.preferredPortError.collectAsStateWithLifecycle()
                                             val preferredPortNotice by settingsViewModel.preferredPortNotice.collectAsStateWithLifecycle()
+                                            val gatewayRestarting by settingsViewModel.gatewayRestarting.collectAsStateWithLifecycle()
+                                            val gatewayRestartNotice by settingsViewModel.gatewayRestartNotice.collectAsStateWithLifecycle()
                                             SettingsPage(
                                                 status = state.status,
                                                 state = settingsState,
@@ -1093,6 +1095,9 @@ fun GatewayHome(viewModel: OverviewViewModel = viewModel()) {
                                                 preferredPortError = preferredPortError,
                                                 preferredPortNotice = preferredPortNotice,
                                                 onSavePreferredPort = settingsViewModel::savePreferredPort,
+                                                gatewayRestarting = gatewayRestarting,
+                                                gatewayRestartNotice = gatewayRestartNotice,
+                                                onRestartGateway = settingsViewModel::restartGateway,
                                                 modifier = modifier,
                                             )
                                         }

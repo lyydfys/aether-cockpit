@@ -55,6 +55,100 @@ data class MaskingRecords(
     val more: Boolean,
 )
 
+/**
+ * `/api/masking/records?limit=N`（默认 50 = 桌面 `misc.js:340` 的 `limit: '50'`）。
+ * 服务端支持筛选（`masking_api.go:22`：`limit&before&kind&by&blocked&agent&provider`）。
+ * 手机端把 kind / blocked / agent / provider 接出来给页面用；`by=model` 服务端目前直接返回空
+ * （`masking_api.go:308` 「目前只有规则命中」），所以界面不提供 by 选项。
+ */
+internal fun maskingRecordsPath(
+    limit: Int,
+    kind: String = "",
+    blockedOnly: Boolean = false,
+    agent: String = "",
+    provider: String = "",
+    before: String = "",
+): String {
+    val out = StringBuilder("/api/masking/records?limit=").append(limit.coerceIn(1, 200))
+    // 注意：服务端按 `h.Kind` 精确比较（`masking_api.go:319-327`），而 Kind 是大写
+    // （`redact.go:1241` 的 `"EMAIL"`），所以这里**不能** lowercase，否则永远筛不到。
+    val safeKind = kind.trim()
+    if (safeKind.isNotEmpty()) {
+        out.append("&kind=").append(java.net.URLEncoder.encode(safeKind, "UTF-8"))
+    }
+    if (blockedOnly) {
+        out.append("&blocked=1")
+    }
+    if (agent.isNotBlank()) {
+        out.append("&agent=").append(java.net.URLEncoder.encode(agent.trim(), "UTF-8"))
+    }
+    if (provider.isNotBlank()) {
+        out.append("&provider=").append(java.net.URLEncoder.encode(provider.trim(), "UTF-8"))
+    }
+    if (before.isNotBlank()) {
+        out.append("&before=").append(java.net.URLEncoder.encode(before.trim(), "UTF-8"))
+    }
+    return out.toString()
+}
+
+/** 脱敏汇总（`GET /api/masking/summary?days=7|30`，桌面 `misc.js:346-356` 的四块 KPI）。 */
+data class MaskingTally(val name: String, val count: Int)
+
+data class MaskingSummary(
+    val requests: Int,
+    val blocked: Int,
+    val distinct: Int,
+    val kinds: List<MaskingTally> = emptyList(),
+    val providers: List<MaskingTally> = emptyList(),
+    val agents: List<MaskingTally> = emptyList(),
+)
+
+/** 一次命中详情里的一轮消息（`GET /api/masking/sent?key=` 的 `body` 里解出来）。 */
+data class MaskingSentMessage(val role: String, val content: String)
+
+data class MaskingSent(
+    val messages: List<MaskingSentMessage>,
+    /** 服务端原样回的那段 JSON（解析不出结构时兜底展示）。 */
+    val rawBody: String,
+)
+
+internal fun maskingSummaryPath(days: Int): String =
+    "/api/masking/summary?days=" + if (days >= 30) 30 else 7
+
+/**
+ * 脱敏类型的中文标签（桌面 `misc.js:321-327` 的 `REDACT_KINDS`）。
+ *
+ * 注意 kind 本身是**大写**（`redact.go:1241` 「EMAIL」），筛选参数要传原值，只有显示用标签。
+ */
+internal val maskingKindLabels: Map<String, String> = mapOf(
+    "API_KEY" to "密钥",
+    "TOKEN" to "令牌",
+    "SECRET" to "口令/鉴权头",
+    "PASSWORD" to "密码",
+    "PRIVATE_KEY" to "私钥",
+    "JWT" to "JWT",
+    "EMAIL" to "邮箱",
+    "PHONE" to "手机号",
+    "ID" to "身份证",
+    "CARD" to "银行卡",
+    "SSN" to "SSN",
+    "PASSPORT" to "护照",
+    "IBAN" to "IBAN",
+    "BIRTHDAY" to "生日",
+    "MAC" to "MAC",
+    "SERIAL" to "序列号",
+    "HOME" to "主目录用户名",
+    "BUCKET" to "云存储桶",
+    "USERHOST" to "用户名@主机",
+    "IP_ADDR" to "公网 IP",
+)
+
+/** 未知类型原样显示（后端加了新类型时不至于显示空白）。 */
+internal fun maskingKindLabel(kind: String): String = maskingKindLabels[kind] ?: kind
+
+internal fun maskingSentPath(key: String): String =
+    "/api/masking/sent?key=" + java.net.URLEncoder.encode(key.trim(), "UTF-8")
+
 class MaskingApiClient(
     private val connectTimeoutMs: Int = 8_000,
     private val readTimeoutMs: Int = 20_000,
@@ -69,14 +163,40 @@ class MaskingApiClient(
             ),
         )
 
-    fun fetchRecords(status: GatewayStatus, limit: Int = 20): MaskingRecords =
+    /**
+     * 最近的脱敏记录（支持桌面同款筛选 `kind / blocked / agent / provider / before`）。
+     *
+     * 默认条数对齐桌面 `misc.js:340` 的 `limit: '50'`；服务端上限 200（`masking_api.go:282`）。
+     */
+    fun fetchRecords(
+        status: GatewayStatus,
+        limit: Int = 50,
+        kind: String = "",
+        blockedOnly: Boolean = false,
+        agent: String = "",
+        provider: String = "",
+        before: String = "",
+    ): MaskingRecords =
         parseMaskingRecords(
             request(
                 status = status,
-                path = "/api/masking/records?limit=${limit.coerceIn(1, 200)}",
+                path = maskingRecordsPath(limit, kind, blockedOnly, agent, provider, before),
                 method = "GET",
             ),
         )
+
+    /** 脱敏汇总：桌面隐私页顶部四块 KPI（`misc.js:346-356`）。 */
+    fun fetchSummary(status: GatewayStatus, days: Int = 7): MaskingSummary =
+        parseMaskingSummary(request(status = status, path = maskingSummaryPath(days), method = "GET"))
+
+    /** 清空脱敏记录：`POST /api/masking/clear`（桌面 `misc.js:463`）。 */
+    fun clearRecords(status: GatewayStatus) {
+        request(status = status, path = "/api/masking/clear", method = "POST", body = "{}")
+    }
+
+    /** 一次命中的"发出去的那段内容"：`GET /api/masking/sent?key=`（桌面 `misc.js:552`）。 */
+    fun fetchSent(status: GatewayStatus, key: String): MaskingSent =
+        parseMaskingSent(request(status = status, path = maskingSentPath(key), method = "GET"))
 
     private fun request(status: GatewayStatus, path: String, method: String, body: String? = null): String {
         if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
@@ -235,6 +355,73 @@ internal fun maskingRecordSourceLine(record: MaskingRecord): String = buildList 
         add(record.model)
     }
 }.joinToString(" · ")
+
+/** 汇总解析：`{requests, blocked, distinct, kinds:[{name,n}], providers:[…], agents:[…]}`。 */
+internal fun parseMaskingSummary(body: String): MaskingSummary {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "脱敏汇总返回格式不正确")
+    }
+    fun tally(key: String): List<MaskingTally> {
+        val array = root.optJSONArray(key) ?: return emptyList()
+        return (0 until array.length()).mapNotNull { i ->
+            val item = array.optJSONObject(i) ?: return@mapNotNull null
+            val name = item.optString("name").trim()
+            if (name.isEmpty()) {
+                null
+            } else {
+                MaskingTally(name = name, count = item.optInt("n", 0).coerceAtLeast(0))
+            }
+        }
+    }
+    return MaskingSummary(
+        requests = root.optInt("requests", 0).coerceAtLeast(0),
+        blocked = root.optInt("blocked", 0).coerceAtLeast(0),
+        distinct = root.optInt("distinct", 0).coerceAtLeast(0),
+        kinds = tally("kinds"),
+        providers = tally("providers"),
+        agents = tally("agents"),
+    )
+}
+
+/**
+ * 「这条命中发出去的内容」解析。
+ *
+ * 服务端回 `{"body": "<json 字符串>"}`（`masking_api.go:429-433`），`body` 里是
+ * `{"messages":[{"role","content"}]}`；没有记录时回 `{}`。解析不出结构时保留原文。
+ */
+internal fun parseMaskingSent(body: String): MaskingSent {
+    val root = try {
+        JSONObject(body.trim())
+    } catch (_: JSONException) {
+        throw ManagementApiException("invalid_response", "命中详情返回格式不正确")
+    }
+    val raw = root.optString("body").trim()
+    if (raw.isEmpty()) {
+        return MaskingSent(messages = emptyList(), rawBody = "")
+    }
+    val messages = ArrayList<MaskingSentMessage>()
+    runCatching {
+        val inner = JSONObject(raw)
+        val array = inner.optJSONArray("messages")
+        if (array != null) {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val content = item.optString("content")
+                if (content.isNotEmpty()) {
+                    messages.add(
+                        MaskingSentMessage(
+                            role = item.optString("role").trim().ifBlank { "user" },
+                            content = content,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+    return MaskingSent(messages = messages, rawBody = raw)
+}
 
 /** 记录时间：只写本地 `MM-dd HH:mm`，不写"几分钟前"（历史记录不该随时间漂移）。 */
 internal fun maskingTimestamp(atMs: Long, zone: ZoneId = ZoneId.systemDefault()): String {

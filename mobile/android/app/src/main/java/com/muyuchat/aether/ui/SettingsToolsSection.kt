@@ -34,7 +34,9 @@ import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaChip
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 网络搜索供应商（桌面 `settings.js:278-287` 的 8 项）。 */
 private val WEB_SEARCH_PROVIDERS = listOf(
@@ -103,8 +105,9 @@ internal fun SettingsToolsSection(
             return@LaunchedEffect
         }
         error = null
-        runCatching { client.fetchSettings(status).tools }
-            .onSuccess { apply(it) }
+        // LaunchedEffect 跑在 Main 调度器：先切到 IO，再发起阻塞式 HttpURLConnection。
+        runCatching { withContext(Dispatchers.IO) { client.fetchSettings(status) } }
+            .onSuccess { apply(it.tools) }
             .onFailure { error = it.message ?: "读取工具服务配置失败" }
     }
 
@@ -115,9 +118,9 @@ internal fun SettingsToolsSection(
         saving = true
         scope.launch {
             try {
-                client.saveTools(status, draft, savedKeys)
+                withContext(Dispatchers.IO) { client.saveTools(status, draft, savedKeys) }
                 // 重拉确认：不拿本地回显当"已保存"
-                apply(client.fetchSettings(status).tools)
+                apply(withContext(Dispatchers.IO) { client.fetchSettings(status) }.tools)
                 error = null
                 notice = "已保存，并重新读取确认"
             } catch (e: ManagementApiException) {
@@ -138,9 +141,9 @@ internal fun SettingsToolsSection(
         scope.launch {
             try {
                 if (isSearch) {
-                    searchResult = client.testWebSearch(status)
+                    searchResult = withContext(Dispatchers.IO) { client.testWebSearch(status) }
                 } else {
-                    imageResult = client.testImageService(status)
+                    imageResult = withContext(Dispatchers.IO) { client.testImageService(status) }
                 }
             } catch (e: ManagementApiException) {
                 val line = "${if (isSearch) "搜索" else "图像"}测试失败：${e.message}（错误码：${e.code}）"

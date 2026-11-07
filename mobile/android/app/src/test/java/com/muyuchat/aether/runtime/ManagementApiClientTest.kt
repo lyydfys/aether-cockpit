@@ -262,4 +262,30 @@ class ManagementApiClientTest {
         """.trimIndent()
         assertTrue(parseProviders(body).all { it.accounts.isEmpty() })
     }
+
+    @Test
+    fun splitsManualModelsFromCatalogModels() {
+        // 桌面 `channels.js:1111` 只在 `st.manual` 的行上画「删除」：
+        // 手机端必须拿到同一个标记，否则会给目录模型摆一个删不掉的按钮。
+        val body = """
+            {"providers":[{
+              "id":"workbuddy-cn","display_name":"WorkBuddy CN",
+              "models":[
+                {"id":"claude-4-sonnet","on":true,"manual":false},
+                {"id":"deepseek-v4.1-flash","on":true,"manual":true},
+                {"id":"gpt-5.3","manual":false}
+              ]
+            },{
+              "id":"legacy","display_name":"Legacy",
+              "models":["only-strings","another-one"]
+            }]}
+        """.trimIndent()
+        val providers = parseProviders(body)
+        val workbuddy = providers.first()
+        assertEquals(listOf("claude-4-sonnet", "deepseek-v4.1-flash", "gpt-5.3"), workbuddy.modelIds)
+        assertEquals(listOf("deepseek-v4.1-flash"), workbuddy.manualModelIds)
+        // 老回包是字符串数组：没有 manual 标记 → 不提供删除（宁缺勿造）。
+        assertEquals(listOf("only-strings", "another-one"), providers[1].modelIds)
+        assertTrue(providers[1].manualModelIds.isEmpty())
+    }
 }

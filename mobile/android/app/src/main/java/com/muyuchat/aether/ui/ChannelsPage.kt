@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +33,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -92,7 +95,6 @@ import com.muyuchat.aether.runtime.channelProbeSummary
 import com.muyuchat.aether.runtime.channelToggleConfirmBody
 import com.muyuchat.aether.runtime.channelToggleConfirmTitle
 import com.muyuchat.aether.runtime.channelToggleLabel
-import com.muyuchat.aether.runtime.providerModelsPreview
 import com.muyuchat.aether.runtime.providerModelsSummary
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaChip
@@ -111,6 +113,12 @@ import com.muyuchat.core.designsystem.McaTonal
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import com.muyuchat.aether.runtime.AccountBinding
+import com.muyuchat.aether.runtime.AccountQuotaApiClient
+import com.muyuchat.aether.runtime.ManagementApiException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -118,9 +126,7 @@ import kotlin.math.roundToInt
 private const val MAX_QUOTA_WINDOWS = 3
 
 /** 从未读过额度时的值；`read_at` 为 0 / 缺失 / 脏值都归到这一句，绝不编时间。 */
-internal const val QUOTA_READ_NEVER_COPY = "从未读过"
-
-/** 点过「读取额度」、请求也回来了，但这次没读到额度（服务端 quota_read=false）。 */
+internal const val QUOTA_READ_NEVER_COPY = "从未读过"/** 点过「读取额度」、请求也回来了，但这次没读到额度（服务端 quota_read=false）。 */
 internal const val QUOTA_READ_EMPTY_COPY = "无（这次读取没返回额度）"
 
 @Composable
@@ -153,7 +159,11 @@ internal fun ChannelsPage(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(AccountFilter.ALL) }
+    // 「分组标签」筛选（桌面 `channels.js:136` 的 filter.tag）：null = 全部。
+    var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var selecting by rememberSaveable { mutableStateOf(false) }
+    // 批量删除的二次确认（桌面 `channels.js:196` 的文案逐字对齐）。
+    var confirmBatchDelete by rememberSaveable { mutableStateOf(false) }
     // 选中项存成 List（Bundle 可保存）；N 很小，查表用 contains 足够。
     var selectedIds by rememberSaveable { mutableStateOf(listOf<String>()) }
     // 自定义渠道（custom-channels）：独立 ViewModel，避免改 GatewayHome 的参数面。
@@ -174,7 +184,15 @@ internal fun ChannelsPage(
     val batchState = ready?.batch ?: BatchUiState.Idle
     val batchRunning = batchState is BatchUiState.Running
     val accounts = ready?.accounts.orEmpty()
-    val filtered = filterAccountRows(accounts, filter, query)
+    val filtered = filterAccountsByTag(filterAccountRows(accounts, filter, query), tagFilter)
+    val tagCounts = accountTagCounts(accounts)
+    // 标签被删/改后，旧的选中标签会筛出空列表：自动回到「全部」，不让用户对着空白页。
+    LaunchedEffect(tagCounts, tagFilter) {
+        val current = tagFilter ?: return@LaunchedEffect
+        if (tagCounts.none { it.first == current }) {
+            tagFilter = null
+        }
+    }
     // 「复制配置」用的接入地址（与概览页口径一致：本机 /v1）；网关没跑时留空，不发假地址。
     val gatewayBaseUrl = if (status.running && status.addr.isNotBlank()) "http://${status.addr}/v1" else ""
     val visibleSelected = visibleSelection(selectedIds, filtered)
@@ -286,6 +304,17 @@ internal fun ChannelsPage(
                             enabled = !batchRunning,
                         )
                     }
+                    // 分组标签筛选（桌面 channels.js:172-176）：有标签才画，避免空白行。
+                    if (tagCounts.isNotEmpty()) {
+                        item {
+                            AccountTagChips(
+                                tags = tagCounts,
+                                totalCount = accounts.size,
+                                selected = tagFilter,
+                                onSelect = { tagFilter = it },
+                            )
+                        }
+                    }
                     item {
                         SearchField(query = query, onQueryChange = { query = it }, placeholder = "搜索账号或渠道")
                     }
@@ -299,6 +328,7 @@ internal fun ChannelsPage(
                                 onEnable = { onAction(ChannelsAction.BatchSetDisabled(visibleSelected, disabled = false)) },
                                 onDisable = { onAction(ChannelsAction.BatchSetDisabled(visibleSelected, disabled = true)) },
                                 onCheckin = { onAction(ChannelsAction.BatchCheckin(checkinTargets)) },
+                                onDelete = { confirmBatchDelete = true },
                             )
                         }
                     }
@@ -322,7 +352,8 @@ internal fun ChannelsPage(
                             )
                         }
                     } else {
-                        // 单列列表：按用户要求去掉网格（不再有 2 列与「列表/网格」切换）。
+                        // 与桌面 `channels.js:209-213 gridView` 一致：账号卡平铺（不按厂商折叠）。
+                        // 桌面没有"同厂商收纳"这个交互，手机端也不自造；同类归并走「分组标签」筛选。
                         items(
                             count = filtered.size,
                             key = { index -> filtered[index].accountId },
@@ -332,6 +363,7 @@ internal fun ChannelsPage(
                                 row = row,
                                 providers = state.providers,
                                 state = state,
+                                status = status,
                                 probes = probes,
                                 probing = probing,
                                 toggling = toggling,
@@ -376,6 +408,42 @@ internal fun ChannelsPage(
             )
         }
     }
+    // 批量删除二次确认：文案逐字对齐桌面 `channels.js:196`。
+    if (confirmBatchDelete) {
+        McaDialog(
+            onDismissRequest = { confirmBatchDelete = false },
+            title = {
+                Text(
+                    text = "删除选中的 ${visibleSelected.size} 个账号？",
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            text = {
+                Text(
+                    text = "只移除本机记录，渠道本身不动。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        confirmBatchDelete = false
+                        onAction(ChannelsAction.BatchDelete(visibleSelected))
+                    },
+                    style = McaButtonStyle.Destructive,
+                ) { Text("删除", maxLines = 1) }
+            },
+            dismissButton = {
+                McaButton(
+                    onClick = { confirmBatchDelete = false },
+                    style = McaButtonStyle.Outlined,
+                ) { Text("取消") }
+            },
+        )
+    }
     // 模型清单弹窗按渠道只弹一个：同一渠道的多个账号共用一份清单。
     if (ready != null) {
         ready.providers.forEach { provider ->
@@ -384,6 +452,10 @@ internal fun ChannelsPage(
                 ProviderModelsDialog(
                     provider = provider,
                     state = openModels,
+                    // 增删走卡片既有的 EXTRA_MODEL 动作通道（Busy/Failed 文案复用）。
+                    action = ready.accountAction,
+                    onAction = onAction,
+                    onReload = { onLoadModels(provider.id) },
                     onDismiss = { onDismissModels(provider.id) },
                 )
             }
@@ -425,6 +497,7 @@ private fun AccountCard(
     row: AccountQuotaRow,
     providers: List<ProviderSummary>,
     state: ChannelsUiState.Ready,
+    status: GatewayStatus,
     probes: Map<String, ChannelProbe>,
     probing: String?,
     toggling: String?,
@@ -443,6 +516,7 @@ private fun AccountCard(
     AccountQuotaCard(
         row = row,
         provider = providers.firstOrNull { it.id == row.providerId },
+        status = status,
         action = state.accountAction,
         probe = probes[row.providerId],
         probing = probing == row.providerId,
@@ -464,6 +538,41 @@ private fun AccountCard(
         onToggleProvider = { enable -> onToggleProvider(row.providerId, enable) },
         onTest = { onTestProvider(row.providerId) },
     )
+}
+
+/**
+ * 分组标签筛选行（桌面 `channels.js:172-176` 的 batchbar chips）：
+ * 「全部 N」+ 每个标签「标签 N」，点一下只看该组账号。
+ *
+ * 桌面把它放在批量栏里（始终可见）；手机端批量栏只在选择态出现，所以单独一行放在筛选芯片下方。
+ */
+@Composable
+private fun AccountTagChips(
+    tags: List<Pair<String, Int>>,
+    totalCount: Int,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AetherPillButton(
+            text = "全部 $totalCount",
+            onClick = { onSelect(null) },
+            primary = selected == null,
+        )
+        tags.forEach { (tag, count) ->
+            AetherPillButton(
+                text = "$tag $count",
+                onClick = { onSelect(tag) },
+                primary = selected == tag,
+            )
+        }
+    }
 }
 
 @Composable
@@ -544,6 +653,7 @@ private fun BatchActionRow(
     onEnable: () -> Unit,
     onDisable: () -> Unit,
     onCheckin: () -> Unit,
+    onDelete: () -> Unit = {},
 ) {
     val canRun = selectedCount > 0 && !running
     Column {
@@ -574,6 +684,13 @@ private fun BatchActionRow(
                 onClick = onCheckin,
                 enabled = canRun && checkinCount > 0,
             )
+            // 桌面 `channels.js:193-203` 的垃圾桶：危险动作，错误色 + 二次确认。
+            McaButton(
+                onClick = onDelete,
+                style = McaButtonStyle.Outlined,
+                contentColor = MaterialTheme.colorScheme.error,
+                enabled = canRun,
+            ) { Text(batchKindLabel(BatchKind.DELETE), maxLines = 1) }
         }
         if (!running && selectedCount > 0 && checkinCount == 0) {
             Spacer(Modifier.height(4.dp))
@@ -752,6 +869,7 @@ private fun ChatUnsupportedTag() {
 private fun AccountQuotaCard(
     row: AccountQuotaRow,
     provider: ProviderSummary?,
+    status: GatewayStatus,
     action: AccountActionUiState,
     probe: ChannelProbe?,
     probing: Boolean,
@@ -996,6 +1114,7 @@ private fun AccountQuotaCard(
         sheet = sheet,
         row = row,
         provider = provider,
+        status = status,
         edit = edit,
         presetsState = presetsState,
         baseUrl = baseUrl,
@@ -1303,56 +1422,380 @@ private fun ProbeStatusText(probe: ChannelProbe?, probing: Boolean) {
     }
 }
 
-/** 模型清单弹窗：只列条数与名字，不展示任何凭据。 */
+/**
+ * 模型清单弹窗（桌面 `channels.js:1093-1129` 的「暴露的模型」）。
+ *
+ * 布局三段固定：标题 → **搜索框**（不随列表滚动）→ **可滚动清单** → 底部按钮（固定）。
+ * 清单用 `verticalScroll + heightIn(max)`：一个渠道可能有上百个模型，1.3× 字号下也必须能滑到底。
+ *
+ * 增删只走**已存在**的端点 `POST /api/providers/{id}/models/extra {model, action}`
+ * （`internal/core/gateway/provider_extra_models.go:111`）。它只能增/删**手动添加**的模型；
+ * 来自渠道目录或上游 `/models` 的条目服务端没有删除接口，弹窗里如实说明，不假装删成功。
+ */
 @Composable
 private fun ProviderModelsDialog(
     provider: ProviderSummary,
     state: ProviderModelsUiState,
+    action: AccountActionUiState,
+    onAction: (ChannelsAction) -> Unit,
+    onReload: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var query by remember(provider.id) { mutableStateOf("") }
+    var showAdd by remember(provider.id) { mutableStateOf(false) }
+    var draftModel by remember(provider.id) { mutableStateOf("") }
+    var feedback by remember(provider.id) { mutableStateOf<String?>(null) }
+    // 增删是异步的：等"忙 → 不忙"再拉一次清单，避免在旧数据上做判断。
+    var sawBusy by remember(provider.id) { mutableStateOf(false) }
+    val busy = action is AccountActionUiState.Busy && action.kind == AccountActionKind.EXTRA_MODEL
+    val failure = (action as? AccountActionUiState.Failed)
+        ?.takeIf { it.kind == AccountActionKind.EXTRA_MODEL }
+    LaunchedEffect(action) {
+        if (busy) {
+            sawBusy = true
+            return@LaunchedEffect
+        }
+        if (sawBusy) {
+            sawBusy = false
+            onReload()
+        }
+    }
+    val allModels = (state as? ProviderModelsUiState.Ready)?.models?.models.orEmpty()
+    val visibleModels = filterProviderModels(allModels, query)
+    val invalid = if (draftModel.isBlank()) null else validateExtraModelName(draftModel)
+
+    // —— 桌面 `channels.js:1103-1127`：每行一个「暴露」勾选 + 一个倍率输入 ——
+    // 基线来自 providers 视图（`models[].on` / `credit_rate`）；回包没有 on 标记时按"全部暴露"，
+    // 有标记时必须信它——否则"全部取消勾选"会被误判成数据缺失，保存时又全打开。
+    val baselineChecked = remember(provider.id, provider.modelSelectionKnown, provider.enabledModelIds, allModels) {
+        if (provider.modelSelectionKnown) provider.enabledModelIds.toSet() else allModels.toSet()
+    }
+    var checked by remember(provider.id, baselineChecked) { mutableStateOf<Set<String>?>(null) }
+    val effectiveChecked = checked ?: baselineChecked
+    var rateDraft by remember(provider.id, provider.modelRates) {
+        mutableStateOf(provider.modelRates.mapValues { formatModelRate(it.value) })
+    }
+    val parsedRates = rateDraft.mapNotNull { (model, text) ->
+        text.trim().toDoubleOrNull()?.takeIf { it > 0.0 && !it.isNaN() }?.let { model to it }
+    }.toMap()
+    // 保存后 providers 视图会变（基线变）→ 草稿自动重置，"有未保存"随之消失。
+    val selectionDirty = effectiveChecked != baselineChecked || parsedRates != provider.modelRates
     McaDialog(
         onDismissRequest = onDismiss,
-        title = { Text("${provider.name} 的模型", fontWeight = FontWeight.Bold) },
+        title = {
+            Text(
+                text = "${provider.name} 的模型",
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
         text = {
-            when (state) {
-                ProviderModelsUiState.Loading -> Text("读取中…")
-                is ProviderModelsUiState.Failed -> Text(
-                    text = "${state.message}（错误码：${state.code}）",
-                    color = MaterialTheme.colorScheme.error,
+            // 整块限高：1.3× 字号 + 小屏时对话框不能长到超出屏幕（超出部分会被裁掉、且不能滑）。
+            Column(Modifier.heightIn(max = 420.dp)) {
+                // —— 固定：结论行 ——
+                Text(
+                    text = if (state is ProviderModelsUiState.Ready) {
+                        providerModelsSummary(state.models)
+                    } else {
+                        "读取模型清单…"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
-                is ProviderModelsUiState.Ready -> {
-                    val preview = providerModelsPreview(state.models.models)
-                    Column {
+                Spacer(Modifier.height(6.dp))
+                // —— 固定：搜索框 ——
+                SearchField(
+                    query = query,
+                    onQueryChange = { query = it },
+                    placeholder = "搜索模型名",
+                )
+                Spacer(Modifier.height(6.dp))
+                when (state) {
+                    ProviderModelsUiState.Loading -> Text(
+                        text = "读取中…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    is ProviderModelsUiState.Failed -> Text(
+                        text = "${state.message}（错误码：${state.code}）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    is ProviderModelsUiState.Ready -> {
                         Text(
-                            text = providerModelsSummary(state.models),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            text = "共 ${allModels.size} 个 · 显示 ${visibleModels.size} 个",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Spacer(Modifier.height(4.dp))
-                        preview.shown.forEach { model ->
+                        if (visibleModels.isEmpty()) {
                             Text(
-                                text = "· $model",
-                                style = MaterialTheme.typography.labelSmall,
+                                text = if (allModels.isEmpty()) {
+                                    "这个渠道没有可用模型"
+                                } else {
+                                    "没有匹配「$query」的模型"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                        }
-                        if (preview.more > 0) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = "还有 ${preview.more} 个未显示",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        } else {
+                            // —— 可滚动区：只有这一段滚，搜索框与底部按钮不动 ——
+                            // weight(fill=false)：内容少时对话框跟着缩，内容多时吃满剩余高度再滚动。
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f, fill = false)
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                visibleModels.forEach { model ->
+                                    // 桌面 `channels.js:1101-1120`：只有 `st.manual` 的行有「删除」，
+                                    // 目录/上游返回的模型服务端没有删除接口（provider_extra_models.go）。
+                                    // 但**勾选与倍率对目录模型同样可改**（桌面就是这个行为）。
+                                    val manual = model in provider.manualModelIds
+                                    val isOn = model in effectiveChecked
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Checkbox(
+                                            checked = isOn,
+                                            onCheckedChange = { on ->
+                                                checked = if (on) {
+                                                    effectiveChecked + model
+                                                } else {
+                                                    effectiveChecked - model
+                                                }
+                                            },
+                                            enabled = !busy,
+                                        )
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                text = model,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            if (manual) {
+                                                Spacer(Modifier.height(2.dp))
+                                                // 桌面同款「手动」标记（channels.js:1108 `chip('手动','plain')`）。
+                                                AetherStatusChip(text = "手动", tone = DeepTone.Neutral)
+                                            }
+                                        }
+                                        Spacer(Modifier.width(6.dp))
+                                        ModelRateField(
+                                            value = rateDraft[model].orEmpty(),
+                                            enabled = !busy,
+                                            onChange = { text ->
+                                                rateDraft = rateDraft + (model to text)
+                                            },
+                                        )
+                                        if (manual) {
+                                            Spacer(Modifier.width(6.dp))
+                                            McaButton(
+                                                onClick = {
+                                                    feedback = "已移除手动模型「$model」"
+                                                    onAction(
+                                                        ChannelsAction.ExtraModel(
+                                                            providerId = provider.id,
+                                                            model = model,
+                                                            action = ExtraModelAction.Remove,
+                                                        ),
+                                                    )
+                                                },
+                                                style = McaButtonStyle.Outlined,
+                                                size = McaButtonSize.CardAction,
+                                                enabled = !busy,
+                                            ) { Text(if (busy) "处理中…" else "删除", maxLines = 1) }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
+                }
+                Spacer(Modifier.height(8.dp))
+                // —— 固定：添加区（桌面 `channels.js:1081-1092` 的「添加缺失模型」） ——
+                // 桌面没有"自定义前缀"这个概念：模型对外永远是「渠道 id/模型名」，这里不自造字段。
+                if (showAdd) {
+                    ChannelTextField(
+                        value = draftModel,
+                        onValueChange = { draftModel = it },
+                        label = "模型名",
+                        placeholder = "例如 deepseek-v4.1-flash",
+                    )
+                    invalid?.let { problem ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = problem,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        McaButton(
+                            onClick = {
+                                val model = draftModel.trim()
+                                feedback = "已请求添加「$model」"
+                                onAction(
+                                    ChannelsAction.ExtraModel(
+                                        providerId = provider.id,
+                                        model = model,
+                                        action = ExtraModelAction.Add,
+                                    ),
+                                )
+                                draftModel = ""
+                                showAdd = false
+                            },
+                            style = McaButtonStyle.Primary,
+                            enabled = !busy && invalid == null && draftModel.isNotBlank(),
+                        ) { Text(if (busy) "处理中…" else "添加", maxLines = 1) }
+                        McaButton(
+                            onClick = {
+                                showAdd = false
+                                draftModel = ""
+                            },
+                            style = McaButtonStyle.Outlined,
+                            enabled = !busy,
+                        ) { Text("取消", maxLines = 1) }
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        McaButton(
+                            onClick = { showAdd = true },
+                            style = McaButtonStyle.Outlined,
+                            enabled = !busy,
+                        ) { Text("+ 添加模型", maxLines = 1) }
+                        // 桌面 `channels.js:1052-1064` 的「从上游刷新」：
+                        // POST /api/providers/{id}/models/refresh，成功后列表就地重读。
+                        McaButton(
+                            onClick = {
+                                feedback = "正在从上游刷新模型目录…"
+                                onAction(ChannelsAction.RefreshModels(provider.id))
+                            },
+                            style = McaButtonStyle.Outlined,
+                            enabled = !busy,
+                        ) { Text("从上游刷新", maxLines = 1) }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                // —— 固定：保存勾选 + 倍率（桌面 `channels.js:1178-1191`）——
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (selectionDirty) {
+                            "有未保存的勾选/倍率改动"
+                        } else {
+                            "勾选 = 对外暴露；倍率留空按 1× 计"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selectionDirty) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    McaButton(
+                        onClick = {
+                            feedback = "已保存模型选择"
+                            onAction(
+                                ChannelsAction.SaveModelSelection(
+                                    providerId = provider.id,
+                                    models = effectiveChecked.sorted(),
+                                    rates = parsedRates,
+                                ),
+                            )
+                        },
+                        style = McaButtonStyle.Primary,
+                        enabled = selectionDirty && !busy,
+                    ) { Text(if (busy) "处理中…" else "保存", maxLines = 1) }
+                }
+                Spacer(Modifier.height(4.dp))
+                // 文案照桌面 `channels.js:1092`（添加缺失模型的说明）+ `:1111`（只有手动模型可删）。
+                Text(
+                    text = "上游 /models 漏报或厂商不实现 /models 时用；添加后参与路由与 /v1/models。" +
+                        "V4 Flash 与 V4.1 Flash 是两个模型，请按实际上游名分别添加。" +
+                        "只有「手动」标记的模型能删除；目录/上游返回的模型服务端没有删除接口，" +
+                        "但可以取消勾选或改倍率。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                feedback?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                failure?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "${it.message}（错误码：${it.code}）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
         },
         confirmButton = {
-            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("知道了") }
+            McaButton(onClick = onDismiss, style = McaButtonStyle.Outlined) { Text("关闭") }
         },
     )
 }
+
+/** 模型清单搜索：大小写不敏感的子串匹配；空查询返回全部（保持服务端顺序）。 */
+/**
+ * 模型行的倍率输入：桌面 `channels.js:1113` 的小输入框（`placeholder='×1'`）。
+ * 只收数字与小数点；留空 = 未配置（服务端 `model_rates` 里就不出现，按 1× 计）。
+ */
+@Composable
+private fun ModelRateField(value: String, enabled: Boolean, onChange: (String) -> Unit) {
+    Surface(
+        shape = McaShape.CardAction,
+        color = MaterialTheme.colorScheme.surface,
+        border = McaHairline.stroke(),
+        modifier = Modifier.width(58.dp),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = { raw ->
+                val cleaned = raw.filter { it.isDigit() || it == '.' }.take(6)
+                onChange(cleaned)
+            },
+            enabled = enabled,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.labelMedium.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+        )
+    }
+}
+
+/** 倍率展示：`2.0` → `"2"`；0/缺省 → 空串（输入框留空，按 1× 计）。 */
+internal fun formatModelRate(rate: Double): String = when {
+    rate <= 0.0 || rate.isNaN() -> ""
+    rate == kotlin.math.floor(rate) -> rate.toLong().toString()
+    else -> rate.toString()
+}
+
+internal fun filterProviderModels(models: List<String>, query: String): List<String> {
+    val needle = query.trim()
+    if (needle.isEmpty()) {
+        return models
+    }
+    return models.filter { it.contains(needle, ignoreCase = true) }
+}
+
 
 // ——— 纯展示计算（都能单测，不碰 Compose 运行时） ———
 
@@ -1395,6 +1838,38 @@ internal fun filterAccountRows(
     return filterAccounts(byChip, query)
 }
 
+/**
+ * 「分组标签」汇总（桌面 `channels.js:173`）：取全部账号的标签并计数，按字母序。
+ *
+ * 没有标签时返回空列表 → 页面不渲染这一行（桌面同样只有存在标签时才画 chips）。
+ */
+internal fun accountTagCounts(accounts: List<AccountQuotaRow>): List<Pair<String, Int>> {
+    val counts = LinkedHashMap<String, Int>()
+    accounts.forEach { row ->
+        // 同一账号内的重复标签只算一次（与桌面 `filter.tag` 的计数口径一致），空白标签忽略。
+        val seen = HashSet<String>()
+        row.tags.forEach { raw ->
+            val tag = raw.trim()
+            if (tag.isNotEmpty() && seen.add(tag)) {
+                counts[tag] = (counts[tag] ?: 0) + 1
+            }
+        }
+    }
+    return counts.entries.sortedBy { it.key }.map { it.key to it.value }
+}
+
+/** 按标签筛选（桌面 `channels.js:136` 的 `filter.tag`）；null/空 = 不过滤。 */
+internal fun filterAccountsByTag(
+    rows: List<AccountQuotaRow>,
+    tag: String?,
+): List<AccountQuotaRow> {
+    val needle = tag?.trim().orEmpty()
+    if (needle.isEmpty()) {
+        return rows
+    }
+    return rows.filter { needle in it.tags }
+}
+
 /** 选择只对**当前可见**的行生效：筛选把某些行隐藏后，"已选 N"和批量动作都跟着收缩。 */
 internal fun visibleSelection(selectedIds: List<String>, rows: List<AccountQuotaRow>): List<String> {
     val visible = rows.map { it.accountId }.toSet()
@@ -1428,6 +1903,7 @@ internal fun batchKindLabel(kind: BatchKind): String = when (kind) {
     BatchKind.ENABLE -> "批量启用"
     BatchKind.DISABLE -> "批量停用"
     BatchKind.CHECKIN -> "一键签到"
+    BatchKind.DELETE -> "批量删除"
 }
 
 /**
@@ -1797,6 +2273,8 @@ internal data class AccountMoreItem(
     val label: String,
     val detail: String,
     val danger: Boolean = false,
+    /** 上方画一条分隔线（桌面 `channels.js:370` 的 `{sep:true}`，只在删除账号前）。 */
+    val sepBefore: Boolean = false,
 )
 
 /**
@@ -1917,8 +2395,13 @@ internal fun accountMoreMenuItems(
             label = "删除账号",
             detail = "只移除本机记录，渠道本身不动",
             danger = true,
+            // 桌面 `channels.js:370` 在删除账号前有一条分隔线。
+            sepBefore = true,
         )
     }
+    // 桌面 channels.js 的账号卡菜单到「删除账号」为止：
+    // 内置渠道没有删除渠道的按钮（渠道由内核注册），自定义渠道的删除在「自定义渠道」抽屉里。
+    // 所以这里不提供渠道级删除项——与桌面逐项对齐，而不是另造一个手机上才有的语义。
     return items
 }
 
@@ -2175,35 +2658,55 @@ private fun ChannelTextField(
     singleLine: Boolean = true,
     minHeight: Int = 48,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    /** 行尾附加控件（比如密码可见性切换）；清除按钮排在它前面，两者可共存。 */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
+    // 清空后焦点要留在输入框里，否则用户得再点一次才能继续打字。
+    val focusRequester = remember { FocusRequester() }
     Surface(
         shape = McaShape.CardAction,
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = singleLine,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-            visualTransformation = visualTransformation,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = minHeight.dp)
-                .wrapContentHeight(Alignment.CenterVertically)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .semantics { contentDescription = label },
-            decorationBox = { inner ->
-                if (value.isEmpty() && placeholder.isNotEmpty()) {
-                    Text(
-                        text = placeholder,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                inner()
-            },
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top,
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = singleLine,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                visualTransformation = visualTransformation,
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = minHeight.dp)
+                    .focusRequester(focusRequester)
+                    .wrapContentHeight(Alignment.CenterVertically)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .semantics { contentDescription = label },
+                decorationBox = { inner ->
+                    if (value.isEmpty() && placeholder.isNotEmpty()) {
+                        Text(
+                            text = placeholder,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    inner()
+                },
+            )
+            if (value.isNotEmpty()) {
+                AetherFieldClearButton(
+                    onClick = {
+                        onValueChange("")
+                        focusRequester.requestFocus()
+                    },
+                    contentDescription = "清除$label",
+                )
+            }
+            trailing?.invoke()
+        }
     }
 }
 
@@ -2238,6 +2741,7 @@ private fun AccountSheets(
     sheet: CardSheet,
     row: AccountQuotaRow,
     provider: ProviderSummary?,
+    status: GatewayStatus,
     edit: AccountEditUiState,
     presetsState: PresetsUiState,
     baseUrl: String,
@@ -2276,7 +2780,16 @@ private fun AccountSheets(
             )
         },
         text = {
-            when (sheet) {
+            // 真机复现（f9d98aa3，uiautomator dump）：这些弹窗内容超过一屏时**整块被裁掉且不能滚**
+            // ——「更多」菜单最后两项（停用账号 / 删除账号）落在可视区外，用户以为没有删除按钮。
+            // 桌面这些是浮层菜单/抽屉（可滚），这里统一给一个限高可滚的容器。
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                when (sheet) {
                 CardSheet.MORE -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     val presetCount = (presetsState as? PresetsUiState.Ready)
                         ?.view?.providerPresets?.get(row.providerId)?.size ?: 0
@@ -2297,6 +2810,18 @@ private fun AccountSheets(
                             MaterialTheme.colorScheme.error
                         } else {
                             MaterialTheme.colorScheme.onSurface
+                        }
+                        // 桌面 `channels.js:370` 的 `{sep:true}`：删除账号前一条分隔线。
+                        if (item.sepBefore) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp)
+                                    .height(McaHairline.Width)
+                                    .background(
+                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                    ),
+                            )
                         }
                         Column(
                             modifier = Modifier
@@ -2351,13 +2876,17 @@ private fun AccountSheets(
                         }
                     }
                 }
-                CardSheet.DETAILS -> AccountDetailsBody(
-                    row = row,
-                    edit = edit,
-                    saving = savingKind == AccountEditKind.DETAILS,
-                    onAction = onAction,
-                    onSaved = onClose,
-                )
+                CardSheet.DETAILS -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    AccountDetailsBody(
+                        row = row,
+                        edit = edit,
+                        saving = savingKind == AccountEditKind.DETAILS,
+                        onAction = onAction,
+                        onSaved = onClose,
+                    )
+                    // 桌面 `channels.js:594`：详情里读一次「渠道绑定」。
+                    AccountBindingBlock(status = status, accountId = row.accountId)
+                }
                 CardSheet.TAGS -> AccountTagsBody(
                     row = row,
                     edit = edit,
@@ -2420,6 +2949,7 @@ private fun AccountSheets(
                 )
                 CardSheet.NONE -> Unit
                 else -> Unit
+                }
             }
         },
         confirmButton = {
@@ -2487,11 +3017,134 @@ private fun AccountSheets(
             },
         )
     }
+
+    // 渠道级删除：桌面端**没有**（内置渠道由内核注册；自定义渠道的删除在「自定义渠道」抽屉里），
+    // 所以这里不再提供，保持与桌面一致。
+}
+
+/**
+ * 账号「渠道绑定」：`GET /api/accounts/{id}/binding`（桌面 `channels.js:594`）。
+ *
+ * 服务端在渠道不支持绑定能力时回 409（`binding_api.go:41`）——那是"不适用"，不是错误；
+ * 有绑定就列官方账号/邮箱/套餐/到期，没有就写「未绑定」。
+ */
+@Composable
+private fun AccountBindingBlock(status: GatewayStatus, accountId: String) {
+    val client = remember { AccountQuotaApiClient() }
+    var state by remember(accountId) { mutableStateOf<BindingUiState>(BindingUiState.Loading) }
+    LaunchedEffect(accountId, status.running, status.addr) {
+        if (!status.running) {
+            state = BindingUiState.Failed("网关未启动")
+            return@LaunchedEffect
+        }
+        state = BindingUiState.Loading
+        state = try {
+            BindingUiState.Ready(withContext(Dispatchers.IO) { client.fetchBinding(status, accountId) })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            BindingUiState.Failed(e.message ?: "读取绑定信息失败")
+        }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+    ) {
+        Text(
+            text = "渠道绑定",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(4.dp))
+        when (val current = state) {
+            BindingUiState.Loading -> Text(
+                text = "读取中…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            is BindingUiState.Failed -> Text(
+                text = current.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            is BindingUiState.Ready -> {
+                val binding = current.binding
+                when {
+                    !binding.supported -> Text(
+                        text = binding.reason.ifBlank { "该渠道不提供官方绑定信息" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    !binding.bound -> Text(
+                        text = if (binding.official) "官方账号：未登记绑定信息" else "未绑定",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    else -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (binding.boundAccountId.isNotBlank()) {
+                            BindingLine("官方账号", binding.boundAccountId)
+                        }
+                        if (binding.email.isNotBlank()) {
+                            BindingLine("邮箱", binding.email)
+                        }
+                        if (binding.plan.isNotBlank()) {
+                            BindingLine("套餐", binding.plan)
+                        }
+                        if (binding.expiresAt > 0) {
+                            BindingLine("到期", accountBindingTime(binding.expiresAt))
+                        }
+                        if (binding.paused) {
+                            BindingLine(
+                                "官方通道",
+                                "已暂停" + if (binding.pauseReason.isNotBlank()) "（${binding.pauseReason}）" else "",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun AccountDetailsBody(
-    row: AccountQuotaRow,
+private fun BindingLine(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(72.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** `expires_at` 是 unix 秒；只到日期。 */
+internal fun accountBindingTime(epochSeconds: Long): String {
+    if (epochSeconds <= 0L) {
+        return "未上报"
+    }
+    return Instant.ofEpochSecond(epochSeconds)
+        .atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+}
+
+private sealed interface BindingUiState {
+    data object Loading : BindingUiState
+    data class Ready(val binding: AccountBinding) : BindingUiState
+    data class Failed(val message: String) : BindingUiState
+}
+
+@Composable
+private fun AccountDetailsBody(    row: AccountQuotaRow,
     edit: AccountEditUiState,
     saving: Boolean,
     onAction: (ChannelsAction) -> Unit,
@@ -3222,13 +3875,14 @@ private fun CustomChannelDeleteConfirm(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "删除「${channel.name}」？",
+                // 逐字对齐桌面 `customchannels.js:258-259`。
+                text = "删除自定义渠道「${channel.name.ifBlank { channel.id }}」？",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = "只删除渠道定义，不删账号；已接入的账号会显示成「渠道不存在」。",
+                text = "只删除渠道定义；已接入的账号不会被删，但会显示成「渠道不存在」。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

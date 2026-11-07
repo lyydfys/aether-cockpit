@@ -1153,16 +1153,10 @@ private fun SkillInstallDialog(
                     color = MaterialTheme.colorScheme.surface,
                     border = McaHairline.stroke(),
                 ) {
-                    BasicTextField(
+                    ClearableTextField(
                         value = source,
                         onValueChange = onSourceChange,
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface,
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        contentDescription = "来源（GitHub owner/repo、GitLab 地址）",
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

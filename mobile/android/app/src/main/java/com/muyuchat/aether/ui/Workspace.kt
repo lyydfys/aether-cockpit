@@ -160,7 +160,8 @@ fun workspaceEntries(): List<WorkspaceEntry> = listOf(
  */
 fun settingsGroups(): List<SettingsGroup> = listOf(
     SettingsGroup("01", "常规", "外观、语言、通知、更新与启动策略", available = true, route = SettingsRoute.Partition("01")),
-    SettingsGroup("02", "网络与共享", "监听、局域网、代理、CORS 与访问控制", available = true, route = SettingsRoute.Partition("02")),
+    // 出网身份在 02 组里（WorkBuddy 渠道的 UA/头族档位）；写进副标题让设置页搜索能命中。
+    SettingsGroup("02", "网络与共享", "监听、局域网、代理、访问控制与出网身份", available = true, route = SettingsRoute.Partition("02")),
     SettingsGroup("03", "工具服务", "搜索、图像、音频、视频与实时语音", available = true, route = SettingsRoute.Partition("03")),
     SettingsGroup("04", "预设", "客户端、模型与请求参数模板", available = true, route = SettingsRoute.Partition("04")),
     SettingsGroup("05", "定价", "模型单价、自定义倍率与成本估算", available = true, route = SettingsRoute.Partition("05")),

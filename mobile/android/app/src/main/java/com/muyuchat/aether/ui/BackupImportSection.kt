@@ -232,24 +232,17 @@ internal fun BackupImportSection(
                         color = MaterialTheme.colorScheme.surface,
                         border = McaHairline.stroke(),
                     ) {
-                        BasicTextField(
+                        ClearableTextField(
                             value = passphrase,
                             onValueChange = {
                                 passphrase = it
                                 validation = null
                             },
-                            singleLine = true,
+                            contentDescription = "备份口令（至少 8 位）",
                             textStyle = MaterialTheme.typography.bodySmall.copy(
                                 color = MaterialTheme.colorScheme.onSurface,
                             ),
                             visualTransformation = PasswordVisualTransformation(),
-                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .wrapContentHeight(Alignment.CenterVertically)
-                                .padding(horizontal = 12.dp)
-                                .semantics { contentDescription = "备份口令（至少 8 位）" },
                         )
                     }
                     validation?.let {

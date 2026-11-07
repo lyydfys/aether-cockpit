@@ -208,8 +208,16 @@ class WakeWriteApiClient(
         request(status, "POST", wakeUpdatePath(id), buildWakeUpdateJson(enabled))
     }
 
-    fun fetchCheckinSummary(status: GatewayStatus): CheckinSummary =
-        parseCheckinSummary(request(status, "GET", "/api/scheduler/checkin-summary", null))
+    /**
+     * 签到汇总：`GET /api/scheduler/checkin-summary?since=<unix>`
+     * （桌面 `scheduler.js:246-249`「一键签到」之后用它统计**本次**结果）。
+     *
+     * `since <= 0` 时服务端按「今天 0 点」算（`scheduler.CheckinSummary`，
+     * `internal/core/scheduler`）；桌面一键签到传的是**本次开始时间**，
+     * 手机端原来不带 since（等价今天 0 点），会把同一天更早几次的结果算进"本次"。
+     */
+    fun fetchCheckinSummary(status: GatewayStatus, since: Long = 0L): CheckinSummary =
+        parseCheckinSummary(request(status, "GET", checkinSummaryPath(since), null))
 
     /**
      * 只跑某一个渠道的签到：`POST /api/scheduler/run/{id}`（`gateway.go:1116` →
@@ -295,6 +303,13 @@ internal fun buildWakeUpdateJson(enabled: Boolean): String =
 /** 任务 id 进路径要编码（id 可能含 `/` 等字符）。 */
 internal fun wakeUpdatePath(id: String): String =
     "/api/wake/" + URLEncoder.encode(id, Charsets.UTF_8.name())
+
+/**
+ * 签到汇总路径：`/api/scheduler/checkin-summary?since=<unix>`。
+ * 桌面始终显式带 since（`scheduler.js:249`），手机端也显式带（0 = 今天 0 点）。
+ */
+internal fun checkinSummaryPath(since: Long): String =
+    "/api/scheduler/checkin-summary?since=" + if (since > 0L) since else 0L
 
 /** 写接口回 `{"ok":true}`；没有 ok 字段时视为成功（服务端只回任务体）。 */internal fun parseWakeWriteOk(body: String): Boolean {
     if (body.isBlank()) {

@@ -444,39 +444,15 @@ private fun PassphraseField(value: String, onValueChange: (String) -> Unit) {
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        BasicTextField(
+        ClearableTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                // 口令框是密码框：BasicTextField 不吃 Compose 的触摸目标扩展，
-                // 靠 heightIn 自己撑到 48dp；垂直 padding 放在它之后会把点按区压回一行字。
-                .heightIn(min = 48.dp)
-                .wrapContentHeight(Alignment.CenterVertically)
-                .padding(horizontal = 12.dp)
-                .semantics { contentDescription = "账号包口令" },
-            singleLine = true,
+            contentDescription = "账号包口令",
+            placeholder = "口令",
             textStyle = MaterialTheme.typography.bodySmall.copy(
                 color = MaterialTheme.colorScheme.onSurface,
             ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done,
-            ),
-            decorationBox = { inner ->
-                Box {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = "口令",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    inner()
-                }
-            },
         )
     }
 }

@@ -632,28 +632,13 @@ private fun PresetMultilineField(
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        BasicTextField(
+        ClearableTextField(
             value = value,
             onValueChange = onValueChange,
             enabled = enabled,
-            textStyle = TextStyle(
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = MaterialTheme.typography.bodySmall.fontSize,
-            ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(12.dp),
-            decorationBox = { inner ->
-                Box {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    inner()
-                }
-            },
+            singleLine = false,
+            minHeight = 72.dp,
+            placeholder = placeholder,
         )
     }
 }

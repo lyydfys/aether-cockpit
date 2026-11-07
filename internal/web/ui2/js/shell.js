@@ -329,10 +329,32 @@ export function createShell({ navigate }) {
         navigate('channels');
       }, { primary: true }),
       iconBtn('refresh', '刷新全部额度', async (e) => {
-        const b = e.currentTarget; b.disabled = true;
-        try { await api.get('usage/quotas?refresh=1'); await refreshAll(); toast('额度已刷新'); }
-        catch (err) { toast('刷新失败：' + (err.message || err)); }
-        finally { b.disabled = false; }
+        const b = e.currentTarget;
+        const prevTitle = b.title;
+        // 加载态：icon-btn 没有独立的 disabled 样式，显式压暗并标 aria-busy。
+        b.disabled = true;
+        b.style.opacity = '0.45';
+        b.setAttribute('aria-busy', 'true');
+        b.title = '正在刷新额度…';
+        toast('正在刷新额度…');
+        try {
+          // 真刷新是 POST /api/usage/quotas/refresh（同步读上游、返回最新卡片）。
+          // 不要用 GET ?refresh=1：GET 只认 asked（后台补读），refresh 会被忽略，
+          // 看起来"刷新成功"其实只重读了缓存。
+          const cards = await api.post('usage/quotas/refresh');
+          await refreshAll();
+          // 单账号读取失败不会让 POST 失败（handler 内部吞掉），但会以 error 卡返回；
+          // 有错误卡就如实提示，不假报"全部刷新成功"。
+          const failed = Array.isArray(cards) ? cards.filter((c) => c && c.error).length : 0;
+          toast(failed ? '额度已刷新（' + failed + ' 个账号读取失败）' : '额度已刷新');
+        } catch (err) {
+          toast('刷新失败：' + (err.message || err));
+        } finally {
+          b.disabled = false;
+          b.style.opacity = '';
+          b.removeAttribute('aria-busy');
+          b.title = prevTitle;
+        }
       }),
       iconBtn('refresh', '刷新全部模型目录', refreshModelCatalogs),
       iconBtn('export', '导出账号（脱敏）', exportAccounts),

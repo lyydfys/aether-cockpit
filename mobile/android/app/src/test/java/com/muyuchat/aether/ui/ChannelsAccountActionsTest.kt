@@ -61,6 +61,19 @@ class ChannelsAccountActionsTest {
         assertTrue(accountDeleteConfirmBody().contains("渠道本身不动"))
     }
 
+    /** 桌面 `channels.js:370-375`：删除账号是菜单最后一项，前面一条分隔线，danger 标红。 */
+    @Test
+    fun deleteAccountSitsLastBehindASeparator() {
+        val items = accountMoreMenuItems(hasNote = false, tagCount = 0, presetCount = 0)
+        val last = items.last()
+        assertEquals(AccountMoreAction.Delete, last.action)
+        assertEquals("删除账号", last.label)
+        assertTrue("删除账号必须是危险项", last.danger)
+        assertTrue("删除账号前要有分隔线（桌面 {sep:true}）", last.sepBefore)
+        // 其它菜单项不画分隔线（避免满屏横线）。
+        assertTrue(items.dropLast(1).none { it.sepBefore })
+    }
+
     @Test
     fun deleteAndWakePathsMatchGatewayRoutes() {
         assertEquals("/api/accounts/a1", accountPath("a1"))
@@ -91,7 +104,7 @@ class ChannelsAccountActionsTest {
         assertTrue("删除必须是危险项（渲染成错误色 + 二次确认）", delete.danger)
         assertEquals("删除账号", delete.label)
         assertEquals("只移除本机记录，渠道本身不动", delete.detail)
-        // 删除排在最后（与桌面菜单一致）
+        // 桌面 channels.js 的账号卡菜单到「删除账号」为止（渠道删除只在「自定义渠道」抽屉里）。
         assertEquals(AccountMoreAction.Delete, items.last().action)
     }
 

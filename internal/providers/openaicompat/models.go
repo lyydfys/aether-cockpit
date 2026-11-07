@@ -64,6 +64,7 @@ func (p *Provider) ListModels(ctx context.Context, env *provider.AccountEnv) ([]
 	if sp != nil && sp.ClientVersion != "" {
 		req.Header.Set("User-Agent", "openai-node/"+sp.ClientVersion)
 	}
+	applyConfigHeaders(req.Header, p.cfg.Headers, apiKey)
 	resp, err := env.Client().Do(req)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "模型列表连接失败").

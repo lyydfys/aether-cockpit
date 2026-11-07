@@ -3,13 +3,9 @@ package workbuddy
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -62,13 +58,16 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	}
 
 	client := env.Client()
+	// 本次请求使用哪个身份档位只解析一次：UA/头/间隔必须来自同一个 profile。
+	prof := currentIdentity()
 	var resp *http.Response
 	// 最多两次：第一次用会话哈希出的 id，被 11128 拦下时换一组全新 id 再试。
 	// 上游的 displayMsg 是"请求被拦截，请重新发送"，但它按会话/请求 id 记住
 	// 被拦的那一次，原样重发还是同一条 id，只会再被拦——所以必须换 id。
 	for attempt := 0; attempt < 2; attempt++ {
 		// 同账号请求节流：真实客户端按交互节奏发请求，机器式连发是风控特征之一。
-		if wait := paceWait(env.AccountID, wbPaceGap); wait > 0 {
+		// 间隔来自档位（cli/desktop=350ms，quiet=900ms）。
+		if wait := paceWait(env.AccountID, prof.PaceGap); wait > 0 {
 			select {
 			case <-ctx.Done():
 				return nil, ir.NewAPIError(ir.ErrCodeInternal, "请求已取消").WithCause(ctx.Err())
@@ -80,7 +79,7 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		if reqErr != nil {
 			return nil, ir.NewAPIError(ir.ErrCodeInternal, "构造 WorkBuddy 请求失败").WithCause(reqErr)
 		}
-		p.applyHeaders(httpReq, env, token, userID, req, attempt > 0)
+		p.applyHeaders(httpReq, env, prof, token, userID, req, attempt)
 
 		resp, err = client.Do(httpReq)
 		if err != nil {
@@ -141,100 +140,44 @@ func (p *Provider) domain(env *provider.AccountEnv) string {
 	return p.profile.domain
 }
 
-// applyHeaders 写入 WorkBuddy 客户端要求的自定义头。
+// applyHeaders 写入 WorkBuddy 对话请求头。
 //
-// 头族对齐官方桌面客户端（见 identity.go）：固定插件头 + UA + 会话/链路 ID。
-func (p *Provider) applyHeaders(req *http.Request, env *provider.AccountEnv, token, userID string, chat *ir.UnifiedChatRequest, fresh bool) {
-	conversationID, requestID, messageID := conversationIDs(chat, fresh)
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-User-Id", userID)
-	// 设备风控头：官方桌面客户端登录后会拿到设备令牌，后续调用都带着它。
-	// 这个令牌由服务端签发，客户端无法凭空生成，所以只在账号凭证里配置了
-	// 才发送（device_token / device_id 两个字段，可从官方客户端登录态里取）。
-	//
-	// 为什么不能自己编一个：伪造的令牌比"没有令牌"更像异常样本，反而提高
-	// 被风控的概率。宁可缺，不可编。
+// 组成顺序对齐参考实现 Upstream.chatHeaders：
+// 基础头（UA/插件头/设备令牌/企业头）→ 会话头 → Stainless（仅 CLI 档）
+// → 通道校验头（trace/B3/baggage + X-Conversation-Request-ID）。
+//
+// 参考实现不发送 X-Agent-Type / X-Device-Id（REA 检索确认），这里也不发。
+func (p *Provider) applyHeaders(req *http.Request, env *provider.AccountEnv, prof IdentityProfile, token, userID string, chat *ir.UnifiedChatRequest, attempt int) {
+	h := req.Header
+	h.Set("Content-Type", "application/json")
+	h.Set("Accept", "application/json")
+	h.Set("Authorization", "Bearer "+token)
+	h.Set("X-User-Id", userID)
+	h.Set("X-Domain", p.domain(env))
+	setPluginHeaders(h, prof)
+	for k, v := range machineHeadersFor(prof, env.GetCredential) {
+		h.Set(k, v)
+	}
 	if v := strings.TrimSpace(env.GetCredential("device_token")); v != "" {
-		req.Header.Set("X-Device-Token", v)
+		h.Set("X-Device-Token", v)
 	}
-	if v := strings.TrimSpace(env.GetCredential("device_id")); v != "" {
-		req.Header.Set("X-Device-Id", v)
-	}
-	req.Header.Set("X-Domain", p.domain(env))
-	// 版本、IDE 头、X-Requested-With、X-Private-Data 等由同一处定义，避免多个
-	// 调用点各写一份导致再次漂移。
-	setPluginHeaders(req.Header)
-	// User-Agent 必须保留 WorkBuddy 前缀，否则上游返回 10085；版本与
-	// X-IDE-Version 同源（clientVersion）。
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("X-Agent-Purpose", "conversation")
-	req.Header.Set("X-Agent-Intent", "craft")
-	req.Header.Set("X-Conversation-ID", conversationID)
-	req.Header.Set("X-Conversation-Request-ID", requestID)
-	req.Header.Set("X-Conversation-Message-ID", messageID)
-	req.Header.Set("X-Request-ID", randomUUID())
-	applyTraceHeaders(req.Header, conversationID, requestID, messageID)
-
-	if v := strings.TrimSpace(env.GetCredential("enterprise_id")); v != "" {
-		req.Header.Set("X-Enterprise-Id", v)
+	enterprise := strings.TrimSpace(env.GetCredential("enterprise_id"))
+	if enterprise != "" {
+		h.Set("X-Enterprise-Id", enterprise)
+		// 参考实现把 X-Tenant-Id 也填成 enterprise；保留 tenant_id 覆盖能力
+		// 以兼容企业版账号既有配置。
+		h.Set("X-Tenant-Id", enterprise)
 	}
 	if v := strings.TrimSpace(env.GetCredential("tenant_id")); v != "" {
-		req.Header.Set("X-Tenant-Id", v)
-	}
-	if p.profile.intl {
-		req.Header.Set("X-Agent-Type", "main")
+		h.Set("X-Tenant-Id", v)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-}
-
-// conversationIDs 生成稳定的会话/发送/消息标识。
-//
-// X-Conversation-Request-ID 对同一次逻辑发送必须稳定（重试、工具续轮看起来像
-// 同一个请求），因此用会话 + 最近一条用户文本做哈希；X-Request-ID 是每次
-// HTTP 请求唯一的随机 uuid。
-//
-// fresh=true 时三个 id 全部随机：通道校验（11128）按 id 记住被拦的那一次，
-// 原样重发同一条 id 必然再被拦，只能换一组新 id 重放。
-func conversationIDs(req *ir.UnifiedChatRequest, fresh bool) (conversationID, requestID, messageID string) {
-	if fresh {
-		return randomUUID(), randomUUID(), randomUUID()
-	}
-	lastText := req.LastUserText()
-	seed := strings.TrimSpace(req.SessionKey)
-	if seed != "" {
-		seed = "session:" + seed
-	} else if first, last := firstUserText(req), lastText; first != "" || last != "" {
-		seed = "text:" + first + "|" + last
-	}
-
-	if seed == "" {
-		conversationID = randomUUID()
-	} else {
-		conversationID = stableID(seed)
-	}
-
-	if lastText != "" {
-		requestID = stableID(conversationID + "|request|" + lastText)
-	} else if seed != "" {
-		requestID = stableID(seed + "|request")
-	} else {
-		requestID = randomUUID()
-	}
-
-	turns := 0
-	for _, item := range req.Items {
-		if item.IsUserTurn() {
-			turns++
-		}
-	}
-	if turns == 0 {
-		turns = 1
-	}
-	messageID = stableID(conversationID + "|message|" + strconv.Itoa(turns) + "|" + lastText)
-	return conversationID, requestID, messageID
+	conv := conversationIDFor(env.AccountID)
+	msg := uuidV7()
+	reqID := uuidV7()
+	setConversationHeaders(h, conv, msg)
+	applyStainlessHeaders(h, prof)
+	applyChannelVerifyHeaders(h, conv, reqID)
 }
 
 // buildPayload 把 IR 转成 OpenAI Chat Completions 请求体。
@@ -405,20 +348,6 @@ func firstUserText(req *ir.UnifiedChatRequest) string {
 		}
 	}
 	return ""
-}
-
-func stableID(seed string) string {
-	sum := sha256.Sum256([]byte(seed))
-	return hex.EncodeToString(sum[:16])
-}
-
-func randomUUID() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
 
 // openAIChunk 是 WorkBuddy 流式响应的单个 chunk。

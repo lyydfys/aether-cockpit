@@ -125,6 +125,7 @@ class OnboardViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope = viewModelScope,
         repository = repository,
         client = OnboardAuthApiClient(),
+        management = client,
     )
 
     fun setQuery(value: String) {
@@ -299,9 +300,101 @@ internal data class OnboardConnectState(
     val windsurfPassword: String = "",
     val error: String? = null,
     val finished: Boolean = false,
+    /** 轮询中（等用户在浏览器/登录页完成授权）：界面显示「等待授权中…」+ 取消。 */
+    val waiting: Boolean = false,
+    /** 结束后的结果面板；非空时结果弹窗取代接入弹窗（不叠加两个窗口）。 */
+    val result: OnboardResultPanel? = null,
 ) {
     val currentMethod: OnboardMethodOption?
         get() = methods.firstOrNull { it.id == active }
+}
+
+/** 结果面板的两态：成功 / 失败。两者都必须**独立弹窗**呈现，不能只改一行小字。 */
+internal enum class OnboardResultKind { SUCCESS, FAILURE }
+
+/**
+ * 一次登录/接入结束后的结果面板。
+ *
+ * 背景（线上投诉「登录成功没有明显的弹窗提示」）：过去成功后只把接入弹窗底部的
+ * `statusLine` 改成「账号已接入」，用户看不到明确的完成反馈。现在成功与失败都弹独立窗口：
+ *  - 成功：标题「登录成功」+ 渠道名 / 账号备注 / 本次入库数 / 该渠道现有账号数 + 「完成」；
+ *  - 失败：标题「登录失败」+ 可复制的失败原因与错误码 + 「重试」「关闭」。
+ *
+ * 内容里**没有任何凭据**（token/密码/设备码都不进来），只有渠道名、备注与错误原文。
+ */
+internal data class OnboardResultPanel(
+    val kind: OnboardResultKind,
+    /** 渠道显示名（成功/失败都要说清是哪个渠道）。 */
+    val providerName: String,
+    /** 本次使用的接入方式；决定标题用「登录」还是「接入」（Token/手动凭据不是登录）。 */
+    val method: String,
+    /** 用户填的账号备注；空 = 没填，界面不显示这一行。 */
+    val accountLabel: String = "",
+    /** 本次入库的账号数（Token/JSON 可一次批量，所以是 N 个而不是固定 1 个）。 */
+    val addedAccounts: Int = 0,
+    /** 入库后该渠道的账号总数；异步补（`/api/providers` 的 account_count），null = 还没回来。 */
+    val accountCount: Int? = null,
+    /** 失败原因原文（可复制）；成功时为空。 */
+    val reason: String = "",
+    /** 稳定错误码（如 http_401 / gateway_not_running），便于报障与检索。 */
+    val code: String = "",
+    /** 附加说明（例如批量接入里有几项没成功）。 */
+    val note: String = "",
+    /** 失败后「重试」要重放的动作；成功时为 [OnboardPrimaryKind.None]。 */
+    val retry: OnboardPrimaryKind = OnboardPrimaryKind.None,
+) {
+    val success: Boolean get() = kind == OnboardResultKind.SUCCESS
+}
+
+/** 该接入方式是否属于「登录」（浏览器授权 / 通用设备码 / 各渠道私有登录）。 */
+internal fun onboardResultLoginFlow(method: String): Boolean = when (method) {
+    "oauth_pkce", "device_code", "windsurf_login" -> true
+    else -> method.endsWith("_device")
+}
+
+/** 结果弹窗标题：登录类说「登录成功/失败」，Token/手动凭据说「接入成功/失败」（如实措辞）。 */
+internal fun onboardResultTitle(result: OnboardResultPanel): String {
+    val login = onboardResultLoginFlow(result.method)
+    return when {
+        result.success && login -> "登录成功"
+        result.success -> "接入成功"
+        login -> "登录失败"
+        else -> "接入失败"
+    }
+}
+
+/**
+ * 「复制失败原因」的全文：渠道 + 方式 + 原因 + 错误码。
+ *
+ * 只放这些——密码、token、设备码、回调 code 一律不进剪贴板。
+ */
+internal fun onboardResultCopyText(result: OnboardResultPanel): String = buildString {
+    appendLine("${onboardResultTitle(result)} · ${result.providerName}")
+    if (result.accountLabel.isNotBlank()) {
+        appendLine("账号备注：${result.accountLabel}")
+    }
+    appendLine("接入方式：${onboardMethodLabel(result.method)}")
+    appendLine("原因：${result.reason.ifBlank { "未知原因" }}")
+    if (result.code.isNotBlank()) {
+        appendLine("错误码：${result.code}")
+    }
+}.trimEnd()
+
+/** 授权会话进入终态时给用户看的原因：服务端原文优先，其次把状态码翻译成人话。 */
+internal fun onboardAuthTerminalReason(session: OnboardAuthSession): String = when {
+    session.error.isNotBlank() -> session.error
+    session.status.equals("cancelled", ignoreCase = true) -> "授权已取消"
+    session.status.equals("expired", ignoreCase = true) -> "授权已过期，请重新发起"
+    session.status.equals("error", ignoreCase = true) -> "授权失败"
+    else -> "授权未完成（${session.status}）"
+}
+
+/** 渠道私有登录（设备码类）进入失败态时的原因。 */
+internal fun onboardDeviceFailureReason(state: String, error: String): String = when {
+    error.isNotBlank() -> error
+    state.equals("expired", ignoreCase = true) -> "登录会话已过期，请重新开始登录"
+    state.equals("failed", ignoreCase = true) -> "登录失败"
+    else -> "登录未完成（$state）"
 }
 
 /** 接入弹窗 footer 里的主按钮要触发的动作（决定点下去调哪个回调）。 */
@@ -599,6 +692,8 @@ internal class OnboardConnectController(
     private val viewModelScope: kotlinx.coroutines.CoroutineScope,
     private val repository: GatewayRuntimeRepository,
     private val client: OnboardAuthApiClient,
+    /** 只用于入库后读「该渠道现有几个账号」（`GET /api/providers` 的 account_count）。 */
+    private val management: ManagementApiClient,
 ) {
     private val _state = MutableStateFlow<OnboardConnectState?>(null)
     val state: StateFlow<OnboardConnectState?> = _state.asStateFlow()
@@ -655,6 +750,8 @@ internal class OnboardConnectController(
             error = null,
             finished = false,
             busy = false,
+            waiting = false,
+            result = null,
         )
     }
 
@@ -702,9 +799,33 @@ internal class OnboardConnectController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                mutate { it.copy(busy = false, statusLine = "", error = e.message) }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        statusLine = "",
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = e.message,
+                            code = e.code,
+                            retry = OnboardPrimaryKind.StartAuth,
+                        ),
+                    )
+                }
             } catch (_: Exception) {
-                mutate { it.copy(busy = false, statusLine = "", error = "无法发起授权，请重试") }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        statusLine = "",
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = "无法发起授权，请重试",
+                            code = "unexpected",
+                            retry = OnboardPrimaryKind.StartAuth,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -766,20 +887,50 @@ internal class OnboardConnectController(
             mutate { it.copy(error = "网关未启动") }
             return
         }
-        mutate { it.copy(busy = true, error = null) }
+        mutate { it.copy(busy = true, error = null, result = null) }
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     client.commitAuth(status, session.id, current.label.ifBlank { current.providerName })
                 }
-                mutate { it.copy(busy = false, statusLine = "账号已接入", finished = true) }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        statusLine = "",
+                        finished = true,
+                        result = successPanel(it, added = 1),
+                    )
+                }
                 onSaved()
+                fillAccountCount(current.providerId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                mutate { it.copy(busy = false, error = e.message) }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = e.message,
+                            code = e.code,
+                            retry = OnboardPrimaryKind.CommitAuth,
+                        ),
+                    )
+                }
             } catch (_: Exception) {
-                mutate { it.copy(busy = false, error = "入库失败，请重试") }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = "入库失败，请重试",
+                            code = "unexpected",
+                            retry = OnboardPrimaryKind.CommitAuth,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -806,7 +957,16 @@ internal class OnboardConnectController(
             mutate { it.copy(error = "网关未启动") }
             return
         }
-        mutate { it.copy(busy = true, error = null, statusLine = "正在创建登录会话…", finished = false) }
+        mutate {
+            it.copy(
+                busy = true,
+                error = null,
+                statusLine = "正在创建登录会话…",
+                finished = false,
+                device = null,
+                result = null,
+            )
+        }
         viewModelScope.launch {
             try {
                 val session = withContext(Dispatchers.IO) {
@@ -817,9 +977,33 @@ internal class OnboardConnectController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                mutate { it.copy(busy = false, statusLine = "", error = e.message) }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        statusLine = "",
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = e.message,
+                            code = e.code,
+                            retry = OnboardPrimaryKind.StartDevice,
+                        ),
+                    )
+                }
             } catch (_: Exception) {
-                mutate { it.copy(busy = false, statusLine = "", error = "无法开始登录，请重试") }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        statusLine = "",
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = "无法开始登录，请重试",
+                            code = "unexpected",
+                            retry = OnboardPrimaryKind.StartDevice,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -866,7 +1050,7 @@ internal class OnboardConnectController(
             mutate { it.copy(error = missing.first()) }
             return
         }
-        mutate { it.copy(busy = true, error = null) }
+        mutate { it.copy(busy = true, error = null, result = null) }
         viewModelScope.launch {
             var ok = 0
             val failures = mutableListOf<String>()
@@ -886,17 +1070,34 @@ internal class OnboardConnectController(
                     failures += "第 ${index + 1} 项：接入失败"
                 }
             }
+            val note = if (failures.isEmpty()) {
+                ""
+            } else {
+                "另有 ${failures.size} 项未接入：${failures.first()}"
+            }
             mutate {
                 it.copy(
                     busy = false,
-                    tokenInput = "",
-                    statusLine = if (ok > 0) "已接入 $ok 个账号" else "",
-                    error = failures.firstOrNull(),
+                    // 只清掉已经落库的输入；全部失败时保留原文，用户点「重试」不必重新粘贴。
+                    tokenInput = if (ok > 0) "" else it.tokenInput,
+                    statusLine = "",
+                    error = null,
                     finished = ok > 0,
+                    result = if (ok > 0) {
+                        successPanel(it, added = ok, note = note)
+                    } else {
+                        failurePanel(
+                            it,
+                            reason = failures.firstOrNull() ?: "没有可接入的凭据",
+                            code = "import_failed",
+                            retry = OnboardPrimaryKind.SubmitTokenJson,
+                        )
+                    },
                 )
             }
             if (ok > 0) {
                 onSaved()
+                fillAccountCount(current.providerId)
             }
         }
     }
@@ -920,7 +1121,7 @@ internal class OnboardConnectController(
             mutate { it.copy(error = "请至少填写一个字段") }
             return
         }
-        mutate { it.copy(busy = true, error = null) }
+        mutate { it.copy(busy = true, error = null, result = null) }
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -932,15 +1133,44 @@ internal class OnboardConnectController(
                     )
                 }
                 mutate {
-                    it.copy(busy = false, statusLine = "账号已接入", manualValues = emptyMap(), finished = true)
+                    it.copy(
+                        busy = false,
+                        statusLine = "",
+                        manualValues = emptyMap(),
+                        finished = true,
+                        result = successPanel(it, added = 1),
+                    )
                 }
                 onSaved()
+                fillAccountCount(current.providerId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                mutate { it.copy(busy = false, error = e.message) }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = e.message,
+                            code = e.code,
+                            retry = OnboardPrimaryKind.SubmitManual,
+                        ),
+                    )
+                }
             } catch (_: Exception) {
-                mutate { it.copy(busy = false, error = "接入失败，请重试") }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = "接入失败，请重试",
+                            code = "unexpected",
+                            retry = OnboardPrimaryKind.SubmitManual,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -961,7 +1191,7 @@ internal class OnboardConnectController(
             mutate { it.copy(error = "请填写邮箱和密码") }
             return
         }
-        mutate { it.copy(busy = true, error = null) }
+        mutate { it.copy(busy = true, error = null, result = null) }
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -970,18 +1200,42 @@ internal class OnboardConnectController(
                 mutate {
                     it.copy(
                         busy = false,
-                        statusLine = "Windsurf 账号已接入",
+                        statusLine = "",
                         windsurfPassword = "",
                         finished = true,
+                        result = successPanel(it, added = 1),
                     )
                 }
                 onSaved()
+                fillAccountCount(current.providerId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
-                mutate { it.copy(busy = false, error = e.message) }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = e.message,
+                            code = e.code,
+                            retry = OnboardPrimaryKind.SubmitWindsurf,
+                        ),
+                    )
+                }
             } catch (_: Exception) {
-                mutate { it.copy(busy = false, error = "登录失败，请重试") }
+                mutate {
+                    it.copy(
+                        busy = false,
+                        error = null,
+                        result = failurePanel(
+                            it,
+                            reason = "登录失败，请重试",
+                            code = "unexpected",
+                            retry = OnboardPrimaryKind.SubmitWindsurf,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -992,6 +1246,8 @@ internal class OnboardConnectController(
         stopPolling()
         val status = repository.status.value
         val interval = ((_state.value?.auth?.intervalSeconds ?: 0).takeIf { it > 0 } ?: 2) * 1_000L
+        // 明确的「进行中」态：页面据此显示「等待授权中…」+ 取消，而不是让用户盯着不动的弹窗。
+        mutate { it.copy(waiting = true) }
         pollJob = viewModelScope.launch {
             while (true) {
                 delay(interval.coerceAtLeast(1_500L))
@@ -1006,9 +1262,15 @@ internal class OnboardConnectController(
                         stopPolling()
                         mutate {
                             it.copy(
-                                auth = next,
+                                auth = null,
                                 statusLine = "",
-                                error = "授权失败：${next.error.ifBlank { next.status }}",
+                                error = null,
+                                result = failurePanel(
+                                    it,
+                                    reason = onboardAuthTerminalReason(next),
+                                    code = next.status,
+                                    retry = OnboardPrimaryKind.StartAuth,
+                                ),
                             )
                         }
                         return@launch
@@ -1017,7 +1279,19 @@ internal class OnboardConnectController(
                     throw e
                 } catch (e: ManagementApiException) {
                     stopPolling()
-                    mutate { it.copy(error = "轮询失败：${e.message}") }
+                    mutate {
+                        it.copy(
+                            auth = null,
+                            statusLine = "",
+                            error = null,
+                            result = failurePanel(
+                                it,
+                                reason = "轮询授权状态失败：${e.message}",
+                                code = e.code,
+                                retry = OnboardPrimaryKind.StartAuth,
+                            ),
+                        )
+                    }
                     return@launch
                 }
             }
@@ -1027,7 +1301,11 @@ internal class OnboardConnectController(
     private fun startDevicePolling(kind: String, sessionId: String, onSaved: () -> Unit) {
         stopPolling()
         val status = repository.status.value
+        val providerId = _state.value?.providerId.orEmpty()
         val interval = ((_state.value?.device?.intervalSeconds ?: 0).takeIf { it > 0 } ?: 2) * 1_000L
+        // 渠道私有登录（WorkBuddy / CodeBuddy / Trae …）：服务端轮询到成功就自己入库，
+        // 所以这里一旦 done 就直接弹「登录成功」，不需要再点「完成接入」。
+        mutate { it.copy(waiting = true) }
         pollJob = viewModelScope.launch {
             while (true) {
                 delay(interval.coerceAtLeast(2_000L))
@@ -1035,20 +1313,52 @@ internal class OnboardConnectController(
                     val poll = withContext(Dispatchers.IO) { client.pollDevice(status, kind, sessionId) }
                     if (poll.isDone) {
                         stopPolling()
-                        mutate { it.copy(statusLine = "账号已接入", finished = true, device = null) }
+                        mutate {
+                            it.copy(
+                                statusLine = "",
+                                finished = true,
+                                device = null,
+                                result = successPanel(it, added = 1),
+                            )
+                        }
                         onSaved()
+                        fillAccountCount(providerId)
                         return@launch
                     }
                     if (poll.isFailed) {
                         stopPolling()
-                        mutate { it.copy(statusLine = "", error = "登录失败：${poll.error.ifBlank { poll.state }}") }
+                        mutate {
+                            it.copy(
+                                statusLine = "",
+                                error = null,
+                                device = null,
+                                result = failurePanel(
+                                    it,
+                                    reason = onboardDeviceFailureReason(poll.state, poll.error),
+                                    code = poll.state,
+                                    retry = OnboardPrimaryKind.StartDevice,
+                                ),
+                            )
+                        }
                         return@launch
                     }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: ManagementApiException) {
                     stopPolling()
-                    mutate { it.copy(error = "轮询失败：${e.message}") }
+                    mutate {
+                        it.copy(
+                            statusLine = "",
+                            error = null,
+                            device = null,
+                            result = failurePanel(
+                                it,
+                                reason = "轮询登录状态失败：${e.message}",
+                                code = e.code,
+                                retry = OnboardPrimaryKind.StartDevice,
+                            ),
+                        )
+                    }
                     return@launch
                 }
             }
@@ -1058,6 +1368,7 @@ internal class OnboardConnectController(
     fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
+        mutate { it.copy(waiting = false) }
     }
 
     /**
@@ -1065,7 +1376,8 @@ internal class OnboardConnectController(
      *
      * 场景：WebView 里已经跳到 `127.0.0.1/oauth/callback`（网关已收下 code），
      * 但周期轮询还没轮到——用户点「完成」时用它把状态推进到 success，footer 随即出现「完成接入」。
-     * 失败静默：周期轮询仍在跑，这里只是催一下。
+     * 网络异常仍静默（周期轮询还在跑，催一次失败不打扰用户）；但**授权已失败/已取消**是终态，
+     * 必须弹「登录失败」结果窗，不能静默。
      */
     fun nudgeAuthPoll() {
         val session = _state.value?.auth ?: return
@@ -1088,9 +1400,15 @@ internal class OnboardConnectController(
                         stopPolling()
                         mutate {
                             it.copy(
-                                auth = next,
+                                auth = null,
                                 statusLine = "",
-                                error = "授权失败：${next.error.ifBlank { next.status }}",
+                                error = null,
+                                result = failurePanel(
+                                    it,
+                                    reason = onboardAuthTerminalReason(next),
+                                    code = next.status,
+                                    retry = OnboardPrimaryKind.StartAuth,
+                                ),
                             )
                         }
                     }
@@ -1105,5 +1423,69 @@ internal class OnboardConnectController(
 
     private fun mutate(block: (OnboardConnectState) -> OnboardConnectState) {
         _state.value = _state.value?.let(block)
+    }
+
+    /** 关掉结果面板、回到接入弹窗：失败后的「关闭」与「重试」都先走它。 */
+    fun dismissResult() = mutate { it.copy(result = null) }
+
+    /** 成功面板：渠道名 + 备注 + 本次入库数；账号总数由 [fillAccountCount] 异步补。 */
+    private fun successPanel(
+        current: OnboardConnectState,
+        added: Int,
+        note: String = "",
+    ): OnboardResultPanel = OnboardResultPanel(
+        kind = OnboardResultKind.SUCCESS,
+        providerName = current.providerName,
+        method = current.active,
+        accountLabel = current.label.trim(),
+        addedAccounts = added,
+        note = note,
+    )
+
+    /** 失败面板：原因原文 + 错误码 + 重试动作（重试 = 重放同一种接入方式）。 */
+    private fun failurePanel(
+        current: OnboardConnectState,
+        reason: String,
+        code: String,
+        retry: OnboardPrimaryKind,
+    ): OnboardResultPanel = OnboardResultPanel(
+        kind = OnboardResultKind.FAILURE,
+        providerName = current.providerName,
+        method = current.active,
+        accountLabel = current.label.trim(),
+        reason = reason,
+        code = code,
+        retry = retry,
+    )
+
+    /**
+     * 入库成功后异步补「该渠道现在有几个账号」：读 `/api/providers` 的 `account_count`。
+     *
+     * 刻意**不**在成功路径里同步等它：那会把成功提示推迟一个网络往返。先弹面板，
+     * 数字回来再补；取不到就保持 null，界面写「正在刷新…」，绝不自造一个数字。
+     */
+    private fun fillAccountCount(providerId: String) {
+        if (providerId.isBlank()) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            return
+        }
+        viewModelScope.launch {
+            val count = runCatching {
+                withContext(Dispatchers.IO) {
+                    management.fetchProviders(status).firstOrNull { it.id == providerId }?.accountCount
+                }
+            }.getOrNull() ?: return@launch
+            mutate { state ->
+                val panel = state.result
+                if (panel == null || !panel.success || panel.accountCount != null) {
+                    state
+                } else {
+                    state.copy(result = panel.copy(accountCount = count))
+                }
+            }
+        }
     }
 }

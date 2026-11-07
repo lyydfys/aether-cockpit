@@ -506,15 +506,11 @@ private fun PluginField(label: String, value: String, onValueChange: (String) ->
             color = MaterialTheme.colorScheme.surface,
             border = McaHairline.stroke(),
         ) {
-            BasicTextField(
+            ClearableTextField(
                 value = value,
                 onValueChange = onValueChange,
-                singleLine = true,
+                contentDescription = label,
                 textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .padding(horizontal = 12.dp),
             )
         }
     }

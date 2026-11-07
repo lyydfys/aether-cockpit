@@ -242,21 +242,14 @@ private fun AccountExportField(label: String, value: String, onValueChange: (Str
             color = MaterialTheme.colorScheme.surface,
             border = McaHairline.stroke(),
         ) {
-            BasicTextField(
+            ClearableTextField(
                 value = value,
                 onValueChange = onValueChange,
-                singleLine = true,
+                contentDescription = label,
                 textStyle = MaterialTheme.typography.bodySmall.copy(
                     color = MaterialTheme.colorScheme.onSurface,
                 ),
                 visualTransformation = PasswordVisualTransformation(),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .wrapContentHeight(Alignment.CenterVertically)
-                    .padding(horizontal = 12.dp)
-                    .semantics { contentDescription = label },
             )
         }
     }

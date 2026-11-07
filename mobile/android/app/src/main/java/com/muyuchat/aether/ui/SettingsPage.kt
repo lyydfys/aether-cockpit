@@ -33,6 +33,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -71,12 +72,15 @@ import com.muyuchat.aether.runtime.ManagementApiException
 import com.muyuchat.aether.runtime.MaskingApiClient
 import com.muyuchat.aether.runtime.MaskingPreview
 import com.muyuchat.aether.runtime.MaskingRecords
+import com.muyuchat.aether.runtime.MaskingSent
+import com.muyuchat.aether.runtime.MaskingSummary
 import com.muyuchat.aether.runtime.RedactCustomRule
 import com.muyuchat.aether.runtime.RedactRule
 import com.muyuchat.aether.runtime.effectiveAction
 import com.muyuchat.aether.runtime.maskingHitSummary
 import com.muyuchat.aether.runtime.maskingPreviewBlockedNote
 import com.muyuchat.aether.runtime.maskingPreviewOffNote
+import com.muyuchat.aether.runtime.maskingKindLabel
 import com.muyuchat.aether.runtime.maskingRecordHitLabel
 import com.muyuchat.aether.runtime.maskingRecordSourceLine
 import com.muyuchat.aether.runtime.maskingRecordsEmptyDetail
@@ -89,6 +93,13 @@ import com.muyuchat.aether.runtime.ProfileRow
 import com.muyuchat.aether.runtime.SettingsApiClient
 import com.muyuchat.aether.runtime.profileClientLabel
 import com.muyuchat.aether.runtime.SettingsSummary
+import com.muyuchat.aether.runtime.WorkBuddyIdentity
+import com.muyuchat.aether.runtime.WorkBuddyIdentityApiClient
+import com.muyuchat.aether.runtime.WorkBuddyIdentityState
+import com.muyuchat.aether.runtime.workBuddyIdentityCopyText
+import com.muyuchat.aether.runtime.workBuddyIdentityLiveName
+import com.muyuchat.aether.runtime.workBuddyIdentityMismatchNote
+import com.muyuchat.aether.runtime.workBuddyStainlessLabel
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
@@ -106,6 +117,7 @@ import com.muyuchat.core.designsystem.McaPlateSize
 import com.muyuchat.core.designsystem.McaShape
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -163,6 +175,10 @@ internal fun SettingsPage(
     preferredPortError: String? = null,
     preferredPortNotice: String? = null,
     onSavePreferredPort: (String) -> Unit = {},
+    /** 「重启网关」：出网身份档位保存后要重启才生效（复用局域网切换那条重启路径）。 */
+    gatewayRestarting: Boolean = false,
+    gatewayRestartNotice: String? = null,
+    onRestartGateway: () -> Unit = {},
     /**
      * 二级页层级变化上报：`true` = 正在看某个分组（如「01 常规」），`false` = 在看设置首页导航列表。
      *
@@ -302,7 +318,11 @@ internal fun SettingsPage(
                         blocks.forEach { block ->
                             item {
                                 when (block.id) {
-                                    "01" -> SettingsGeneralSection(status = status)
+                                    "01" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        SettingsGeneralSection(status = status)
+                                        // 桌面 settings.js:163-179 的「本机账号自动导入」。
+                                        AutoImportSettingsSection(status = status)
+                                    }
                                     "02" -> Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
                                         SettingsSection("本机监听") {
                                             Text(
@@ -346,6 +366,14 @@ internal fun SettingsPage(
                                             ipsSaving = ipsSaving,
                                             ipsError = ipsError,
                                             onSaveAllowIPs = onSaveAllowIPs,
+                                        )
+                                        // 出网身份：只写 settings.json，重启网关后生效。
+                                        WorkBuddyIdentitySection(
+                                            status = status,
+                                            settings = state.settings,
+                                            restarting = gatewayRestarting,
+                                            restartNotice = gatewayRestartNotice,
+                                            onRestartGateway = onRestartGateway,
                                         )
                                         CallerKeysSection(
                                             status = status,
@@ -1048,19 +1076,11 @@ private fun RedactRuleField(label: String, value: String, onValueChange: (String
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
         Surface(shape = McaShape.CardAction, color = MaterialTheme.colorScheme.surface, border = McaHairline.stroke()) {
-            BasicTextField(
+            ClearableTextField(
                 value = value,
                 onValueChange = onValueChange,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    // BasicTextField 不吃 Compose 的触摸目标扩展，自己撑到 48dp；
-                    // 垂直 padding 放在 heightIn 之后会把点按区压回一行字。
-                    .heightIn(min = 48.dp)
-                    .wrapContentHeight(Alignment.CenterVertically)
-                    .padding(horizontal = 12.dp)
-                    .semantics { contentDescription = label },
+                minHeight = 48.dp,
+                contentDescription = label,
             )
         }
     }
@@ -1220,17 +1240,10 @@ private fun CallerKeysSection(
                     )
                     Spacer(Modifier.height(8.dp))
                     Surface(shape = McaShape.CardAction, color = MaterialTheme.colorScheme.surface, border = McaHairline.stroke()) {
-                        BasicTextField(
+                        ClearableTextField(
                             value = confirmName,
                             onValueChange = { confirmName = it },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .wrapContentHeight(Alignment.CenterVertically)
-                                .padding(horizontal = 12.dp)
-                                .semantics { contentDescription = "输入密钥名称以确认删除" },
+                            contentDescription = "输入密钥名称以确认删除",
                         )
                     }
                 }
@@ -1265,17 +1278,10 @@ private fun CallerKeysSection(
                     )
                     Spacer(Modifier.height(8.dp))
                     Surface(shape = McaShape.CardAction, color = MaterialTheme.colorScheme.surface, border = McaHairline.stroke()) {
-                        BasicTextField(
+                        ClearableTextField(
                             value = name,
                             onValueChange = { name = it },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .wrapContentHeight(Alignment.CenterVertically)
-                                .padding(horizontal = 12.dp)
-                                .semantics { contentDescription = "密钥名称（可留空）" },
+                            contentDescription = "密钥名称（可留空）",
                         )
                     }
                 }
@@ -1595,29 +1601,11 @@ private fun AccessListRow(
                         color = MaterialTheme.colorScheme.surface,
                         border = McaHairline.stroke(),
                     ) {
-                        BasicTextField(
+                        ClearableTextField(
                             value = entry,
                             onValueChange = { entry = it },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                color = MaterialTheme.colorScheme.onSurface,
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .wrapContentHeight(Alignment.CenterVertically)
-                                .padding(horizontal = 12.dp)
-                                .semantics { contentDescription = placeholder },
-                            decorationBox = { inner ->
-                                if (entry.isEmpty()) {
-                                    Text(
-                                        text = placeholder,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                inner()
-                            },
+                            placeholder = placeholder,
+                            contentDescription = placeholder,
                         )
                     }
                     Spacer(Modifier.height(8.dp))
@@ -1748,6 +1736,352 @@ private fun PreferredPortRow(
     }
 }
 
+/**
+ * 「WorkBuddy 出网身份」：四档单选 + 运行中身份（接口读取、等宽、可复制）+ 保存 + 重启。
+ *
+ * 语义已核：`workbuddy_identity` 只落盘 settings.json，Go 侧在下次
+ * `loadSettings → applyWorkBuddyIdentity` 时才应用（`internal/core/gateway/settings.go`），
+ * 所以**保存 ≠ 生效**——文案必须写「重启网关后生效」，并给出一键重启。
+ *
+ * 运行中身份（UA / 版本 / 间隔 / Stainless）**一律来自
+ * `GET /api/providers/workbuddy/identity`**，客户端不镜像 Go 常量；接口不可用
+ * （网关未启动、旧网关没有该接口）时如实显示"读不到"，绝不回退本地值。
+ *
+ * 档位只有四个 wire 值（见 `runtime/WorkBuddyIdentity.kt`，与 Go 的
+ * `resolveIdentityPreset` 对齐）；这里不拼任何其它字符串，也不在本地"乐观切换"。
+ */
+@Composable
+private fun WorkBuddyIdentitySection(
+    status: GatewayStatus,
+    settings: SettingsSummary,
+    restarting: Boolean,
+    restartNotice: String?,
+    onRestartGateway: () -> Unit,
+) {
+    val client = remember { SettingsApiClient() }
+    val identityClient = remember { WorkBuddyIdentityApiClient() }
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    // saved = 服务端回读值（保存成功后用它刷新）；draft = 用户点选的待保存值。
+    var saved by remember(settings.workBuddyIdentity) { mutableStateOf(settings.workBuddyIdentity) }
+    var draft by remember(saved) { mutableStateOf(saved) }
+    var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1500)
+            copied = false
+        }
+    }
+    // —— 运行中身份：GET /api/providers/workbuddy/identity ——
+    // 不缓存到本地、不镜像常量：UA/版本/间隔都以接口为准；读不到就如实说读不到。
+    var live by remember { mutableStateOf<WorkBuddyIdentityState?>(null) }
+    var liveError by remember { mutableStateOf<String?>(null) }
+    var liveLoading by remember { mutableStateOf(false) }
+    var liveReload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(status.running, status.addr, liveReload) {
+        if (!status.running) {
+            live = null
+            liveError = null
+            liveLoading = false
+            return@LaunchedEffect
+        }
+        liveLoading = true
+        liveError = null
+        try {
+            live = withContext(Dispatchers.IO) { identityClient.fetch(status) }
+            liveError = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ManagementApiException) {
+            live = null
+            liveError = when (e.code) {
+                // 旧网关没有这个接口：说清"升级网关"，不冒充"网关没启动"。
+                "http_404" ->
+                    "当前网关没有出网身份接口（GET /api/providers/workbuddy/identity）：升级网关后再试"
+                "gateway_not_running" -> "网关未运行，无法读取当前身份"
+                else -> "读取当前身份失败：${e.message}"
+            }
+        } catch (_: Exception) {
+            live = null
+            liveError = "读取当前身份失败，请重试"
+        } finally {
+            liveLoading = false
+        }
+    }
+    SettingsSection("WorkBuddy 出网身份") {
+        Text(
+            text = "只影响 WorkBuddy 渠道（workbuddy-cn / workbuddy-intl）发往上游的 UA 与头族；" +
+                "四档互斥，不会出现「UA 说桌面、头却发 CLI」的跨档组合。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        WorkBuddyIdentity.entries.forEach { option ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(McaShape.CardAction)
+                    .clickable(enabled = !saving) { draft = option }
+                    .padding(vertical = 6.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = option == draft,
+                    onClick = { if (!saving) draft = option },
+                    enabled = !saving,
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = option.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = option.detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (draft == saved) "已保存：${saved.title}" else "未保存：${draft.title}",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (draft == saved) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            McaButton(
+                onClick = {
+                    error = null
+                    notice = null
+                    saving = true
+                    val target = draft
+                    scope.launch {
+                        try {
+                            val readback = withContext(Dispatchers.IO) {
+                                client.setWorkBuddyIdentity(status, target)
+                            }
+                            saved = readback.workBuddyIdentity
+                            draft = saved
+                            notice = "已保存「${saved.title}」；重启网关后生效"
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: ManagementApiException) {
+                            error = e.message
+                        } catch (_: Exception) {
+                            error = "保存出网身份失败，请重试"
+                        } finally {
+                            saving = false
+                        }
+                    }
+                },
+                style = McaButtonStyle.Primary,
+                enabled = !saving && draft != saved,
+            ) { Text(if (saving) "保存中…" else "保存", maxLines = 1) }
+        }
+        Spacer(Modifier.height(8.dp))
+        // 只说"已保存档位"：真正在跑的取值要重启后才换，不能冒充"当前生效"。
+        DeepCardBody("已保存档位：${saved.title}")
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "运行中身份（网关实时读取）",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            if (liveLoading) {
+                Text(
+                    text = "读取中…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            McaButton(
+                onClick = { liveReload += 1 },
+                style = McaButtonStyle.Outlined,
+                enabled = status.running && !liveLoading,
+            ) { Text("刷新", maxLines = 1) }
+        }
+        val liveState = live
+        val liveMessage = liveError
+        when {
+            status.busy -> Text(
+                text = "网关重启中：恢复后会自动重新读取当前身份。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            !status.running -> Text(
+                text = "网关未运行，无法读取当前身份",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            liveState != null -> {
+                WorkBuddyIdentityValueRow(
+                    label = "生效档位",
+                    value = workBuddyIdentityLiveName(liveState),
+                    maxLines = 2,
+                )
+                WorkBuddyIdentityValueRow(
+                    label = "User-Agent",
+                    value = liveState.userAgent.ifBlank { "未上报" },
+                    mono = true,
+                    maxLines = 3,
+                )
+                WorkBuddyIdentityValueRow(
+                    label = "X-Product",
+                    value = liveState.product.ifBlank { "未上报" },
+                )
+                WorkBuddyIdentityValueRow(
+                    label = "X-IDE-Version",
+                    value = liveState.ideVersion.ifBlank { "未上报" },
+                )
+                WorkBuddyIdentityValueRow(
+                    label = "请求间隔",
+                    value = if (liveState.paceMs > 0) "${liveState.paceMs}ms" else "未上报",
+                )
+                WorkBuddyIdentityValueRow(
+                    label = "Stainless 头",
+                    value = workBuddyStainlessLabel(liveState),
+                    maxLines = 2,
+                )
+                // 保存值 ≠ 生效值：点名两个档位，比一句"重启后生效"更解释得清。
+                workBuddyIdentityMismatchNote(saved, liveState)?.let { mismatch ->
+                    Text(
+                        text = mismatch,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherColors.warning(),
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    McaButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(workBuddyIdentityCopyText(liveState)))
+                            copied = true
+                        },
+                        style = McaButtonStyle.Outlined,
+                    ) { Text(if (copied) "已复制" else "复制身份信息", maxLines = 1) }
+                }
+            }
+            liveMessage != null -> Text(
+                text = liveMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            else -> Text(
+                text = "正在读取当前身份…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        notice?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        error?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "改完需重启网关生效：保存只写入 settings.json，运行中的网关仍用旧档位；" +
+                "重启后由 loadSettings 重新应用。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = when {
+                    restarting -> "正在重启网关…"
+                    status.running -> "当前网关：运行中"
+                    else -> "当前网关：已停止"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            McaButton(
+                onClick = onRestartGateway,
+                style = McaButtonStyle.Outlined,
+                enabled = !restarting && status.running && !status.busy,
+            ) { Text(if (restarting) "重启中…" else "重启网关", maxLines = 1) }
+        }
+        restartNotice?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (it.contains("失败")) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+            )
+        }
+    }
+}
+
+/** 只读身份行：左标签固定宽、右值等宽单行（UA 允许换行到 3 行，绝不竖排）。 */
+@Composable
+private fun WorkBuddyIdentityValueRow(
+    label: String,
+    value: String,
+    mono: Boolean = false,
+    maxLines: Int = 1,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = DeepRowVertical),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(96.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = value,
+            style = if (mono) {
+                MaterialTheme.typography.labelSmall
+            } else {
+                MaterialTheme.typography.bodySmall
+            },
+            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 @Composable
 private fun SettingsSections(
     settings: SettingsSummary,
@@ -1874,29 +2208,11 @@ private fun SettingsSections(
                     color = MaterialTheme.colorScheme.surface,
                     border = McaHairline.stroke(),
                 ) {
-                    BasicTextField(
+                    ClearableTextField(
                         value = proxyDraft,
                         onValueChange = { proxyDraft = it },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface,
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .wrapContentHeight(Alignment.CenterVertically)
-                            .padding(horizontal = 12.dp)
-                            .semantics { contentDescription = "代理地址" },
-                        decorationBox = { inner ->
-                            if (proxyDraft.isEmpty()) {
-                                Text(
-                                    text = "socks5://127.0.0.1:7890",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            inner()
-                        },
+                        placeholder = "socks5://127.0.0.1:7890",
+                        contentDescription = "代理地址",
                     )
                 }
                 Spacer(Modifier.height(8.dp))
@@ -2032,7 +2348,7 @@ internal fun callerKeyModelsSummary(models: List<String>): String = when {
 }
 
 @Composable
-private fun SettingsSection(title: String, content: @Composable () -> Unit) {
+internal fun SettingsSection(title: String, content: @Composable () -> Unit) {
     Column {
         // 分组标题与条目之间拉开：标题上内距 12（配列表 12 凑出区块间 24），下内距 8。
         DeepSectionTitle(title)
@@ -2240,6 +2556,136 @@ class MaskingToolsViewModel(application: Application) : AndroidViewModel(applica
     private val _records = MutableStateFlow<MaskingRecordsUiState>(MaskingRecordsUiState.Idle)
     val records: StateFlow<MaskingRecordsUiState> = _records.asStateFlow()
 
+    // —— 桌面 `misc.js:340-356` 的汇总 + 筛选 + 命中详情 ——
+    private val _summary = MutableStateFlow<MaskingSummary?>(null)
+    val summary: StateFlow<MaskingSummary?> = _summary.asStateFlow()
+
+    /** 当前筛选：kind（空=全部）、只看拦截、来源渠道、调用方（agent）。 */
+    private val _filterKind = MutableStateFlow("")
+    val filterKind: StateFlow<String> = _filterKind.asStateFlow()
+    private val _filterBlocked = MutableStateFlow(false)
+    val filterBlocked: StateFlow<Boolean> = _filterBlocked.asStateFlow()
+    private val _filterProvider = MutableStateFlow("")
+    val filterProvider: StateFlow<String> = _filterProvider.asStateFlow()
+    private val _filterAgent = MutableStateFlow("")
+    val filterAgent: StateFlow<String> = _filterAgent.asStateFlow()
+
+    /** 清空记录 / 命中详情的结果文案。 */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+
+    sealed interface SentUiState {
+        data object Idle : SentUiState
+        data object Loading : SentUiState
+        data class Ready(val sent: MaskingSent) : SentUiState
+        data class Failed(val message: String) : SentUiState
+    }
+
+    private val _sent = MutableStateFlow<SentUiState>(SentUiState.Idle)
+    val sent: StateFlow<SentUiState> = _sent.asStateFlow()
+
+    /** 页面进入时一次拉齐：汇总（KPI + 筛选项来源）与记录列表。 */
+    fun loadAll() {
+        loadSummary()
+        loadRecords()
+    }
+
+    fun loadSummary() {
+        val status = repository.status.value
+        if (!status.running) {
+            _summary.value = null
+            return
+        }
+        viewModelScope.launch {
+            _summary.value = runCatching {
+                withContext(Dispatchers.IO) { client.fetchSummary(status) }
+            }.getOrNull()
+        }
+    }
+
+    fun setFilterKind(kind: String) {
+        if (_filterKind.value == kind) {
+            return
+        }
+        _filterKind.value = kind
+        loadRecords()
+    }
+
+    fun setFilterBlocked(on: Boolean) {
+        if (_filterBlocked.value == on) {
+            return
+        }
+        _filterBlocked.value = on
+        loadRecords()
+    }
+
+    fun setFilterProvider(provider: String) {
+        if (_filterProvider.value == provider) {
+            return
+        }
+        _filterProvider.value = provider
+        loadRecords()
+    }
+
+    fun setFilterAgent(agent: String) {
+        if (_filterAgent.value == agent) {
+            return
+        }
+        _filterAgent.value = agent
+        loadRecords()
+    }
+
+    fun clearNotice() {
+        _notice.value = null
+    }
+
+    /** 清空记录：桌面 `misc.js:463` 的 `masking/clear`。二次确认由页面负责。 */
+    fun clearRecords() {
+        val status = repository.status.value
+        if (!status.running) {
+            _notice.value = "网关未启动：无法清空记录"
+            return
+        }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { client.clearRecords(status) }
+                _notice.value = "已清空脱敏记录"
+                loadAll()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                _notice.value = "清空失败：${e.message}（错误码：${e.code}）"
+            } catch (_: Exception) {
+                _notice.value = "清空失败，请重试"
+            }
+        }
+    }
+
+    /** 命中详情：桌面 `misc.js:552` 的 `masking/sent?key=`。 */
+    fun openSent(key: String) {
+        val status = repository.status.value
+        if (!status.running) {
+            _sent.value = SentUiState.Failed("网关未启动")
+            return
+        }
+        _sent.value = SentUiState.Loading
+        viewModelScope.launch {
+            _sent.value = try {
+                SentUiState.Ready(withContext(Dispatchers.IO) { client.fetchSent(status, key) })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ManagementApiException) {
+                SentUiState.Failed("${e.message}（错误码：${e.code}）")
+            } catch (_: Exception) {
+                SentUiState.Failed("读取命中详情失败，请重试")
+            }
+        }
+    }
+
+    fun closeSent() {
+        _sent.value = SentUiState.Idle
+    }
+
     fun setText(value: String) {
         _text.value = value.take(MaskingPreviewMaxChars)
     }
@@ -2277,7 +2723,19 @@ class MaskingToolsViewModel(application: Application) : AndroidViewModel(applica
         }
         viewModelScope.launch {
             _records.value = try {
-                MaskingRecordsUiState.Ready(withContext(Dispatchers.IO) { client.fetchRecords(status) })
+                MaskingRecordsUiState.Ready(
+                    withContext(Dispatchers.IO) {
+                        // 与桌面 `misc.js:340-349` 同一组筛选参数（by=model 服务端恒空，界面不给）。
+                        client.fetchRecords(
+                            status = status,
+                            limit = 50,
+                            kind = _filterKind.value,
+                            blockedOnly = _filterBlocked.value,
+                            agent = _filterAgent.value,
+                            provider = _filterProvider.value,
+                        )
+                    },
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {
@@ -2307,18 +2765,13 @@ internal fun MaskingTryoutSection(viewModel: MaskingToolsViewModel = viewModel()
             color = MaterialTheme.colorScheme.surface,
             border = McaHairline.stroke(),
         ) {
-            BasicTextField(
+            ClearableTextField(
                 value = text,
                 onValueChange = viewModel::setText,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontFamily = FontFamily.Monospace,
-                ),
-                minLines = 3,
-                maxLines = 8,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                singleLine = false,
+                mono = true,
+                minHeight = 96.dp,
+                placeholder = "粘贴一段文本，看看哪些内容会被脱敏…",
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -2407,23 +2860,87 @@ internal fun MaskingTryoutSection(viewModel: MaskingToolsViewModel = viewModel()
 @Composable
 internal fun MaskingRecordsSection(viewModel: MaskingToolsViewModel = viewModel()) {
     val records by viewModel.records.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { viewModel.loadRecords() }
+    val summary by viewModel.summary.collectAsStateWithLifecycle()
+    val kind by viewModel.filterKind.collectAsStateWithLifecycle()
+    val blockedOnly by viewModel.filterBlocked.collectAsStateWithLifecycle()
+    val provider by viewModel.filterProvider.collectAsStateWithLifecycle()
+    val agent by viewModel.filterAgent.collectAsStateWithLifecycle()
+    val notice by viewModel.notice.collectAsStateWithLifecycle()
+    val sent by viewModel.sent.collectAsStateWithLifecycle()
+    var confirmClear by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { viewModel.loadAll() }
 
     SettingsSection("最近的脱敏记录") {
+        // —— 汇总 KPI（桌面 `misc.js:346-356`）——
+        summary?.let { s ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MaskingKpi("已脱敏请求", s.requests, Modifier.weight(1f))
+                MaskingKpi("拦下字段", s.blocked, Modifier.weight(1f))
+                MaskingKpi("不同值", s.distinct, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "只显示命中处数与类型，不显示原文",
+                text = "只显示命中处数与类型，不显示原文；点一条看当时发出去的内容（已脱敏）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
             McaButton(
-                onClick = viewModel::loadRecords,
+                onClick = viewModel::loadAll,
                 style = McaButtonStyle.Outlined,
                 size = McaButtonSize.CardAction,
                 enabled = records !is MaskingRecordsUiState.Loading,
             ) { Text(if (records is MaskingRecordsUiState.Loading) "读取中…" else "刷新") }
+        }
+        Spacer(Modifier.height(8.dp))
+        // —— 筛选（桌面 `misc.js:340-345` 的 kind/by/agent/provider/blocked）——
+        summary?.let { s ->
+            if (s.kinds.isNotEmpty()) {
+                MaskingFilterChips(
+                    label = "类型",
+                    options = s.kinds.map { it.name },
+                    selected = kind,
+                    onSelect = { viewModel.setFilterKind(if (kind == it) "" else it) },
+                )
+            }
+            if (s.providers.isNotEmpty()) {
+                MaskingFilterChips(
+                    label = "渠道",
+                    options = s.providers.map { it.name },
+                    selected = provider,
+                    onSelect = { viewModel.setFilterProvider(if (provider == it) "" else it) },
+                )
+            }
+            if (s.agents.isNotEmpty()) {
+                MaskingFilterChips(
+                    label = "调用方",
+                    options = s.agents.map { it.name },
+                    selected = agent,
+                    onSelect = { viewModel.setFilterAgent(if (agent == it) "" else it) },
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AetherPillButton(
+                text = "只看拦截",
+                onClick = { viewModel.setFilterBlocked(!blockedOnly) },
+                primary = blockedOnly,
+            )
+            McaButton(
+                onClick = { confirmClear = true },
+                style = McaButtonStyle.Outlined,
+                size = McaButtonSize.CardAction,
+                contentColor = MaterialTheme.colorScheme.error,
+            ) { Text("清空记录", maxLines = 1) }
         }
         Spacer(Modifier.height(8.dp))
         when (val current = records) {
@@ -2460,7 +2977,9 @@ internal fun MaskingRecordsSection(viewModel: MaskingToolsViewModel = viewModel(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    list.forEach { record -> MaskingRecordRow(record) }
+                    list.forEach { record ->
+                        MaskingRecordRow(record = record, onClick = { viewModel.openSent(record.key) })
+                    }
                     if (current.records.more) {
                         Spacer(Modifier.height(4.dp))
                         Text(
@@ -2472,14 +2991,191 @@ internal fun MaskingRecordsSection(viewModel: MaskingToolsViewModel = viewModel(
                 }
             }
         }
+        notice?.let { text ->
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (text.startsWith("清空失败")) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+            )
+        }
+    }
+
+    if (confirmClear) {
+        McaDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清空脱敏记录？", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = "只清空网关内存里的命中记录（本机、重启即失）；不影响账号、设置与已发出的请求。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        confirmClear = false
+                        viewModel.clearRecords()
+                    },
+                    style = McaButtonStyle.Destructive,
+                ) { Text("清空", maxLines = 1) }
+            },
+            dismissButton = {
+                McaButton(onClick = { confirmClear = false }, style = McaButtonStyle.Outlined) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
+    // 命中详情（桌面 `misc.js:552`）：展示当时发出去的内容，原文已被占位符替换。
+    when (val current = sent) {
+        MaskingToolsViewModel.SentUiState.Idle -> Unit
+        MaskingToolsViewModel.SentUiState.Loading -> McaDialog(
+            onDismissRequest = viewModel::closeSent,
+            title = { Text("命中详情", fontWeight = FontWeight.Bold) },
+            text = { Text("正在读取…", style = MaterialTheme.typography.bodySmall) },
+            confirmButton = {
+                McaButton(onClick = viewModel::closeSent, style = McaButtonStyle.Outlined) {
+                    Text("关闭")
+                }
+            },
+        )
+        is MaskingToolsViewModel.SentUiState.Failed -> McaDialog(
+            onDismissRequest = viewModel::closeSent,
+            title = { Text("命中详情", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = current.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            },
+            confirmButton = {
+                McaButton(onClick = viewModel::closeSent, style = McaButtonStyle.Outlined) {
+                    Text("关闭")
+                }
+            },
+        )
+        is MaskingToolsViewModel.SentUiState.Ready -> McaDialog(
+            onDismissRequest = viewModel::closeSent,
+            title = { Text("命中详情（已脱敏）", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 380.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    if (current.sent.messages.isEmpty()) {
+                        Text(
+                            text = current.sent.rawBody.ifBlank {
+                                "没有可展示的内容：这条记录已不在网关内存里（重启或清空后只保留摘要）。"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        current.sent.messages.forEach { message ->
+                            Text(
+                                text = message.role,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+                    Text(
+                        text = "密钥/邮箱等已被占位符替换；这里展示的是实际发往上游的文本。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                McaButton(onClick = viewModel::closeSent, style = McaButtonStyle.Outlined) {
+                    Text("关闭")
+                }
+            },
+        )
+    }
+}
+
+/** 一块 KPI：数字 + 说明（桌面 `misc.js:352-356` 的 kpi）。 */
+@Composable
+private fun MaskingKpi(label: String, value: Int, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(
+            text = value.toString(),
+            style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** 一行筛选 chips：标签 + 可横向滚动的选项；点已选中的再点一次 = 取消。 */
+@Composable
+private fun MaskingFilterChips(
+    label: String,
+    options: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(8.dp))
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            options.forEach { option ->
+                AetherPillButton(
+                    text = maskingKindLabel(option),
+                    onClick = { onSelect(option) },
+                    primary = selected == option,
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun MaskingRecordRow(record: MaskingRecord) {
+private fun MaskingRecordRow(record: MaskingRecord, onClick: () -> Unit = {}) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -3011,17 +3707,16 @@ private fun RemoteQuotaField(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Surface(shape = McaShape.CardAction, color = MaterialTheme.colorScheme.surface, border = McaHairline.stroke()) {
-            BasicTextField(
+            ClearableTextField(
                 value = value,
                 onValueChange = onChange,
-                singleLine = true,
-                visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .wrapContentHeight(Alignment.CenterVertically)
-                    .padding(horizontal = 12.dp),
+                minHeight = 48.dp,
+                contentDescription = label,
+                visualTransformation = if (password) {
+                    PasswordVisualTransformation()
+                } else {
+                    androidx.compose.ui.text.input.VisualTransformation.None
+                },
             )
         }
     }

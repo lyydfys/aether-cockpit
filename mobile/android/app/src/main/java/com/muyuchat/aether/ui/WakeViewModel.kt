@@ -84,6 +84,14 @@ class WakeViewModel(application: Application) : AndroidViewModel(application) {
     private val _createProblems = MutableStateFlow<WakeDraftProblems?>(null)
     val createProblems: StateFlow<WakeDraftProblems?> = _createProblems.asStateFlow()
 
+    /**
+     * 签到汇总的统计起点（unix 秒）。0 = 今天 0 点（服务端默认）。
+     *
+     * 桌面「一键签到」用**本次开始时间**做 since（`scheduler.js:83/88/93` 传 `startedAt`），
+     * 所以"本次成功"只算这一次；手机端原来不带 since，等于把同一天更早几次也算进来。
+     */
+    private var summarySince: Long = 0L
+
     /** 可选的账号（新建唤醒任务时用）；顺手读一次签到汇总。 */
     fun refreshAccountsAndSummary() {
         val status = repository.status.value
@@ -99,7 +107,7 @@ class WakeViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }.getOrDefault(emptyList())
             _summary.value = runCatching {
-                withContext(Dispatchers.IO) { writeClient.fetchCheckinSummary(status) }
+                withContext(Dispatchers.IO) { writeClient.fetchCheckinSummary(status, summarySince) }
             }.getOrNull()
         }
     }
@@ -252,11 +260,16 @@ class WakeViewModel(application: Application) : AndroidViewModel(application) {
         }
         _checkinRunning.value = true
         _checkinNote.value = null
+        // 与桌面一致：汇总只统计"这一次"（`scheduler.js:83` 的 startedAt）。
+        val startedAt = System.currentTimeMillis() / 1000
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) { schedulerClient.runAll(status) }
                 _checkinNote.value = result.note
+                summarySince = startedAt
                 refreshScheduler()
+                // 入队即返回：立刻重读会看到"排队 N"，与桌面轮询完后的统计口径一致。
+                refreshAccountsAndSummary()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ManagementApiException) {

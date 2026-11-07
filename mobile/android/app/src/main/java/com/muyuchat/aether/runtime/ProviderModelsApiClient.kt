@@ -25,6 +25,8 @@ data class ProviderModels(
 class ProviderModelsApiClient(
     private val connectTimeoutMs: Int = 8_000,
     private val readTimeoutMs: Int = 30_000,
+    /** 上游目录刷新更慢（桌面同样给 30s 量级）；单独留一个读超时。 */
+    private val refreshReadTimeoutMs: Int = 35_000,
 ) {
     fun fetchModels(status: GatewayStatus, providerId: String): ProviderModels {
         val id = providerId.trim()
@@ -74,6 +76,128 @@ class ProviderModelsApiClient(
             }
         }
     }
+
+    /**
+     * 从上游刷新某个渠道的模型目录：`POST /api/providers/{id}/models/refresh`
+     * （桌面 `channels.js:1056` 的「从上游刷新」按钮）。
+     *
+     * 回包 `{provider_id, models:N, source, fetched}`；返回 N（>=0）。
+     * 400 表示渠道不支持 / allowlist 模式 / 没有可用账号（`provider_catalog.go`
+     * 的 handleRefreshProviderModels 把服务端原因原样放在 error 里）。
+     */
+    fun refreshModels(status: GatewayStatus, providerId: String): Int {
+        val id = providerId.trim()
+        validateChannelId(id)?.let { code -> throw ManagementApiException(code, "渠道 id 不合法") }
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val connection = (URL("http://${status.addr}${providerModelsRefreshPath(id)}").openConnection() as HttpURLConnection)
+        connection.connectTimeout = connectTimeoutMs
+        // 上游目录刷新要给上游留时间：与桌面一致放在 30s 量级。
+        connection.readTimeout = refreshReadTimeoutMs
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+        try {
+            // 桌面同样发 `{}`（channels.js:1056 `api.post(..., {})`）。
+            connection.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(1_024) }
+                        ?.let { JSONObject(it).optString("error") }
+                }.getOrNull().orEmpty()
+                throw ManagementApiException("http_$code", detail.ifBlank { "刷新模型目录失败（HTTP $code）" }.take(160))
+            }
+            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { readLimited(it) }
+            return runCatching { JSONObject(body.trim()).optInt("models", 0) }.getOrDefault(0)
+        } catch (e: ManagementApiException) {
+            throw e
+        } catch (_: IOException) {
+            throw ManagementApiException("network_error", "无法连接本机管理接口")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * 保存「暴露的模型 + 倍率」（桌面 `channels.js:1178-1191` 的保存按钮）。
+     *
+     * 请求体见 [buildProviderModelSelectionJson]；服务端回完整 providers 视图，这里不解析，
+     * 由调用方重新拉一次渠道/模型清单（与桌面 `await load()` 同口径）。
+     */
+    fun saveSelection(
+        status: GatewayStatus,
+        providerId: String,
+        models: List<String>,
+        rates: Map<String, Double>,
+    ) {
+        val id = providerId.trim()
+        validateChannelId(id)?.let { code -> throw ManagementApiException(code, "渠道 id 不合法") }
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val connection = (URL("http://${status.addr}/api/provider/save").openConnection() as HttpURLConnection)
+        connection.connectTimeout = connectTimeoutMs
+        connection.readTimeout = readTimeoutMs
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+        try {
+            val body = buildProviderModelSelectionJson(id, models, rates)
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(1_024) }
+                        ?.let { JSONObject(it).optString("error") }
+                }.getOrNull().orEmpty()
+                throw ManagementApiException("http_$code", detail.ifBlank { "保存模型选择失败（HTTP $code）" }.take(160))
+            }
+            // 回包是完整 providers 视图；读掉即可，避免连接悬挂。
+            connection.inputStream.bufferedReader(Charsets.UTF_8).use { readLimited(it) }
+        } catch (e: ManagementApiException) {
+            throw e
+        } catch (_: IOException) {
+            throw ManagementApiException("network_error", "无法连接本机管理接口")
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+
+/** `POST /api/providers/{id}/models/refresh`（桌面 `channels.js:1056`）。 */
+internal fun providerModelsRefreshPath(providerId: String): String =
+    "/api/providers/" + java.net.URLEncoder.encode(providerId.trim(), Charsets.UTF_8.name()) + "/models/refresh"
+
+/**
+ * 保存「暴露的模型 + 倍率」：`POST /api/provider/save {id, models, model_rates}`
+ * （桌面 `channels.js:1178-1191`；服务端 `provider_api.go:227-233` → `saveProviderModelSelection`）。
+ *
+ * - `models` 是**完整的目标暴露集合**（空数组 = 一个都不暴露，桌面「清空」同义）；
+ * - `model_rates` 只放用户填了正数的项（服务端 `v > 0` 才收，0/缺省=不展示）。
+ */
+internal fun buildProviderModelSelectionJson(
+    providerId: String,
+    models: List<String>,
+    rates: Map<String, Double>,
+): String {
+    val json = JSONObject()
+    json.put("id", providerId.trim())
+    json.put("models", org.json.JSONArray(models.map { it.trim() }.filter { it.isNotEmpty() }))
+    val rateJson = JSONObject()
+    rates.forEach { (model, rate) ->
+        val key = model.trim()
+        if (key.isNotEmpty() && rate > 0.0) {
+            rateJson.put(key, rate)
+        }
+    }
+    json.put("model_rates", rateJson)
+    return json.toString()
 }
 
 internal fun providerModelsPath(): String = "/api/provider/models"

@@ -76,6 +76,11 @@ data class SettingsSummary(
     val dataDir: String = "",
     /** `remote_quotas`：远程 Aether 实例用量源；Key 只回 hasKey，不回显密文。 */
     val remoteQuotas: List<RemoteQuotaSourceRow> = emptyList(),
+    /**
+     * `workbuddy_identity`：WorkBuddy 出网身份档位（cli / desktop / quiet / browser）。
+     * 空值或服务端给了未知值都按 cli（与 Go 侧 `resolveIdentityPreset` 的回退一致）。
+     */
+    val workBuddyIdentity: WorkBuddyIdentity = WorkBuddyIdentity.Default,
 )
 
 /** 请求管线钩子（桌面 `settings.js:468-485` 四项 + 服务端第五项 `guard_accounts`）。 */
@@ -425,6 +430,18 @@ class SettingsApiClient(
         return parseLanEnabled(body)
     }
 
+    /**
+     * WorkBuddy 出网身份档位：`POST /api/settings {"workbuddy_identity": …}`。
+     *
+     * **只写 settings.json**：运行中的 WorkBuddy 渠道要重启网关后才换档
+     * （`loadSettings` → `applyWorkBuddyIdentity`），所以页面必须提示重启，
+     * 不能让用户以为保存完就切了。
+     */
+    fun setWorkBuddyIdentity(status: GatewayStatus, preset: WorkBuddyIdentity): SettingsSummary =
+        parseSettings(
+            requestJson(status, "/api/settings", "POST", buildWorkBuddyIdentityJson(preset)),
+        )
+
     fun setRedactActions(status: GatewayStatus, actions: Map<String, String>): Map<String, String> {
         val body = requestJson(status, "/api/settings/redact-actions", "POST", buildRedactActionsJson(actions))
         return parseRedactActions(body)
@@ -583,6 +600,10 @@ internal fun validateProxyInput(input: String): String? {
 
 internal fun buildLanToggleJson(on: Boolean): String =
     JSONObject().put("on", on).toString()
+
+/** `workbuddy_identity` 请求体：只带这一个键，服务端按字段合并（不整份覆盖）。 */
+internal fun buildWorkBuddyIdentityJson(preset: WorkBuddyIdentity): String =
+    JSONObject().put("workbuddy_identity", preset.wireValue).toString()
 
 internal fun parseLanEnabled(body: String): Boolean {
     val root = try {
@@ -760,6 +781,7 @@ internal fun parseSettings(body: String): SettingsSummary {
         tools = parseToolsConfig(root.optJSONObject("tools")),
         dataDir = root.optString("dir").trim(),
         remoteQuotas = parseRemoteQuotaSources(root.optJSONArray("remote_quotas")),
+        workBuddyIdentity = WorkBuddyIdentity.fromWire(root.optString("workbuddy_identity")),
     )
 }
 

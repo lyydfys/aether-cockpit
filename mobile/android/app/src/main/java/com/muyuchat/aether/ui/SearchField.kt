@@ -17,8 +17,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -39,6 +42,8 @@ internal fun SearchField(
     placeholder: String = "搜索功能名称",
 ) {
     val dark = isAetherDarkTheme()
+    // 清空后焦点回到搜索框：否则用户要继续搜还得再点一次。
+    val focusRequester = remember { FocusRequester() }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -68,6 +73,7 @@ internal fun SearchField(
                     .weight(1f)
                     .fillMaxHeight()
                     .wrapContentHeight(Alignment.CenterVertically)
+                    .focusRequester(focusRequester)
                     .semantics { contentDescription = placeholder },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
@@ -91,7 +97,10 @@ internal fun SearchField(
                 AetherCompactIconButton(
                     iconRes = R.drawable.ic_close,
                     contentDescription = "清除搜索",
-                    onClick = { onQueryChange("") },
+                    onClick = {
+                        onQueryChange("")
+                        focusRequester.requestFocus()
+                    },
                 )
             }
         }

@@ -87,6 +87,7 @@ func (p *Provider) chatResponses(ctx context.Context, env *provider.AccountEnv, 
 			}
 		}
 	}
+	applyConfigHeaders(httpReq.Header, p.cfg.Headers, apiKey)
 	resp, err := env.Client().Do(httpReq)
 	if err != nil {
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "Responses 上游连接失败").WithCause(err).

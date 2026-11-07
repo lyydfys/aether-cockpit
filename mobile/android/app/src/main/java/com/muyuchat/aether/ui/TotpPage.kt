@@ -601,26 +601,18 @@ private fun TotpField(
             color = MaterialTheme.colorScheme.surface,
             border = McaHairline.stroke(),
         ) {
-            BasicTextField(
+            ClearableTextField(
                 value = value,
                 onValueChange = onValueChange,
-                singleLine = true,
+                contentDescription = label,
                 textStyle = MaterialTheme.typography.bodySmall.copy(
                     color = MaterialTheme.colorScheme.onSurface,
                 ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 visualTransformation = if (password) {
                     PasswordVisualTransformation()
                 } else {
                     androidx.compose.ui.text.input.VisualTransformation.None
                 },
-                // 与其它页面一致：BasicTextField 不吃触摸目标扩展，自己撑到 48dp。
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .wrapContentHeight(Alignment.CenterVertically)
-                    .padding(horizontal = 12.dp)
-                    .semantics { contentDescription = label },
             )
         }
     }

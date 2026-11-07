@@ -96,4 +96,12 @@ class AccountBatchApiTest {
             assertEquals("invalid_response", (error as ManagementApiException).code)
         }
     }
+
+    /** 批量删除是桌面 `channels.js:198` 的真实动作：`action:"delete"`（服务端只认 delete/refresh/ready）。 */
+    @Test
+    fun deleteActionUsesTheSameBatchEndpoint() {
+        val body = buildAccountBatchJson(BATCH_ACTION_DELETE, listOf("acc-1"))
+        assertTrue(body, body.contains("\"action\":\"delete\""))
+        assertTrue(body, body.contains("\"ids\":[\"acc-1\"]"))
+    }
 }

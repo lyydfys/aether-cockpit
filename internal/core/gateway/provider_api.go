@@ -193,7 +193,8 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	creds := draftCredentials(d)
-	if d.ID == "vertex" {
+	isVertex := d.ID == "vertex"
+	if isVertex {
 		vc, problem := vertexCredentials(d)
 		if problem != "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": problem})
@@ -201,9 +202,58 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 		}
 		creds = vc
 	}
+
+	// 自定义供应商：创建/更新一条真正的 CustomChannel，账号挂到 custom-<slug>。
+	// 这样多个供应商不会挤进同一个内核渠道（模型前缀撞车、无法整组删除）。
+	pid := d.ID
+	customChannel := false
+	_, known := provider.Get(d.ID)
+	if !isVertex && (!known || strings.HasPrefix(strings.TrimSpace(d.ID), "custom-")) {
+		ch, ok, chErr := g.upsertCustomChannelFromDraft(d)
+		if chErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存自定义渠道失败: " + chErr.Error()})
+			return
+		}
+		if ok {
+			pid = customChannelProviderID(ch.ID)
+			customChannel = true
+			// 账号 base_url 与渠道保持一致，避免两次保存出现两个地址。
+			creds["base_url"] = ch.BaseURL
+		} else if !known {
+			// 只有 Gemini / Decide 端点的草稿无法映射成 CustomChannel 协议：
+			// 保持旧的"落到内核协议渠道"路径，不制造无法工作的渠道。
+			coreID, coreCreds, problem := customCoreProvider(d)
+			if coreID == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": problem})
+				return
+			}
+			label := strings.TrimSpace(d.Name)
+			if label == "" {
+				label = d.ID
+			}
+			created, apiErr := g.createAccount(coreID, label, coreCreds, "")
+			if apiErr != nil {
+				writeJSON(w, apiErr.StatusCode(), map[string]any{"error": apiErr.Message})
+				return
+			}
+			if models := cleanProviderModels(d.Models); len(models) > 0 {
+				created.SetAllowedModels(models)
+			}
+			g.saveAccountsNow()
+			if d.Icon != nil {
+				g.settingsMu.Lock()
+				g.setProviderIconLocked(coreID, *d.Icon)
+				_ = g.saveSettings()
+				g.settingsMu.Unlock()
+			}
+			g.respondProviders(w, r)
+			return
+		}
+	}
+
 	if d.BalanceURL != "" || d.BalanceToken != "" || d.ClearBalance {
 		g.settingsMu.Lock()
-		err := g.saveProviderBalanceLocked(d.ID, ProviderBalanceConfig{
+		err := g.saveProviderBalanceLocked(pid, ProviderBalanceConfig{
 			URL: d.BalanceURL, Path: d.BalancePath, Method: d.BalanceMethod,
 		}, d.BalanceToken, d.ClearBalance)
 		g.settingsMu.Unlock()
@@ -212,68 +262,36 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, known := provider.Get(d.ID); known && d.ModelMode != nil {
+	if _, ok := provider.Get(pid); ok && d.ModelMode != nil {
 		// 目录模式先落盘并重建路由表：切换 allowlist/fallback 后模型解析
 		// 必须立即按新模式生效，不能等下一次刷新。
-		if err := g.setProviderModelMode(d.ID, *d.ModelMode); err != nil {
+		if err := g.setProviderModelMode(pid, *d.ModelMode); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
 		g.models.Rebuild()
-		if g.catalog != nil && g.catalog.supports(d.ID) {
-			go g.catalog.maybeRefresh(d.ID)
+		if g.catalog != nil && g.catalog.supports(pid) {
+			go g.catalog.maybeRefresh(pid)
 		}
 	}
-	if _, known := provider.Get(d.ID); known && d.Models != nil {
-		// 内置渠道的模型选择落 settings（渠道级）；账号级白名单仍由账号设置维护。
-		if err := g.saveProviderModelSelection(d.ID, d.Models, d.ModelRates); err != nil {
+	if _, ok := provider.Get(pid); ok && d.Models != nil {
+		// 渠道级模型选择落 settings；自定义渠道的 Models 同时决定 manifest。
+		if err := g.saveProviderModelSelection(pid, d.Models, d.ModelRates); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存模型选择失败: " + err.Error()})
 			return
 		}
 	}
-	if _, ok := provider.Get(d.ID); !ok {
-		// 编辑器里的「自定义供应商」：id 是前端按名字生成的 slug，
-		// 内核没有这个渠道。按所选协议落到已有渠道的独立账号上，
-		// 这样 base_url + key 立刻可用，也不必动态注册渠道。
-		coreID, coreCreds, problem := customCoreProvider(d)
-		if coreID == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": problem})
-			return
-		}
-		label := strings.TrimSpace(d.Name)
-		if label == "" {
-			label = d.ID
-		}
-		created, apiErr := g.createAccount(coreID, label, coreCreds, "")
-		if apiErr != nil {
-			writeJSON(w, apiErr.StatusCode(), map[string]any{"error": apiErr.Message})
-			return
-		}
-		if models := cleanProviderModels(d.Models); len(models) > 0 {
-			created.SetAllowedModels(models)
-		}
-		g.saveAccountsNow()
-		if d.Icon != nil {
-			// 自定义供应商在核心里是某个协议渠道的账号，图标挂在那个渠道上。
-			g.settingsMu.Lock()
-			g.setProviderIconLocked(coreID, *d.Icon)
-			_ = g.saveSettings()
-			g.settingsMu.Unlock()
-		}
-		g.respondProviders(w, r)
-		return
-	}
 
-	envs := g.pool.ListByProvider(d.ID)
+	envs := g.pool.ListByProvider(pid)
 	var env *provider.AccountEnv
 	if len(envs) > 0 {
 		env = envs[0]
 	} else {
-		if d.ID == "vertex" && strings.TrimSpace(creds["adc_json"]) == "" {
+		if isVertex && strings.TrimSpace(creds["adc_json"]) == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Vertex 首次添加需要有效的 ADC 凭据文件；可先运行 gcloud auth application-default login，或填写凭据文件路径"})
 			return
 		}
-		created, apiErr := g.createAccount(d.ID, d.Name, creds, "")
+		created, apiErr := g.createAccount(pid, d.Name, creds, "")
 		if apiErr != nil {
 			writeJSON(w, apiErr.StatusCode(), map[string]any{"error": apiErr.Message})
 			return
@@ -288,56 +306,60 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 	if env.Label == "" || (d.Name != "" && env.Label == env.AccountID) {
 		env.Label = d.Name
 	}
+	// 自定义供应商：账号白名单跟渠道模型保持一致（旧路径也是这么做的）。
+	if customChannel && d.Models != nil {
+		env.SetAllowedModels(cleanProviderModels(d.Models))
+	}
 	if d.Proxy != nil || d.AccountProxies != nil {
-		if err := g.setProviderProxy(d.ID, d.Proxy, d.AccountProxies); err != nil {
+		if err := g.setProviderProxy(pid, d.Proxy, d.AccountProxies); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存代理设置失败: " + err.Error()})
 			return
 		}
 	}
 	if d.Icon != nil {
 		g.settingsMu.Lock()
-		g.setProviderIconLocked(d.ID, *d.Icon)
+		g.setProviderIconLocked(pid, *d.Icon)
 		_ = g.saveSettings()
 		g.settingsMu.Unlock()
 	}
 	if d.Routing != nil || d.Sink != nil || d.Affinity != nil {
-		if err := g.setProviderRoute(d.ID, d.Routing, d.Sink, d.Affinity); err != nil {
+		if err := g.setProviderRoute(pid, d.Routing, d.Sink, d.Affinity); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
 	}
 	if d.Headers != nil {
-		if err := g.setProviderHeaders(d.ID, d.Headers); err != nil {
+		if err := g.setProviderHeaders(pid, d.Headers); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
 		// 已存在的账号要把新的头立刻套上（不用重启）。
-		for _, env := range g.pool.ListByProvider(d.ID) {
+		for _, env := range g.pool.ListByProvider(pid) {
 			g.applyProviderTransport(env)
 		}
 	}
 	if d.Contexts != nil || d.Outputs != nil || d.Compacts != nil {
-		if err := g.setProviderLengths(d.ID, d.Contexts, d.Outputs, d.Compacts); err != nil {
+		if err := g.setProviderLengths(pid, d.Contexts, d.Outputs, d.Compacts); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "保存模型长度失败: " + err.Error()})
 			return
 		}
 	}
 	if d.PassUserAgent != nil {
-		if err := g.setProviderPassUA(d.ID, *d.PassUserAgent); err != nil {
+		if err := g.setProviderPassUA(pid, *d.PassUserAgent); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存 UA 透传开关失败: " + err.Error()})
 			return
 		}
-		for _, env := range g.pool.ListByProvider(d.ID) {
+		for _, env := range g.pool.ListByProvider(pid) {
 			g.applyProviderTransport(env)
 		}
 	}
 	if d.InsecureTLS != nil {
-		if err := g.setProviderInsecureTLS(d.ID, *d.InsecureTLS); err != nil {
+		if err := g.setProviderInsecureTLS(pid, *d.InsecureTLS); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存 TLS 开关失败: " + err.Error()})
 			return
 		}
 		// 立刻按新开关重建该渠道的客户端（不用重启）。
-		for _, env := range g.pool.ListByProvider(d.ID) {
+		for _, env := range g.pool.ListByProvider(pid) {
 			if err := g.rebuildAccountClient(env); err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "重建客户端失败: " + err.Error()})
 				return
@@ -345,44 +367,44 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if d.Unlisted != nil {
-		if err := g.setProviderUnlisted(d.ID, *d.Unlisted); err != nil {
+		if err := g.setProviderUnlisted(pid, *d.Unlisted); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存 unlisted 失败: " + err.Error()})
 			return
 		}
 	}
 	if d.Fallback != nil {
-		if err := g.setProviderFallback(d.ID, d.Fallback); err != nil {
+		if err := g.setProviderFallback(pid, d.Fallback); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存兜底链失败: " + err.Error()})
 			return
 		}
 	}
 	if d.PriceRate != nil {
-		if err := g.setProviderPriceRate(d.ID, d.PriceRate); err != nil {
+		if err := g.setProviderPriceRate(pid, d.PriceRate); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
 	}
 	if d.MaxConcurrency != nil || d.MaxRPM != nil || d.QueueLimit != nil || d.QueueWait != nil {
-		if err := g.setProviderLimits(d.ID, d.MaxConcurrency, d.MaxRPM, d.QueueLimit, d.QueueWait); err != nil {
+		if err := g.setProviderLimits(pid, d.MaxConcurrency, d.MaxRPM, d.QueueLimit, d.QueueWait); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存渠道上限失败: " + err.Error()})
 			return
 		}
 	}
 	if len(d.ExtraBody) > 0 {
-		if err := g.setProviderExtraBody(d.ID, d.ExtraBody); err != nil {
+		if err := g.setProviderExtraBody(pid, d.ExtraBody); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		for _, env := range g.pool.ListByProvider(d.ID) {
+		for _, env := range g.pool.ListByProvider(pid) {
 			g.applyProviderTransport(env)
 		}
 	}
 	if d.SystemPrompt != nil || d.ConcatSystem != nil {
-		if err := g.setProviderSystemPrompt(d.ID, d.SystemPrompt, d.ConcatSystem); err != nil {
+		if err := g.setProviderSystemPrompt(pid, d.SystemPrompt, d.ConcatSystem); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "保存系统提示词失败: " + err.Error()})
 			return
 		}
-		for _, env := range g.pool.ListByProvider(d.ID) {
+		for _, env := range g.pool.ListByProvider(pid) {
 			g.applyProviderTransport(env)
 		}
 	}

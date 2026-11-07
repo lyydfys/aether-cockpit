@@ -222,6 +222,7 @@ func (g *Gateway) handleProviderModelList(w http.ResponseWriter, r *http.Request
 		return
 	}
 	key := strings.TrimSpace(body.Key)
+	id := strings.TrimSpace(body.ID)
 	base := baseFor(body.Chat)
 	if base == "" {
 		base = baseFor(body.Base)
@@ -237,18 +238,58 @@ func (g *Gateway) handleProviderModelList(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
-	if base == "" {
-		// 内置渠道本来就有清单：没有 vendor 端点时退回它，按钮不空转。
-		if p, ok := provider.Get(body.ID); ok {
-			m := p.Manifest()
-			ids := make([]string, 0, len(m.Models))
-			for _, mm := range m.Models {
-				ids = append(ids, strings.TrimPrefix(mm.ID, m.ID+"/"))
+
+	// 1) 优先用渠道自己的模型目录实现（CodeBuddy/WorkBuddy → /v3/config，
+	//    OpenAI 兼容 → spec 的端点，而不是硬拼 /models）。这是 CodeBuddy
+	//    "登录成功但获取模型 404"的根因修复点：它的站点没有 /models。
+	var vendorErr error
+	if id != "" {
+		if p, ok := provider.Get(id); ok {
+			if lister, ok := p.(provider.ModelLister); ok {
+				env := g.modelListEnv(id)
+				supported := env != nil
+				if env == nil {
+					vendorErr = fmt.Errorf("渠道 %s 还没有可用账号，无法读取上游模型目录", id)
+				} else if support, ok := p.(provider.ModelListSupport); ok && !support.SupportsModelList(env) {
+					supported = false
+					vendorErr = fmt.Errorf("渠道 %s 没有可用的模型列表端点", id)
+				}
+				if supported {
+					ids, err := lister.ListModels(r.Context(), env)
+					if err == nil && len(ids) > 0 {
+						writeJSON(w, http.StatusOK, map[string]any{
+							"count": len(ids), "models": ids, "dropped": []string{},
+							"source": "vendor",
+						})
+						return
+					}
+					if err != nil {
+						vendorErr = err
+					} else {
+						vendorErr = fmt.Errorf("渠道 %s 上游返回了空模型列表", id)
+					}
+				}
 			}
-			writeJSON(w, http.StatusOK, map[string]any{
-				"count": len(ids), "models": ids, "dropped": []string{},
-				"source": "registry",
-			})
+			// 2) 上游目录不可用时退回内置/已保存清单：即便账号 token 过期或
+			//    站点没有 /models，页面也不该只弹一个 404。
+			if ids := registryModelIDs(id); len(ids) > 0 {
+				resp := map[string]any{
+					"count": len(ids), "models": ids, "dropped": []string{},
+					"source": "registry",
+				}
+				if vendorErr != nil {
+					resp["vendor_error"] = vendorErr.Error()
+				}
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
+		}
+	}
+
+	// 3) 未知渠道 / 还没保存的自定义端点：沿用"直接 GET base+/models"的探测。
+	if base == "" {
+		if vendorErr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": vendorErr.Error()})
 			return
 		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "先填一个 Base URL，或先保存渠道"})
@@ -304,6 +345,47 @@ func (g *Gateway) handleProviderModelList(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{
 		"count": len(ids), "models": ids, "dropped": []string{},
 	})
+}
+
+// modelListEnv 选一个可用于读取上游模型目录的账号：优先可用账号，
+// 其次第一个未停用账号；没有账号返回 nil。
+func (g *Gateway) modelListEnv(pid string) *provider.AccountEnv {
+	if g.pool == nil {
+		return nil
+	}
+	var fallback *provider.AccountEnv
+	for _, env := range g.pool.ListByProvider(pid) {
+		if env == nil || env.Disabled() {
+			continue
+		}
+		if env.Available() {
+			return env
+		}
+		if fallback == nil {
+			fallback = env
+		}
+	}
+	return fallback
+}
+
+// registryModelIDs 返回渠道静态清单里的模型名（去掉渠道前缀）。
+func registryModelIDs(pid string) []string {
+	p, ok := provider.Get(pid)
+	if !ok {
+		return nil
+	}
+	m := p.Manifest()
+	ids := make([]string, 0, len(m.Models))
+	for _, mm := range m.Models {
+		id := strings.TrimSpace(mm.UpstreamModel)
+		if id == "" {
+			id = strings.TrimPrefix(mm.ID, m.ID+"/")
+		}
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func min(a, b int) int {

@@ -108,6 +108,15 @@ class GatewayRuntimeRepository(context: Context) {
         }
     }
 
+    /**
+     * 重启一次 Go 运行时（停一次、再起一次），返回最终状态。
+     *
+     * 供「改动只在下次启动生效」的项复用（例如 WorkBuddy 出网身份档位）：
+     * 与局域网切换走同一条路径（直接驱动 controller），避免 Service 的
+     * STOP/START 竞态把刚起来的网关打死（见 [setLanSharing] 的注释）。
+     */
+    suspend fun restart(): GatewayStatus = restartRuntime().status
+
     /** 停一次、再起一次；返回"起来了吗"与最终状态。永不抛（除取消）。 */
     private suspend fun restartRuntime(): RestartOutcome {
         GatewayServiceController.stop()

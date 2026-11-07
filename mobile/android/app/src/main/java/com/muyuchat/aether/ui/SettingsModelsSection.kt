@@ -37,7 +37,9 @@ import com.muyuchat.core.designsystem.McaButtonSize
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaHairline
 import com.muyuchat.core.designsystem.McaShape
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 设置 → 模型目录（桌面 `settings.js:400-446`）。
@@ -63,7 +65,8 @@ internal fun SettingsModelsSection(
             return@LaunchedEffect
         }
         error = null
-        runCatching { client.fetchModelRedirects(status) }
+        // LaunchedEffect 跑在 Main 调度器：先切到 IO，再发起阻塞式 HttpURLConnection。
+        runCatching { withContext(Dispatchers.IO) { client.fetchModelRedirects(status) } }
             .onSuccess { draft = modelRedirectsDraftText(it.redirects) }
             .onFailure { error = it.message ?: "读取模型重定向失败" }
     }
@@ -114,7 +117,7 @@ internal fun SettingsModelsSection(
                     busy = true
                     scope.launch {
                         try {
-                            val saved = client.saveModelRedirects(status, parsed)
+                            val saved = withContext(Dispatchers.IO) { client.saveModelRedirects(status, parsed) }
                             draft = modelRedirectsDraftText(saved.redirects)
                             error = null
                             notice = "模型重定向已保存"
@@ -139,7 +142,7 @@ internal fun SettingsModelsSection(
                     busy = true
                     scope.launch {
                         try {
-                            notice = client.refreshAllModelCatalogs(status)
+                            notice = withContext(Dispatchers.IO) { client.refreshAllModelCatalogs(status) }
                             error = null
                         } catch (e: ManagementApiException) {
                             error = "刷新失败：${e.message}（错误码：${e.code}）"
@@ -177,32 +180,15 @@ internal fun SettingsJsonField(
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        BasicTextField(
+        // 统一输入组件：有内容时右侧出现 ×（不写死每处手拼），见 ClearableField.kt。
+        ClearableTextField(
             value = value,
             onValueChange = onValueChange,
             enabled = enabled,
-            textStyle = TextStyle(
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = MaterialTheme.typography.bodySmall.fontSize,
-                fontFamily = FontFamily.Monospace,
-            ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = minHeight)
-                .padding(12.dp),
-            decorationBox = { inner ->
-                Box {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = "{\"deepseek-v4.1-flash\":{\"qoder-cn\":\"DeepSeek-Flash\"}}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    inner()
-                }
-            },
+            singleLine = false,
+            mono = true,
+            minHeight = minHeight,
+            placeholder = "{\"deepseek-v4.1-flash\":{\"qoder-cn\":\"DeepSeek-Flash\"}}",
         )
     }
 }
@@ -222,30 +208,14 @@ internal fun SettingsLineField(
         color = MaterialTheme.colorScheme.surface,
         border = McaHairline.stroke(),
     ) {
-        BasicTextField(
+        ClearableTextField(
             value = value,
             onValueChange = onValueChange,
             enabled = enabled,
             singleLine = true,
-            textStyle = TextStyle(
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = MaterialTheme.typography.bodySmall.fontSize,
-                fontFamily = FontFamily.Monospace,
-            ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 10.dp),
-            decorationBox = { inner ->
-                Box {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    inner()
-                }
-            },
+            mono = true,
+            minHeight = 44.dp,
+            placeholder = placeholder,
         )
     }
 }

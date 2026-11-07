@@ -50,6 +50,9 @@ type Config struct {
 	// 声明额度能力，页面也不会去探测账单接口、自然不会有 404 报错。
 	NoQuota bool
 	Models  []ir.ModelMeta
+	// Headers 是渠道级附加请求头（目前来自自定义渠道表单；值支持
+	// {{api_key}} 占位符）。渠道代码显式设置的头优先，这里只补空缺。
+	Headers map[string]string
 	// AuthStyle：空 = Authorization: Bearer；"api-key" = Azure 的 api-key 头。
 	AuthStyle string
 	// Azure：端点按 /openai/deployments/{deployment}/…?api-version= 拼接。
@@ -78,6 +81,18 @@ type Provider struct{ cfg Config }
 
 // Config 返回实例配置（供 presets 与诊断使用）。
 func (p *Provider) Config() Config { return p.cfg }
+
+// applyConfigHeaders 应用渠道级附加头（自定义渠道表单）。渠道代码已设置的
+// 同名头优先；值里的 {{api_key}} 用本账号的 key 填充。
+func applyConfigHeaders(h http.Header, headers map[string]string, apiKey string) {
+	for k, v := range headers {
+		k = strings.TrimSpace(k)
+		if k == "" || h.Get(k) != "" {
+			continue
+		}
+		h.Set(k, strings.ReplaceAll(v, "{{api_key}}", apiKey))
+	}
+}
 
 // Manifest 声明渠道元数据。
 //
@@ -351,6 +366,8 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	if sp != nil && len(sp.HeadersTemplate) > 0 {
 		transport.WithFingerprint(env.Fingerprint, sp.HeadersTemplate)(httpReq)
 	}
+	// 渠道级附加头（自定义渠道表单）最后补：不覆盖渠道代码已设置的头。
+	applyConfigHeaders(httpReq.Header, p.cfg.Headers, apiKey)
 
 	client := env.Client()
 

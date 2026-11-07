@@ -78,6 +78,29 @@ data class ProviderSummary(
      */
     val modelIds: List<String> = emptyList(),
     /**
+     * 其中**手动添加**的模型（`models[].manual == true`，`admin.go:206`）。
+     *
+     * 桌面 `channels.js:1111` 只在 `st.manual` 的行上画「删除」——目录/上游返回的模型
+     * 服务端没有删除接口。手机端要按同一口径渲染，所以必须把这个标记一起带上来。
+     */
+    val manualModelIds: List<String> = emptyList(),
+    /**
+     * `models[].on == true`：当前**对外暴露**的模型（桌面 `channels.js:1117` 的勾选状态）。
+     * 模型弹窗的勾选框与保存都用它（目录模型不能删，但可以勾选/取消）。
+     */
+    val enabledModelIds: List<String> = emptyList(),
+    /**
+     * `models[]` 是否带 `on` 标记（当前服务端都带，见 `admin.go:189-197` 的 `aetherModelView`）。
+     * 老回包没有这个字段时，勾选框按"全部暴露"显示；有标记时以它为准 —— 否则
+     * "全部取消勾选"会被误当成"数据缺失"，保存时把用户关掉的模型又全打开。
+     */
+    val modelSelectionKnown: Boolean = false,
+    /**
+     * `models[].credit_rate`：模型级积分倍率（`admin.go:189-197` 的 `CreditRate`）。
+     * 0/缺省 = 未配置（桌面输入框留空、按 ×1 展示）。
+     */
+    val modelRates: Map<String, Double> = emptyMap(),
+    /**
      * 是否支持**对话转发**（`GET /api/providers` 的 `chat` 字段，值来自 `Capabilities.Chat`）。
      *
      * 默认 **true**：老服务端没有这个字段时，绝不能把所有渠道都误标成「仅账号/额度」。
@@ -174,16 +197,30 @@ class ManagementApiClient(
         fetchProvidersSnapshot(status).providers
 
     /**
+     * 带 `include_empty=1` 的渠道清单：把「已注册但还没有账号」的渠道也列出来。
+     *
+     * 桌面端接入渠道页用的就是 `providers?include_empty=1`（`onboard.js:51`）；
+     * 手机端之前只请求 `/api/providers`，于是**没接入过的渠道（例如 DeepSeek）整条不显示**，
+     * 用户会以为手机上根本没有这个渠道。
+     */
+    fun fetchProvidersIncludingEmpty(status: GatewayStatus): List<ProviderSummary> =
+        fetchProvidersSnapshot(status, includeEmpty = true).providers
+
+    /**
      * `/api/providers` 的完整快照（渠道列表 + 账号口径汇总）。
      *
      * 概览的「可用账号」用它：单看 `providers[].readyCount` 只能数到内存池里的账号，
      * 渠道未注册的那批（磁盘上明明还在）会被漏掉，于是界面上看起来"账号清零了"。
      */
-    fun fetchProvidersSnapshot(status: GatewayStatus): ProvidersSnapshot {
+    fun fetchProvidersSnapshot(
+        status: GatewayStatus,
+        includeEmpty: Boolean = false,
+    ): ProvidersSnapshot {
         if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
             throw ManagementApiException("gateway_not_running", "网关未启动")
         }
-        val connection = (URL("http://${status.addr}/api/providers").openConnection() as HttpURLConnection)
+        val path = providersPath(includeEmpty)
+        val connection = (URL("http://${status.addr}$path").openConnection() as HttpURLConnection)
         connection.connectTimeout = connectTimeoutMs
         connection.readTimeout = readTimeoutMs
         connection.requestMethod = "GET"
@@ -438,6 +475,10 @@ internal fun parseProviders(body: String): List<ProviderSummary> {
             authFormSchema = parseAuthFormSchema(item.optJSONArray("auth_form_schema")),
             hasOAuth = item.optBoolean("oauth", false),
             modelIds = parseModelIds(item.optJSONArray("models")),
+            manualModelIds = parseManualModelIds(item.optJSONArray("models")),
+            enabledModelIds = parseEnabledModelIds(item.optJSONArray("models")),
+            modelSelectionKnown = hasModelOnMarker(item.optJSONArray("models")),
+            modelRates = parseModelRates(item.optJSONArray("models")),
             // 缺失 / null / 非布尔值一律按 true：老服务端不认这个字段时不能把渠道标成不可对话。
             // 注意不能用 optBoolean：Android 的 org.json 会把字符串 "false" 强转成 false，
             // 那会让畸形回包把渠道误标成「仅账号/额度」。这里自己判类型。
@@ -460,6 +501,13 @@ private fun parseStringArray(array: JSONArray?): List<String> {
  * 渠道声明的模型 id。服务端 `models` 是**对象数组**（每个含 `id`），也可能给字符串数组，
  * 两种都吃；缺 `id` 的条目直接丢掉（概览端点推断只认 id）。
  */
+/**
+ * `/api/providers` 的路径。`include_empty=1` 让「已注册但还没接入账号」的渠道也出现
+ * （桌面接入渠道页 `onboard.js:51`；不带这个参数时 DeepSeek 这类空渠道整条不显示）。
+ */
+internal fun providersPath(includeEmpty: Boolean): String =
+    if (includeEmpty) "/api/providers?include_empty=1" else "/api/providers"
+
 internal fun parseModelIds(array: JSONArray?): List<String> {
     if (array == null) {
         return emptyList()
@@ -471,6 +519,76 @@ internal fun parseModelIds(array: JSONArray?): List<String> {
         } else {
             array.optString(index).trim().ifBlank { null }
         }
+    }.distinct()
+}
+
+/**
+ * 当前对外暴露的模型（`models[].on`，桌面勾选状态）。字符串形态的老回包没有这个标记 →
+ * 空列表（页面按"全部暴露"处理，与服务端 `on = !configured || modelInList` 的语义无关，
+ * 仅用于勾选框初值；保存时以用户勾选为准）。
+ */
+internal fun parseEnabledModelIds(array: JSONArray?): List<String> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        if (!item.optBoolean("on", false)) {
+            return@mapNotNull null
+        }
+        item.optString("id").trim().ifBlank { null }
+    }.distinct()
+}
+
+/** `models[]` 里是否至少有一项带 `on` 键（服务端 `aetherModelView.On` 恒输出）。 */
+internal fun hasModelOnMarker(array: JSONArray?): Boolean {
+    if (array == null || array.length() == 0) {
+        return false
+    }
+    for (index in 0 until array.length()) {
+        val item = array.optJSONObject(index) ?: continue
+        if (item.has("on")) {
+            return true
+        }
+    }
+    return false
+}
+
+/** 模型级倍率（`models[].credit_rate`）；0 或缺省不放进 map（=未配置）。 */
+internal fun parseModelRates(array: JSONArray?): Map<String, Double> {
+    if (array == null) {
+        return emptyMap()
+    }
+    val out = LinkedHashMap<String, Double>()
+    (0 until array.length()).forEach { index ->
+        val item = array.optJSONObject(index) ?: return@forEach
+        val id = item.optString("id").trim()
+        if (id.isEmpty()) {
+            return@forEach
+        }
+        val rate = item.optDouble("credit_rate", 0.0)
+        if (rate > 0.0 && !rate.isNaN()) {
+            out[id] = rate
+        }
+    }
+    return out
+}
+
+/**
+ * 手动模型 + 目录模型（`models[].manual`）：
+ * 桌面 `channels.js:1111` 只在这些行上渲染「删除」（服务端 `provider_extra_models.go`
+ * 也只允许移除手动模型）。字符串形态的老回包没有这个标记 → 空列表（不画删除）。
+ */
+internal fun parseManualModelIds(array: JSONArray?): List<String> {
+    if (array == null) {
+        return emptyList()
+    }
+    return (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        if (!item.optBoolean("manual", false)) {
+            return@mapNotNull null
+        }
+        item.optString("id").trim().ifBlank { null }
     }.distinct()
 }
 

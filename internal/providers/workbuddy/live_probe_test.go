@@ -155,8 +155,7 @@ func TestProbeConfigCatalog(t *testing.T) {
 			domain = prof.domain
 		}
 		req.Header.Set("X-Domain", domain)
-		setPluginHeaders(req.Header)
-		req.Header.Set("User-Agent", userAgent)
+		setPluginHeaders(req.Header, currentIdentity())
 		req.Header.Set("X-Agent-Purpose", "conversation")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

@@ -184,6 +184,9 @@ func manifestForCustom(c CustomChannel) openaicompat.Config {
 		Description: "用户自定义渠道（" + c.BaseURL + "）",
 		BaseURL:     c.BaseURL,
 		Models:      models,
+		// 自定义渠道表单里的附加请求头（如中转站要求的 X-Api-Name / X-Tenant），
+		// 之前只保存不生效；这里随 provider 配置一起下发（值支持 {{api_key}}）。
+		Headers: c.Headers,
 		// 自定义渠道没有内置的额度读取器；不声明 Quota 能力，
 		// 页面就不会把它显示成"额度读取失败"。
 		NoQuota: true,
@@ -254,6 +257,102 @@ func customIDKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
+	}
+	return out
+}
+
+// upsertCustomChannelFromDraft 把「自定义供应商」草稿落成一条真正的
+// CustomChannel（创建或按 slug 更新），并立即注册 provider。
+//
+// 返回 (渠道, true, nil) 表示可走自定义渠道；ok=false 表示草稿里没有
+// Chat/Responses/Anthropic 端点（仅 Gemini/Decide），调用方保持旧路径。
+// 幂等判据是渠道 ID（slug）是否已存在：重复保存同一供应商只更新不新建。
+func (g *Gateway) upsertCustomChannelFromDraft(d *providerDraft) (CustomChannel, bool, error) {
+	base, protocol := "", ""
+	switch {
+	case trimEndpoint(d.Chat) != "":
+		base, protocol = trimEndpoint(d.Chat), "openai"
+	case trimEndpoint(d.Responses) != "":
+		base, protocol = trimEndpoint(d.Responses), "responses"
+	case trimEndpoint(d.Anthropic) != "":
+		base, protocol = trimEndpoint(d.Anthropic), "anthropic"
+	}
+
+	slug := slugifyCustomID(strings.TrimPrefix(strings.TrimSpace(d.ID), "custom-"))
+	if slug == "" {
+		slug = slugifyCustomID(d.Name)
+	}
+	if slug == "" && base != "" {
+		// 前端没给 id/name 时用地址派生，保证同一供应商重复保存仍是同一个 slug。
+		slug = slugifyCustomID("relay-" + shortHash(base))
+	}
+	if slug == "" {
+		return CustomChannel{}, false, nil
+	}
+
+	g.settingsMu.Lock()
+	idx := -1
+	var ch CustomChannel
+	for i := range g.settings.CustomChannels {
+		if g.settings.CustomChannels[i].ID == slug {
+			idx = i
+			ch = g.settings.CustomChannels[i]
+			break
+		}
+	}
+	if idx < 0 {
+		ch = CustomChannel{ID: slug, CreatedAt: time.Now().Unix()}
+	}
+	if name := strings.TrimSpace(d.Name); name != "" {
+		ch.Name = name
+	}
+	if ch.Name == "" {
+		ch.Name = slug
+	}
+	// nil = 本次没提交该字段（保留旧值）；空数组 = 明确清空。
+	if d.Models != nil {
+		ch.Models = cleanProviderModels(d.Models)
+	}
+	if d.Headers != nil {
+		ch.Headers = cloneStringMap(d.Headers)
+	}
+	if base != "" {
+		ch.BaseURL, ch.Protocol = base, protocol
+	}
+	if strings.TrimSpace(ch.BaseURL) == "" {
+		g.settingsMu.Unlock()
+		return CustomChannel{}, false, nil
+	}
+	norm, err := normalizeCustomChannel(ch)
+	if err != nil {
+		g.settingsMu.Unlock()
+		return CustomChannel{}, false, err
+	}
+	if idx >= 0 {
+		g.settings.CustomChannels[idx] = norm
+	} else {
+		g.settings.CustomChannels = append(g.settings.CustomChannels, norm)
+	}
+	g.settingsMu.Unlock()
+
+	if err := g.saveSettings(); err != nil {
+		return CustomChannel{}, false, err
+	}
+	g.syncCustomChannels()
+	if g.models != nil {
+		// 新渠道的 manifest 立即进入路由表，不用等下一次模型刷新。
+		g.models.Rebuild()
+	}
+	return norm, true, nil
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }

@@ -21,6 +21,7 @@ import com.muyuchat.aether.runtime.SettingsSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -570,6 +571,60 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val personalSaving: StateFlow<Boolean> = _personalSaving.asStateFlow()
     private val _personalError = MutableStateFlow<String?>(null)
     val personalError: StateFlow<String?> = _personalError.asStateFlow()
+
+    private val _gatewayRestarting = MutableStateFlow(false)
+    val gatewayRestarting: StateFlow<Boolean> = _gatewayRestarting.asStateFlow()
+    private val _gatewayRestartNotice = MutableStateFlow<String?>(null)
+    val gatewayRestartNotice: StateFlow<String?> = _gatewayRestartNotice.asStateFlow()
+
+    /**
+     * 重启网关（停一次再起一次，复用局域网切换那条路径）。
+     *
+     * 出网身份档位只写 `settings.json`，运行中的渠道要等下一次
+     * `loadSettings → applyWorkBuddyIdentity` 才换档——所以「保存 + 重启」
+     * 才是完整动作。重启失败要如实报出来，不假装已生效。
+     */
+    fun restartGateway() {
+        if (_gatewayRestarting.value) {
+            return
+        }
+        val status = repository.status.value
+        if (!status.running) {
+            _gatewayRestartNotice.value = "网关未启动：启动后新档位会自动生效"
+            return
+        }
+        _gatewayRestartNotice.value = null
+        _gatewayRestarting.value = true
+        viewModelScope.launch {
+            try {
+                val started = repository.restart()
+                _gatewayRestartNotice.value = if (started.running) {
+                    "网关已重启（${started.addr}）：出网身份已按设置重新应用"
+                } else {
+                    "重启失败：${started.errorCode.ifBlank { "unknown" }}，请到概览页手动启动网关"
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _gatewayRestartNotice.value = "重启失败，请到概览页手动启动网关"
+            } finally {
+                _gatewayRestarting.value = false
+                refresh()
+            }
+            // 提示只活 8 秒：再次进设置页不该看到上一次的「已重启」。
+            scheduleRestartNoticeClear()
+        }
+    }
+
+    private fun scheduleRestartNoticeClear() {
+        val current = _gatewayRestartNotice.value ?: return
+        viewModelScope.launch {
+            delay(8_000)
+            if (_gatewayRestartNotice.value == current) {
+                _gatewayRestartNotice.value = null
+            }
+        }
+    }
 
     /**
      * 个人信息脱敏开关：写 `POST /api/settings {"redactPersonal":bool}`，

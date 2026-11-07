@@ -268,13 +268,38 @@ func (p *Provider) meterCallJSON(ctx context.Context, env *provider.AccountEnv, 
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-User-Id", userID)
-	req.Header.Set("X-Domain", p.domain(env))
-	setPluginHeaders(req.Header)
-	req.Header.Set("User-Agent", userAgent)
+	// 计费/积分接口按参考实现 billingHeaders 组装：
+	// UA 恒为单段桌面形态、带 Accept-Language / Origin / Referer。
+	prof := currentIdentity()
+	lang := "zh-CN"
+	if p.profile.intl {
+		lang = "en-US"
+	}
+	origin := regionOrigin(p.profile.intl)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", lang)
+	req.Header.Set("User-Agent", "WorkBuddy/"+prof.ClientVersion)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("X-CodeBuddy-Request", "1")
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Referer", origin+"/")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-User-Id", userID)
+	if v := strings.TrimSpace(env.GetCredential("enterprise_id")); v != "" {
+		req.Header.Set("X-Enterprise-Id", v)
+		req.Header.Set("X-Tenant-Id", v)
+	}
+	if v := strings.TrimSpace(env.GetCredential("tenant_id")); v != "" {
+		req.Header.Set("X-Tenant-Id", v)
+	}
+	req.Header.Set("X-Domain", p.domain(env))
+	if v := strings.TrimSpace(env.GetCredential("device_token")); v != "" {
+		req.Header.Set("X-Device-Token", v)
+	}
+	for k, v := range machineHeadersFor(prof, env.GetCredential) {
+		req.Header.Set(k, v)
+	}
 
 	client := env.Client()
 	resp, err := client.Do(req)

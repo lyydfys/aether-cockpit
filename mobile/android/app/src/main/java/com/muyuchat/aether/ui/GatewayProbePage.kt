@@ -538,28 +538,11 @@ private fun NetDiagCard(state: NetDiagUiState, onRun: (String) -> Unit) {
                     color = MaterialTheme.colorScheme.surface,
                     border = McaHairline.stroke(),
                 ) {
-                    BasicTextField(
+                    ClearableTextField(
                         value = host,
                         onValueChange = { host = it },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface,
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                            .semantics { contentDescription = "上游域名或 IP" },
-                        decorationBox = { inner ->
-                            if (host.isEmpty()) {
-                                Text(
-                                    text = "api.example.com 或 1.2.3.4:443",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            inner()
-                        },
+                        placeholder = "api.example.com 或 1.2.3.4:443",
+                        contentDescription = "上游域名或 IP",
                     )
                 }
             }

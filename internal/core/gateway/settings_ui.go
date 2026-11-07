@@ -22,6 +22,9 @@ var reservedSettingKeys = map[string]bool{
 	"port": true, "addr": true, "listen_addr": true,
 	"profiles": true, "active_profile": true, "model_groups_override": true,
 	"ui": true, "settings": true, "update_repo": true, "update_token": true,
+	// workbuddy_identity 由内核结构化消费（handleUpdateSettings + settings.json），
+	// 不能再顺手落进 settings.ui 里形成两份真相。
+	"workbuddy_identity": true,
 }
 
 const uiPrefsMaxBytes = 512 << 10

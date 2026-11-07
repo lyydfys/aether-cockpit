@@ -5,8 +5,11 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.Build
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -25,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,10 +40,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.muyuchat.aether.R
 import com.muyuchat.aether.runtime.APP_STAR_DISMISSED_KEY
 import com.muyuchat.aether.runtime.APP_UPDATE_AUTO_CHECK_KEY
@@ -65,6 +73,21 @@ import com.muyuchat.aether.runtime.resolveAppUpdate
 import com.muyuchat.aether.runtime.shouldAnnounceUpdate
 import com.muyuchat.aether.runtime.shouldAutoCheckAppUpdate
 import com.muyuchat.aether.runtime.formatUpdateAssetSize
+import com.muyuchat.aether.runtime.ApkInstaller
+import com.muyuchat.aether.runtime.GitHubRelease
+import com.muyuchat.aether.runtime.GitHubReleaseAsset
+import com.muyuchat.aether.runtime.ManagementApiException
+import com.muyuchat.aether.runtime.UpdateDownloader
+import com.muyuchat.aether.runtime.UpdateInstallPhase
+import com.muyuchat.aether.runtime.cachedApkMatches
+import com.muyuchat.aether.runtime.chooseAndroidApkAsset
+import com.muyuchat.aether.runtime.findSha256Asset
+import com.muyuchat.aether.runtime.updateDownloadErrorText
+import com.muyuchat.aether.runtime.updateDownloadProgressText
+import com.muyuchat.aether.runtime.updateInstallActionLabel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import java.io.File
 import com.muyuchat.core.designsystem.McaButton
 import com.muyuchat.core.designsystem.McaButtonStyle
 import com.muyuchat.core.designsystem.McaIconPlate
@@ -438,6 +461,121 @@ internal fun SettingsAboutSection(
         mutableStateOf(prefs.getString(APP_UPDATE_DISMISSED_VERSION_KEY, null))
     }
 
+    // ——— App 内更新：APK 下载 + 系统安装器（不再跳 GitHub 网页） ———
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val updateDir = remember(context) { File(context.cacheDir, "updates") }
+    val downloader = remember { UpdateDownloader(updateDir) }
+    // 缓存的 release 也要能直接点「下载」：重启 App 后不必先手动检查一次。
+    var latestRelease by remember {
+        mutableStateOf(
+            prefs.getString(APP_UPDATE_RELEASE_JSON_KEY, null)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { parseGitHubReleaseJson(it) }.getOrNull() },
+        )
+    }
+    var installPhase by remember { mutableStateOf(UpdateInstallPhase.IDLE) }
+    /** 已下载 / 总字节；总字节未知时第二项为 -1。 */
+    var downloadProgress by remember { mutableStateOf(0L to -1L) }
+    var installError by remember { mutableStateOf<String?>(null) }
+    var downloadedApk by remember { mutableStateOf<File?>(null) }
+    var awaitingInstallPermission by remember { mutableStateOf(false) }
+    var downloadJob by remember { mutableStateOf<Job?>(null) }
+
+    val androidApkAsset: GitHubReleaseAsset? = remember(latestRelease) {
+        latestRelease?.let { chooseAndroidApkAsset(it.assets, Build.SUPPORTED_ABIS.toList()) }
+    }
+    val sha256Asset: GitHubReleaseAsset? = remember(latestRelease) {
+        latestRelease?.let { findSha256Asset(it.assets) }
+    }
+
+    // 安装：权限未授予 → 跳「安装未知应用」设置页，回来后自动重试一次（见下面的 Lifecycle 监听）。
+    fun launchInstaller(apk: File) {
+        if (!ApkInstaller.canInstallPackages(context)) {
+            awaitingInstallPermission = true
+            runCatching { context.startActivity(ApkInstaller.unknownSourcesSettingsIntent(context)) }
+                .onFailure { installError = "无法打开「安装未知应用」设置页" }
+            return
+        }
+        installError = null
+        if (!ApkInstaller.install(context, apk)) {
+            installError = "系统里没有可用的安装器"
+        }
+    }
+
+    // 下载并安装：已下载同一版本（文件名 + 大小匹配）就直接装，不重复下载。
+    fun startUpdate() {
+        val asset = androidApkAsset
+        if (asset == null) {
+            installPhase = UpdateInstallPhase.FAILED
+            installError = "该版本没有 Android 安装包"
+            return
+        }
+        val cached = downloader.fileFor(asset).takeIf { cachedApkMatches(it, asset) }
+        if (cached != null) {
+            downloadedApk = cached
+            installPhase = UpdateInstallPhase.DOWNLOADED
+            launchInstaller(cached)
+            return
+        }
+        downloadJob?.cancel()
+        downloader.resetCancel()
+        installError = null
+        installPhase = UpdateInstallPhase.DOWNLOADING
+        downloadProgress = 0L to asset.sizeBytes
+        downloadJob = scope.launch {
+            try {
+                // 有 SHA256SUMS 就必须校验；拉校验文件失败也要报错，不能"当没有"。
+                val expected = sha256Asset?.let { sums ->
+                    withContext(Dispatchers.IO) {
+                        downloader.fetchSha256Sums(sums)[asset.name]
+                    }
+                }
+                val file = downloader.download(asset, expected) { done, total ->
+                    downloadProgress = done to total
+                }
+                downloadedApk = file
+                installPhase = UpdateInstallPhase.DOWNLOADED
+                launchInstaller(file)
+            } catch (e: ManagementApiException) {
+                if (e.code == "cancelled") {
+                    installPhase = UpdateInstallPhase.IDLE
+                    installError = null
+                } else {
+                    installPhase = UpdateInstallPhase.FAILED
+                    installError = updateDownloadErrorText(e.code, e.message)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                installPhase = UpdateInstallPhase.FAILED
+                installError = "下载失败：${e.message ?: "未知错误"}"
+            }
+        }
+    }
+
+    // 从系统设置返回：权限已授予就重试一次安装；仍被拒则停在「已下载，可重新安装」。
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && awaitingInstallPermission) {
+                awaitingInstallPermission = false
+                val apk = downloadedApk
+                if (apk == null) {
+                    return@LifecycleEventObserver
+                }
+                if (ApkInstaller.canInstallPackages(context)) {
+                    if (!ApkInstaller.install(context, apk)) {
+                        installError = "系统里没有可用的安装器"
+                    }
+                } else {
+                    installPhase = UpdateInstallPhase.DOWNLOADED
+                    installError = "未授予「安装未知应用」权限；安装包已下载，可再次点「安装」"
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     suspend fun runCheck(manual: Boolean) {
         if (checking) {
             return
@@ -481,6 +619,13 @@ internal fun SettingsAboutSection(
                 autoCheckEnabled = prefs.getBoolean(APP_UPDATE_AUTO_CHECK_KEY, true),
                 lastCheckedAtMillis = now,
             ).state
+            // 发布版本换了就清空上一次的下载态；同一次发布重复检查保留"已下载"。
+            if (latestRelease?.tagName != release.tagName) {
+                installPhase = UpdateInstallPhase.IDLE
+                installError = null
+                downloadedApk = null
+            }
+            latestRelease = release
         } catch (e: Exception) {
             if (manual) {
                 manualError = e.message ?: "更新检查失败。"
@@ -645,7 +790,7 @@ internal fun SettingsAboutSection(
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "从官方 GitHub Releases 检查稳定版更新；只做提示，不会自动下载或安装。",
+            text = "从官方 GitHub Releases 检查稳定版更新；更新包在 App 内下载，下载完交给系统安装器安装。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -750,12 +895,97 @@ internal fun SettingsAboutSection(
                 style = McaButtonStyle.Outlined,
                 enabled = !checking,
             ) { Text(if (checking) "检查中…" else "检查更新") }
-            if (state.status == AppUpdateStatus.AVAILABLE && state.releaseUrl.isNotBlank()) {
-                McaButton(
-                    onClick = { openUrl(state.releaseUrl) },
-                    style = McaButtonStyle.Primary,
-                ) { Text("去下载") }
+        }
+        // ——— App 内更新：下载 + 进度 + 安装（不再跳 GitHub 网页） ———
+        if (state.status == AppUpdateStatus.AVAILABLE) {
+            Spacer(Modifier.height(10.dp))
+            when {
+                androidApkAsset == null -> {
+                    Text(
+                        text = "该版本没有 Android 安装包，可前往发布页手动下载。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    McaButton(
+                        onClick = { openUrl(state.releaseUrl) },
+                        style = McaButtonStyle.Outlined,
+                    ) { Text("前往发布页") }
+                }
+                installPhase == UpdateInstallPhase.DOWNLOADING -> {
+                    Text(
+                        text = updateDownloadProgressText(downloadProgress.first, downloadProgress.second),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val total = downloadProgress.second
+                    val fraction = if (total > 0L) {
+                        (downloadProgress.first.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                    AboutDownloadProgressBar(fraction)
+                    Spacer(Modifier.height(8.dp))
+                    McaButton(
+                        onClick = {
+                            downloader.cancel()
+                            downloadJob?.cancel()
+                            downloadJob = null
+                            installPhase = UpdateInstallPhase.IDLE
+                            installError = null
+                        },
+                        style = McaButtonStyle.Outlined,
+                    ) { Text("取消下载") }
+                }
+                else -> {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        McaButton(
+                            onClick = {
+                                if (installPhase == UpdateInstallPhase.DOWNLOADED) {
+                                    downloadedApk?.let { launchInstaller(it) }
+                                } else {
+                                    startUpdate()
+                                }
+                            },
+                            style = McaButtonStyle.Primary,
+                        ) { Text(updateInstallActionLabel(installPhase)) }
+                        McaButton(
+                            onClick = { openUrl(state.releaseUrl) },
+                            style = McaButtonStyle.Text,
+                        ) { Text("发布页") }
+                    }
+                    if (installPhase == UpdateInstallPhase.DOWNLOADED) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "已下载，可重新安装；在系统安装界面点取消不会报错。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    installError?.let { message ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
             }
+            // 保留浏览器出口（次要，不是主按钮）。
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "也可以到发布页手动下载",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable {
+                    openUrl(state.releaseUrl.ifBlank { GITHUB_RELEASE_PAGE_URL })
+                },
+            )
         }
         }
     }
@@ -1454,8 +1684,31 @@ private fun loadPersistedUpdateState(
     }.getOrElse { base }
 }
 
-/** 一行「标签 + 值」；行高对齐 DeepRowVertical，值单行省略，1.0×/1.3× 都不会退化成单字竖排。 */
+/**
+ * 4dp 高的下载进度条。
+ *
+ * 不用 M3 `LinearProgressIndicator`：该 API 在 Compose 版本间取值/λ 形态变过，
+ * 两条 Box 拼出来最稳，颜色也自动跟随主题。
+ */
 @Composable
+private fun AboutDownloadProgressBar(fraction: Float) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.primary),
+        )
+    }
+}
+
+/** 一行「标签 + 值」；行高对齐 DeepRowVertical，值单行省略，1.0×/1.3× 都不会退化成单字竖排。 */@Composable
 private fun AboutRow(label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = DeepRowVertical),

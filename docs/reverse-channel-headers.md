@@ -14,27 +14,42 @@
 > 2026-11-06 按参考实现（`com.joy4fire.wbproxy` 1.0.6）的方法级证据收敛：
 > **UA 与 X-IDE-Version 同源同版本**（`clientVersion`），不再出现 UA 5.5.6 /
 > IDE 5.8.3 这种自相矛盾组合。依据见 [ANTI_BAN.md §2.4](ANTI_BAN.md)。
+>
+> 同一渠道同时只有一个**出网身份档位**（`workbuddy_identity`，默认 `cli`，即参考实现的「官方 CLI」双段 UA）：
+>
+> | 档位 | UA | Stainless 族 | 间隔 |
+> |---|---|---|---|
+> | `cli`（默认，= 参考 `OFFICIAL`） | `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0` | 发 | 350ms |
+> | `desktop` | `WorkBuddy/5.9.3` | 不发 | 350ms |
+> | `quiet` | `WorkBuddy/5.9.3` | 不发 | 900ms |
+> | `browser`（可选） | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) … Chrome/125.0.0.0 Safari/537.36` | 不发 | 350ms |
+>
+> 改版本/平台时必须整档改，禁止"UA 桌面 + 头发 CLI"的跨档组合。
 
 | 头 | 取值 | 代码 |
 |---|---|---|
-| `User-Agent` | `WorkBuddy/5.9.3`（`"WorkBuddy/" + clientVersion`） | `workbuddy/identity.go` |
+| `User-Agent` | 由档位决定（见上表） | `workbuddy/identity.go` |
 | `X-IDE-Type` / `X-IDE-Name` | `WorkBuddy` | 同上 |
-| `X-IDE-Version` | `5.9.3`（与 UA 同一常量） | 同上 |
+| `X-IDE-Version` | `5.9.3`（与桌面段同一常量） | 同上 |
 | `X-Product` | `SaaS` | 同上 |
 | `X-Private-Data` | `true` | 同上 |
 | `X-CodeBuddy-Request` | `1` | 同上 |
 | `X-Requested-With` | `XMLHttpRequest`（**不再是编造的 `WorkBuddy`**） | 同上 |
+| `X-Stainless-Lang` / `-Package-Version` / `-OS` / `-Arch` / `-Runtime` / `-Runtime-Version` / `-Retry-Count` | 仅 `cli` 档：`js / 6.25.0 / Windows / x64 / node / v22.14.0 / 0`（参考实现恒 0） | 同上 |
 | `X-Agent-Purpose` / `X-Agent-Intent` | `conversation` / `craft` | `workbuddy/chat.go` |
-| `X-Conversation-ID` / `-Request-ID` / `-Message-ID` | 会话/请求/消息三级，稳定派生 | 同上 |
-| `X-Request-ID` | 每请求随机 UUID | 同上 |
-| `traceparent` | `00-<32hex>-<16hex>-01`，由会话/请求 ID 派生 | `workbuddy/identity.go` |
-| `b3` / `X-B3-TraceId` / `-ParentSpanId` / `-SpanId` / `-Sampled` | 与 traceparent 同源 | 同上 |
-| `baggage` | `codebuddy.session_id=…,codebuddy.conversation_request_id=…` | 同上 |
-| `Accept-Language` / `Origin` / `Referer`（登录链路） | `zh-CN` / 站点根 / 站点根 + `/` | `workbuddy/login.go` |
-| 请求间隔 | 同账号 ≥ 350ms（`wbPaceGap`） | `workbuddy/identity.go` |
-| `X-Machine-ID` / `X-Session-ID` | **默认不发**（官方对话请求也不带；留开关时默认 false） | — |
-| `X-Device-Token` / `X-Device-Id` | 凭证配置了才发（服务端签发，不可伪造） | `workbuddy/chat.go` |
-| `X-Enterprise-Id` / `X-Tenant-Id` | 凭证有才发 | 同上 |
+| `X-Conversation-ID` | 账号级稳定 UUID v4（`conversationIDFor`） | `workbuddy/identity.go` |
+| `X-Conversation-Message-ID` / `X-Request-ID` | 同一个 32 位 uuidV7（12 位毫秒时间 + 20 位随机，无连字符） | 同上 |
+| `X-Conversation-Request-ID` | 独立的 32 位 uuidV7（与 message id 不同） | 同上 |
+| `traceparent` | `00-<32hex>-<16hex>-01`，trace/span 每次请求随机（SecureRandom） | 同上 |
+| `b3` / `X-B3-TraceId` / `-ParentSpanId` / `-SpanId` / `-Sampled` | `b3=<trace>-<span>-1-<parent>`（注意顺序）；B3 各头与 traceparent 同源 | 同上 |
+| `baggage` | `codebuddy.session_id=<conversation-id>,codebuddy.conversation_request_id=<request-id>` | 同上 |
+| `x-codebuddy-request`（小写） | `1`，与 `X-CodeBuddy-Request` **并存**（参考实现逐字如此） | 同上 |
+| `Accept-Language` / `Origin` / `Referer`（登录/计费链路） | `zh-CN`（CN）/`en-US`（Intl） / 区域 origin / origin + `/` | `workbuddy/login.go`、`checkin.go` |
+| 请求间隔 | 同账号 ≥ 档位值（cli/desktop/browser 350ms，quiet 900ms） | `workbuddy/identity.go` |
+| `X-Machine-ID` / `X-Session-ID` | 默认不发；显式 `device_headers=true` 时按参考算法派生（machine=sha256(wb2a:machine:uid) 前 8 hex；session=同 hash 拼 UUID） | 同上 |
+| `X-Device-Token` | 凭证配置了才发（服务端签发，不可伪造）；不再发 `X-Device-Id` | `workbuddy/chat.go` |
+| `X-Enterprise-Id` / `X-Tenant-Id` | 企业版才发；默认两者同值（`tenant_id` 可覆盖） | 同上 |
+| 计费接口 UA | 恒单段 `WorkBuddy/5.9.3`（参考 `billingHeaders` 不使用 uaMode） | `workbuddy/checkin.go` |
 | 错误 → 账号冷却 | 11140/11142→30min；14015/401→30min；14001…14018→60min；14003/10105/6005-6008→1440min；quota_request_limit→10min | `workbuddy/cooldown.go` |
 | 提示词指纹清洗 | 表单开关，默认关（替换 system 开场白指纹） | `workbuddy/scrub.go` |
 
