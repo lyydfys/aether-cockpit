@@ -176,6 +176,9 @@ func Run() {
 	defer stopSave()
 	stopAccSave := gw.Pool().StartAutoSave(10 * time.Second)
 	stopUsage := gw.StartUsageAutoSave(15 * time.Second)
+	// 边缘自动切换（与 headless 网关共用同一实现）。
+	stopEdgeAuto := gw.StartEdgeAuto(rootCtx, 30*time.Second)
+	defer stopEdgeAuto()
 	defer stopAccSave()
 	stopToken := gw.StartTokenRefresh(rootCtx, 10*time.Minute, 30*time.Minute)
 	defer stopToken()

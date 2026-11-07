@@ -55,9 +55,31 @@ export function channelNetFields(providerId, baseUrl) {
       + '不需要管理员权限，随时可清除；钉住的 IP 失效会自动重新竞速。'));
   box.append(h('div', { class: 'detail-field', style: 'align-items:flex-start' },
     h('label', null, '边缘优选'), edgeBlock));
+  // ---- 三、自动切换线路 ----
+  // 对齐社区两个项目的常驻模式：定期测当前线路、扫候选、按阈值切换。
+  // 区别是只作用于本渠道（不改系统 hosts、不需要管理员）。
+  const autoPath = input({ value: '' , placeholder: '/v1/models（留空 = /cdn-cgi/trace）' });
+  const autoInterval = input({ ...NUM, placeholder: '300' });
+  const autoThreshold = input({ ...NUM, placeholder: '150' });
+  const autoStatus = h('div', { class: 'meta', style: 'line-height:1.6' });
+  const autoBtn = btn('开启自动切换', { ghost: true, onClick: () => setAuto(true) });
+  const autoOff = btn('关闭', { ghost: true, onClick: () => setAuto(false) });
+  const autoBlock = h('div', { style: 'display:grid;gap:8px' },
+    h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' }, autoPath,
+      h('span', { class: 'meta' }, '重扫(秒)'), autoInterval,
+      h('span', { class: 'meta' }, '阈值(ms)'), autoThreshold),
+    h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' }, autoBtn, autoOff),
+    autoStatus,
+    h('div', { class: 'meta', style: 'line-height:1.6' },
+      '每轮先测当前线路（3 次取中位数），再扫候选（含 SJC 段）；' +
+      '只有新线路快出阈值才切，当前线路全挂则立即切。切换结果写进固定表，跨重启保留。' +
+      '回源在远端的站点请把路径填成真实 API 路径（如 /v1/models），否则只测到边缘、会选错机房。'));
+  box.append(h('div', { class: 'detail-field', style: 'align-items:flex-start' },
+    h('label', null, '自动切换'), autoBlock));
 
   loadProfile();
   loadPins();
+  loadAuto();
   return box;
 
   async function loadProfile() {
@@ -108,6 +130,59 @@ export function channelNetFields(providerId, baseUrl) {
           } catch (e) { toast('清除失败：' + (e.message || e)); }
         } }));
     } catch { /* 固定表读不到不影响其它字段 */ }
+  }
+
+  async function loadAuto() {
+    const host = hostInput.value.trim();
+    clear(autoStatus);
+    if (!host) return;
+    try {
+      const r = await api.get('network/edge-auto');
+      const row = (r.hosts || []).find((x) => x.state && x.state.host === host);
+      if (!row) {
+        autoStatus.append(h('span', null, '尚未开启自动切换'));
+        return;
+      }
+      const cfg = row.config || {};
+      const st = row.state || {};
+      autoBtn.textContent = cfg.enabled ? '已开启' : '开启自动切换';
+      autoBtn.disabled = !!cfg.enabled;
+      autoOff.disabled = !cfg.enabled;
+      if (cfg.path) autoPath.value = cfg.path;
+      if (cfg.interval_sec) autoInterval.value = String(cfg.interval_sec);
+      if (cfg.threshold_ms) autoThreshold.value = String(cfg.threshold_ms);
+      const pins = (row.pins || []).join(', ');
+      const bits = [];
+      if (pins) bits.push('当前线路 ' + pins);
+      if (st.current_ms) bits.push('当前 ' + st.current_ms + 'ms / 成功 ' + (st.current_ok || 0) + ' 次');
+      if (st.best_ip) bits.push('最优 ' + st.best_ip + '（' + (st.best_ms || 0) + 'ms）');
+      if (st.usable) bits.push('可用 ' + st.usable + '/' + (st.scanned || 0));
+      if (st.switches) bits.push('已切换 ' + st.switches + ' 次');
+      if (st.reason) bits.push(st.reason);
+      if (st.error) bits.push('错误：' + st.error);
+      autoStatus.append(h('span', null, bits.join(' · ') || '等待首轮检测'));
+    } catch (e) {
+      autoStatus.append(h('span', null, '读取失败：' + (e.message || e)));
+    }
+  }
+
+  async function setAuto(enabled) {
+    const host = hostInput.value.trim();
+    if (!host) { toast('先填上游域名'); return; }
+    try {
+      await api.post('network/edge-auto', {
+        host,
+        enabled,
+        path: autoPath.value.trim(),
+        interval_sec: Number(autoInterval.value) || 0,
+        threshold_ms: Number(autoThreshold.value) || 0,
+      });
+      toast(enabled ? '已开启，首轮检测在后台进行' : '已关闭自动切换');
+      await loadAuto();
+      if (enabled) setTimeout(loadAuto, 3000);
+    } catch (e) {
+      toast('保存失败：' + (e.message || e));
+    }
   }
 
   async function diagnose() {

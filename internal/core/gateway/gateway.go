@@ -326,6 +326,11 @@ type Gateway struct {
 	hostPin     *hostPinStore
 	hostPinOnce sync.Once
 
+	// 边缘自动切换用到的探测函数；正常路径指向 probeEdgePath / scanEdgesPath，
+	// 单测可替换成假实现。
+	edgeProbe edgeProbeFunc
+	edgeScan  edgeScanFunc
+
 	// customIDs 是当前由"自定义渠道"注册的 provider id（见 custom_channels.go）。
 	// 只放内存：启动时会按设置重新注册一遍，不需要落盘。
 	customIDs []string
@@ -484,6 +489,9 @@ func New(cfg Config) *Gateway {
 	g.tr.Optimizer = transport.NewOptimizer(defaultDoHServer, true)
 	// 渠道边缘优选：用户扫描后钉住的 IP 优先于 DNS 结果。
 	g.tr.Optimizer.LookupPins = func(host string) []string { return g.hostPins().Get(host) }
+	// 边缘自动切换：默认用真实探测，测试可覆盖。
+	g.edgeProbe = probeEdgePath
+	g.edgeScan = scanEdgesPath
 	g.callerKeys = newCallerKeyStore(filepath.Join(filepath.Dir(g.settingsPath), "caller-keys.json"))
 	// 渠道页的 on/off 参与模型解析（闭包读实时设置，无需重建）。
 	g.models.SetEnabledFilter(g.providerIsEnabled)
@@ -849,6 +857,9 @@ func (g *Gateway) routes() {
 	m.HandleFunc("GET /readyz", g.handleReadyz)
 	m.HandleFunc("GET /version", g.handleVersion)
 	m.HandleFunc("GET /api/providers", g.handleProviders)
+	// WorkBuddy 出网身份（运行中生效值 + 可选 saved）：手机端设置页读取，
+	// 避免客户端镜像 UA/版本常量。
+	m.HandleFunc("GET /api/providers/workbuddy/identity", g.handleWorkBuddyIdentity)
 	// 模型定价：官方目录 + 用户覆盖 + 展示币种。
 	m.HandleFunc("GET /api/pricing", g.handlePricing)
 	m.HandleFunc("POST /api/pricing/save", g.handlePricingSave)
@@ -1239,6 +1250,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("GET /api/network/edge-scan", g.handleEdgeScan)
 	m.HandleFunc("POST /api/network/edge-pin", g.handleEdgePin)
 	m.HandleFunc("GET /api/network/edge-pins", g.handleEdgePins)
+	m.HandleFunc("GET /api/network/edge-auto", g.handleEdgeAuto)
+	m.HandleFunc("POST /api/network/edge-auto", g.handleEdgeAuto)
 	m.HandleFunc("GET /api/context", g.handleContextEmpty)
 	m.HandleFunc("GET /api/tune", g.handleTuneEmpty)
 	m.HandleFunc("POST /api/tune/{path...}", g.handleTuneAction)

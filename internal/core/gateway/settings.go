@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"aether-cockpit/internal/core/eventbus"
+	"aether-cockpit/internal/providers/workbuddy"
 )
 
 // 运行时设置 —— 让"隐私遮蔽开关 / 模型价格表"这类高频调整项
@@ -105,6 +106,11 @@ type runtimeSettings struct {
 	ProviderFallback map[string][]string `json:"provider_fallback,omitempty"`
 	// ProviderLimits 渠道级上限覆盖（渠道编辑器 高级 → Concurrency / RPM）。
 	ProviderLimits map[string]ProviderLimitCfg `json:"provider_limits,omitempty"`
+	// WorkBuddyIdentity 是 WorkBuddy 渠道的出网身份档位：cli / desktop / quiet。
+	// 空值走默认 cli（双段 UA，与参考实现一致）；环境变量
+	// AETHER_WORKBUDDY_IDENTITY 作为兜底。
+	// 对应 providers/workbuddy/identity.go 的 IdentityProfile。
+	WorkBuddyIdentity string `json:"workbuddy_identity,omitempty"`
 	// ProviderRouting 渠道级路由设置（渠道编辑器 Routing / Rate limited / Stays）。
 	// 键是渠道 id；值为空表示默认（smart / 保持原位 / auto）。
 	ProviderRouting map[string]ProviderRouteCfg `json:"provider_routing,omitempty"`
@@ -166,6 +172,9 @@ type runtimeSettings struct {
 	// EdgePins 是按域名固定的上游 IP（Cloudflare 边缘优选的结果）。
 	// 只作用于网关内部，不修改系统 hosts。
 	EdgePins map[string][]string `json:"edge_pins,omitempty"`
+	// EdgeAuto 是"自动切换线路"的配置：定期测当前线路、扫候选、按阈值切换。
+	// 与 EdgePins 配合使用（切换结果写进 EdgePins，跨重启保留）。
+	EdgeAuto map[string]EdgeAutoConfig `json:"edge_auto,omitempty"`
 	// CustomChannels 是用户自建的渠道（任意 OpenAI/Anthropic 兼容端点）。
 	// 与内置渠道走同一套实现，只是配置来自这里而不是编译期常量。
 	CustomChannels []CustomChannel `json:"custom_channels,omitempty"`
@@ -428,6 +437,19 @@ func (g *Gateway) loadSettings() {
 		return
 	}
 	g.settings = s
+	g.applyWorkBuddyIdentity()
+}
+
+// applyWorkBuddyIdentity 把 settings.json 的 workbuddy_identity 应用到
+// WorkBuddy 渠道（cli / desktop / quiet）。空值不覆盖环境变量与默认值。
+func (g *Gateway) applyWorkBuddyIdentity() {
+	v := strings.TrimSpace(g.settings.WorkBuddyIdentity)
+	if v == "" {
+		return
+	}
+	if err := workbuddy.SetIdentityPreset(v); err != nil {
+		log.Printf("[WARN] %v", err)
+	}
 }
 
 // saveSettings 原子写盘。调用方持有 settingsMu。
@@ -544,6 +566,9 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		// GitHub 更新源：repo 留空=默认仓库；token 打码回显，收到打码值时保留旧值。
 		UpdateRepo  *string `json:"update_repo"`
 		UpdateToken *string `json:"update_token"`
+		// WorkBuddy 出网身份档位（cli / desktop / quiet / browser）。**只落盘**：
+		// 运行中的渠道要重启网关后由 loadSettings 重新应用，见 workbuddy_identity_api.go。
+		WorkBuddyIdentity *string `json:"workbuddy_identity"`
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
@@ -577,6 +602,19 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "GitHub 仓库格式应为 owner/repo"})
 			return
 		}
+	}
+	// 出网身份档位先做白名单校验（锁外），非法值直接 400，不落盘任何东西。
+	workBuddyPreset := ""
+	if body.WorkBuddyIdentity != nil {
+		preset, ok := normalizeWorkBuddyIdentity(*body.WorkBuddyIdentity)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "未知 WorkBuddy 身份档位: " + strings.TrimSpace(*body.WorkBuddyIdentity) +
+					"（可选 cli / desktop / quiet / browser）",
+			})
+			return
+		}
+		workBuddyPreset = preset
 	}
 	if body.KeepAwake != nil && *body.KeepAwake && !g.platform.KeepAwake {
 		// 手机没有同义的"阻止 PC 睡眠"，不落盘一个永远不生效的开关。
@@ -631,6 +669,11 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		default:
 			g.settings.UpdateToken = token
 		}
+	}
+	// 只落盘，不调用 workbuddy.SetIdentityPreset：切换档位要重启网关后
+	// 由 loadSettings → applyWorkBuddyIdentity 重新应用（页面文案同口径）。
+	if body.WorkBuddyIdentity != nil {
+		g.settings.WorkBuddyIdentity = workBuddyPreset
 	}
 	g.applyUIPrefs(raw)
 	saveErr := g.saveSettings()

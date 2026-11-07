@@ -161,6 +161,9 @@ func main() {
 	// 渠道连接预热：给跨境/中转渠道定期打一个不花额度的探针，把 TCP+TLS
 	// 连接保持在热态——否则用户隔一会儿提问，先白等一次 0.2~1.5s 握手。
 	stopChannelWarm := gw.StartChannelWarm(rootCtx, 15*time.Second)
+	// 边缘自动切换：默认每 30s 检查一次是否需要重测（每域名自己的间隔在设置里）。
+	stopEdgeAuto := gw.StartEdgeAuto(rootCtx, 30*time.Second)
+	defer stopEdgeAuto()
 	defer stopChannelWarm()
 
 	// WebDAV 备份自动推送：未配置或 auto_push_minutes<=0 时是空操作，可无条件启动。
