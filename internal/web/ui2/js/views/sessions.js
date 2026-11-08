@@ -48,6 +48,14 @@ export default {
       usageLoading: false, usageError: '',
     };
     host.append(skeleton(8));
+
+    // 会话搜索走局部重绘：render() 只用已加载的 state，不发请求。
+    // 旧实现每次输入都重绘整页并等待统计接口，输入框会明显发顿。
+    ctx.onFilter = () => {
+      if (!host.isConnected || !state.data) return;
+      render();
+    };
+
     load();
 
     const money = (n) => fmtCost(n, state.usagePricing.currency, state.usagePricing.usd_cny);

@@ -76,6 +76,8 @@ export function createShell({ navigate }) {
   // routeParams 是当前路由的 query（如 #/settings?tab=network）。
   // 视图通过 ctx.store.get().routeParams 读取，用来直达某个子页/分组。
   let routeParams = {};
+  // currentCtx 是当前视图的上下文：筛选时优先调它的 onFilter 做局部更新。
+  let currentCtx = null;
   let queryTimer = 0;
   let chrome = null;
 
@@ -391,10 +393,31 @@ export function createShell({ navigate }) {
     if (chrome) chrome.searchInput.value = '';
   }
 
-  /* 筛选只更新状态 + 重挂视图，不动工具条，因此输入焦点不会被抢走 */
+  /* 筛选/搜索：优先让当前视图做**局部重绘**，不重新请求接口、不丢滚动位置。
+   *
+   * 旧实现每次都 mountView 换掉整个 <main>，于是：
+   *   - 账号页要重拉 7 个接口（含 ~200KB 的 providers）；
+   *   - 列表被整体重建，滚动位置回到顶部；
+   *   - 正在输入时焦点依赖 chrome 才没被抢走，比较侥幸。
+   * 视图只要在 mount 时挂一个 ctx.onFilter，就能接管这件事。 */
   function setFilter(patch) {
     filter = { ...filter, ...patch };
     syncChrome();
+    if (currentCtx && typeof currentCtx.onFilter === 'function' && viewHost) {
+      // 真正的滚动容器是文档（html/body），不是 #view —— 只存 viewHost.scrollTop
+      // 会永远保存到 0，筛选后照样回顶。
+      const scroller = document.scrollingElement || document.documentElement;
+      const keep = scroller ? scroller.scrollTop : 0;
+      try {
+        currentCtx.onFilter(filter);
+        // 内容变短时浏览器会自动夹紧，这里只在仍然可滚时恢复。
+        if (scroller) scroller.scrollTop = keep;
+        return;
+      } catch (e) {
+        // 局部更新出错不能把页面卡死：打日志后回退到整页重挂。
+        console.warn('[filter] 局部更新失败，回退整页重挂', e);
+      }
+    }
     mountView(currentId, currentView, false);
   }
 
@@ -425,6 +448,7 @@ export function createShell({ navigate }) {
       refreshAll,
       toast,
     };
+    currentCtx = ctx;
     try {
       view.mount(viewHost, ctx);
     } catch (e) {

@@ -52,6 +52,9 @@ type runtimeSettings struct {
 	// MaxAttempts 是单次请求最多尝试几个账号（0 = 默认 5）。
 	// 账号多、单号额度小的场景调大能显著减少"整体失败"。
 	MaxAttempts int `json:"max_attempts,omitempty"`
+	// RequestBudgetSec 是"为了拿到首字节"允许消耗的总时间（秒），跨所有重试。
+	// 0 = 默认 120 秒。它防止"5 次 × 60 秒"这种最坏情况把客户端挂住几分钟。
+	RequestBudgetSec int `json:"request_budget_sec,omitempty"`
 	// APIKey 是网关鉴权密钥的持久副本。
 	//
 	// 之所以要存：密钥原本只能由启动参数给定，设置页写入的密钥没有落点，
@@ -472,6 +475,9 @@ func (g *Gateway) applyFailoverSettings() {
 	if n := g.settings.MaxAttempts; n >= 1 && n <= 20 {
 		g.cfg.MaxAttempts = n
 	}
+	if sec := g.settings.RequestBudgetSec; sec >= 10 && sec <= 900 {
+		g.cfg.RequestBudget = time.Duration(sec) * time.Second
+	}
 }
 
 // applyWorkBuddyIdentity 把 settings.json 的 workbuddy_identity 应用到
@@ -596,6 +602,7 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		// FirstByteTimeoutSec / MaxAttempts：故障转移的两个关键旋钮。
 		FirstByteTimeoutSec *int `json:"first_byte_timeout_sec"`
 		MaxAttempts         *int `json:"max_attempts"`
+		RequestBudgetSec    *int `json:"request_budget_sec"`
 		// APIKey 是网关鉴权密钥。过去这个字段没有对应分支，前端提交的密钥
 		// 只会落进 settings.ui（永不生效的副本），于是"填了密钥仍然被拒"。
 		APIKey *string `json:"api_key"`
@@ -685,6 +692,14 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		g.settings.MaxAttempts = *body.MaxAttempts
+	}
+	if body.RequestBudgetSec != nil {
+		if v := *body.RequestBudgetSec; v < 10 || v > 900 {
+			g.settingsMu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求总预算应在 10~900 秒之间"})
+			return
+		}
+		g.settings.RequestBudgetSec = *body.RequestBudgetSec
 	}
 	if body.APIKey != nil {
 		// 空串 = 关闭鉴权（仅本机监听时的合理默认）；否则立即生效，不用重启。

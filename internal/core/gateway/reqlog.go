@@ -28,6 +28,10 @@ type RequestLog struct {
 	DurationMS int64 `json:"duration_ms"`
 	// FirstByteMS 首字节耗时，流式体验的关键指标。
 	FirstByteMS int64 `json:"first_byte_ms,omitempty"`
+	// HeaderMS 是"到上游开始响应"的耗时（响应头/首个上游事件）。
+	// 与 FirstByteMS（首个内容增量）分开：HeaderMS 约等于网络+排队，
+	// FirstByteMS-HeaderMS 约等于模型思考，排查时一眼能分清楚。
+	HeaderMS int64 `json:"header_ms,omitempty"`
 	// Items 本次请求的上下文项数，便于发现"历史没回填"这类问题。
 	Items int `json:"items,omitempty"`
 	// PreviousID 是否续接了上一轮。
@@ -166,6 +170,15 @@ func (g *Gateway) handleLogs(w http.ResponseWriter, r *http.Request) {
 // requestTimer 采集一次请求的耗时。
 type requestTimer struct {
 	start time.Time
+	// header 是"拿到响应头/开始有上游响应"的时刻（不等于有正文）。
+	header time.Time
+	// first 是首个**内容**增量（正文/思考/工具参数）的时刻。
+	//
+	// 这两个分开记：不同路径（IR / HTTP 直通 / WS 直通）过去都在各自的时机
+	// 调用同一个 markFirstByte()，导致同一栏数字在不同渠道间不可比——
+	// IR 把 EventStart（空握手事件）算进去、直通在读 body 前标记、
+	// WS 甚至可能流结束才标记。拆开之后，UI 的"首字节"始终是内容时间，
+	// header 时间另行保留用于诊断。
 	first time.Time
 }
 
@@ -173,10 +186,24 @@ func newRequestTimer() *requestTimer {
 	return &requestTimer{start: time.Now()}
 }
 
-// markFirstByte 记录首字节时刻（仅第一次有效）。
+// markFirstByte 记录"首个内容增量"的时刻（仅第一次有效）。
+//
+// 只应在真正有内容要发给客户端时调用；纯握手事件（EventStart）不算，
+// 否则慢模型会在"还没产出任何字"的情况下显示成低 TTFT。
 func (t *requestTimer) markFirstByte() {
 	if t.first.IsZero() {
 		t.first = time.Now()
+	}
+	if t.header.IsZero() {
+		t.header = t.first
+	}
+}
+
+// markHeader 记录"上游开始响应"（拿到响应头/首个上游事件）的时刻。
+// 用于诊断"慢在建连还是慢在模型"，与面向用户的首字节分开。
+func (t *requestTimer) markHeader() {
+	if t.header.IsZero() {
+		t.header = time.Now()
 	}
 }
 
@@ -189,4 +216,19 @@ func (t *requestTimer) firstByteMS() int64 {
 		return 0
 	}
 	return t.first.Sub(t.start).Milliseconds()
+}
+
+// hasHeader / hasFirstByte 报告对应时刻是否已记录。
+//
+// 为什么需要：耗时字段是毫秒取整，极快路径下"已标记"和"未标记"都可能是 0。
+// 断言时序时必须看这两个布尔值，而不是看毫秒数。
+func (t *requestTimer) hasHeader() bool    { return !t.header.IsZero() }
+func (t *requestTimer) hasFirstByte() bool { return !t.first.IsZero() }
+
+// headerMS 是"到响应头"的耗时，0 表示还没拿到。
+func (t *requestTimer) headerMS() int64 {
+	if t.header.IsZero() {
+		return 0
+	}
+	return t.header.Sub(t.start).Milliseconds()
 }

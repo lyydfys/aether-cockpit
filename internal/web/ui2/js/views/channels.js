@@ -32,6 +32,14 @@ export default {
   mount(host, ctx) {
     const state = { accounts: [], providers: [], usage: {}, settings: {}, presets: null, picked: new Set(), timers: [] };
     host.append(skeleton(8));
+
+    // 搜索/筛选走局部重绘：数据已经在 state 里，render() 不发请求。
+    // 这样一次筛选省掉 7 个接口（含 ~200KB providers），也不会丢滚动位置。
+    ctx.onFilter = () => {
+      if (!host.isConnected) return;
+      render();
+    };
+
     load();
 
     async function load() {
@@ -48,14 +56,23 @@ export default {
         state.usage = u || {};
         state.settings = s || {};
         state.presets = pr || { presets: [], provider_presets: {}, route_presets: {} };
-        // 官转率（按响应 id 前缀推定）单独取，失败不影响渠道页。
-        state.routing = await api.get('routing-stats').catch(() => ({ providers: {} }));
-        // WorkBuddy 出网身份：账号卡片要展示的摘要。必须在这里预取——
-        // acctCard 是同步渲染函数，里面不能 await（否则整个模块语法错误、页面回退到概览）。
-        if (state.accounts.some((x) => String(x.provider_id || '').startsWith('workbuddy'))) {
-          state.wbIdentity = await api.get('providers/workbuddy/identity').catch(() => null);
-        }
+        // 关键数据到手就先渲染，别让补充统计拖住首屏。
         render();
+
+        // 官转率 + WorkBuddy 身份属于"锦上添花"：串行取完再补一次重绘。
+        // 注意不能放在 render() 之前串行 await —— 那会让首屏多等两跳，
+        // 而这两个数据即便拿不到，页面也该照常可用。
+        try {
+          const [routing, wb] = await Promise.all([
+            api.get('routing-stats').catch(() => ({ providers: {} })),
+            state.accounts.some((x) => String(x.provider_id || '').startsWith('workbuddy'))
+              ? api.get('providers/workbuddy/identity').catch(() => null)
+              : Promise.resolve(null),
+          ]);
+          state.routing = routing;
+          state.wbIdentity = wb;
+          if (host.isConnected && !state.closed) render();
+        } catch {}
         try {
           if (sessionStorage.getItem('aether.addProvider') === '1') { sessionStorage.removeItem('aether.addProvider'); customChannelsDrawer(); }
         } catch {}

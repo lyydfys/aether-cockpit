@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"aether-cockpit/internal/core/gateway/transducer"
 	"aether-cockpit/internal/core/ir"
@@ -109,6 +110,8 @@ func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.P
 	fpCtx := withPresetRoute(r.Context(), g.presetRouteFor(probe.Model))
 
 	exclude := make(map[string]bool, 2)
+	// fastErr 记录"因为容量闸被挡下"的最近一次原因，便于返回可读错误。
+	var fastErr *ir.APIError
 	for _, b := range bindings {
 		p, ok := provider.Get(b.ProviderID)
 		if !ok {
@@ -148,6 +151,39 @@ func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.P
 		}
 		exclude[env.AccountID] = true
 
+		// 与 IR 路径共用同一套容量闸：RPM 上限 + 每账号并发槽位。
+		//
+		// 历史缺陷：Fast-Path 只做了选号，没有 rpmFor/AllowRequest 也没有
+		// channelGate，等于一条绕过限流的旁路——高并发下同一账号会被打进
+		// 远超配置的请求量，既容易触发上游风控，也让 IR 路径的排队预算失效。
+		if rpm := g.rpmFor(env); !env.AllowRequest(rpm, time.Now()) {
+			ae := ir.NewAPIError(ir.ErrCodeUpstreamRateLimit,
+				"账号已达每分钟请求上限（Fast-Path）").WithProvider(b.ProviderID)
+			g.penalize(env, ae)
+			fastErr = ae
+			continue
+		}
+		// 并发槽位：拿不到就换下一个候选，而不是无限并发下去。
+		// 这里允许短暂等待（与 IR 的 300ms 口径一致），拿不到才算满。
+		var releaseSlot func()
+		if prof := g.channelNet().Get(b.ProviderID); prof.MaxInflight > 0 {
+			releaseSlot = g.channelGate().acquire(b.ProviderID, prof.MaxInflight, 300*time.Millisecond)
+		}
+		if releaseSlot == nil && g.maxConcurrentPerAccount() > 0 {
+			// 账号级并发上限：没有渠道级档位时也要守住。
+			rel, ok := env.TryAcquire(g.maxConcurrentPerAccount())
+			if !ok {
+				ae := ir.NewAPIError(ir.ErrCodeUpstreamRateLimit,
+					"账号并发已满（Fast-Path 排队后仍无空位）").WithProvider(b.ProviderID)
+				fastErr = ae
+				continue
+			}
+			releaseSlot = rel
+		}
+		if releaseSlot != nil {
+			defer releaseSlot()
+		}
+
 		upstreamModel := b.UpstreamModel
 		if mapped := env.MapModel(upstreamModel); mapped != "" {
 			upstreamModel = mapped
@@ -164,7 +200,10 @@ func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.P
 					entry.Status = "ok"
 					entry.FastPath = true
 					if tm != nil {
-						tm.markFirstByte()
+						// ResponsesWebSocketStream 是"跑完整条流才返回"的同步调用，
+						// 此刻早已不是首字节。标成 header 只保留"有响应"这一事实，
+						// 避免把整流耗时错记成 TTFT（报告指出的口径不一致）。
+						tm.markHeader()
 					}
 					if werr != nil {
 						entry.ErrMsg = "上游 WebSocket 中断: " + werr.Error()
@@ -216,7 +255,8 @@ func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.P
 		entry.FastPath = true
 
 		if tm != nil {
-			tm.markFirstByte()
+			// 此时刚拿到响应头，正文还在后面：只记 header。
+			tm.markHeader()
 		}
 		if probe.Stream {
 			if err := relayStream(w, resp); err != nil {
@@ -264,6 +304,16 @@ func (g *Gateway) tryFastPath(w http.ResponseWriter, r *http.Request, proto ir.P
 		if _, werr := w.Write(raw); werr != nil {
 			entry.ErrMsg = "直流转发中断: " + werr.Error()
 		}
+		return true
+	}
+	// 所有候选都因为容量闸被挡下：直接回 429，并说明原因。
+	// 不能静默 return false 让外层再走一遍 IR——那会重复消耗同样的配额，
+	// 用户还会看到一条与真实原因无关的报错。
+	if fastErr != nil {
+		entry.Status = "error"
+		entry.ErrCode = fastErr.Code
+		entry.ErrMsg = fastErr.Message
+		transducer.WriteError(w, ir.ProtocolOpenAIResponses, fastErr)
 		return true
 	}
 	return false

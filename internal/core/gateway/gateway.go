@@ -90,6 +90,13 @@ type Config struct {
 	ModelsDir string `json:"models_dir,omitempty"`
 	// FirstByteTimeout 首字节超时，超时即换账号重试。
 	FirstByteTimeout time.Duration `json:"first_byte_timeout"`
+	// RequestBudget 是"为了拿到首字节"允许消耗的总时间上限（跨所有重试尝试）。
+	//
+	// 为什么需要它：MaxAttempts(默认5) × FirstByteTimeout(默认60s) 意味着
+	// 一条异常线路最坏能把客户端挂住好几分钟——用户体感就是"请求断了"。
+	// 有了总预算，第 3 次尝试就超时的话立刻放弃并返回已有错误，不再空等。
+	// 0 表示不限制（保留旧行为）。
+	RequestBudget time.Duration `json:"request_budget"`
 	// MaxAttempts 单次请求最多尝试几个账号。
 	MaxAttempts int `json:"max_attempts"`
 	// QueueWait 是所有账号都到并发上限时，请求最多排队等槽位多久
@@ -446,6 +453,10 @@ func New(cfg Config) *Gateway {
 	if cfg.FirstByteTimeout <= 0 {
 		cfg.FirstByteTimeout = 60 * time.Second
 	}
+	if cfg.RequestBudget == 0 {
+		// 默认 120 秒：够 2~3 次有意义的尝试，又不会让用户干等到分钟级。
+		cfg.RequestBudget = 120 * time.Second
+	}
 	st := state.New(state.Options{
 		MaxRecords:   cfg.MaxRecords,
 		TTL:          cfg.StateTTL,
@@ -673,14 +684,14 @@ func New(cfg Config) *Gateway {
 		log.Printf("[WARN] 提升未就绪账号失败: %v", err)
 	} else if promoted > 0 {
 		log.Printf("启动时把 %d 个未就绪账号提升回池", promoted)
-	// 一次性迁移：早先接在「OpenAI 兼容端点」（内置 openai-compat 空壳）上的中转站账号，
-	// 迁到以账号名命名的独立自定义渠道。判据是"凭据里有 base_url"——内置渠道本身没有
-	// 真实上游，带 base_url 的一定是用户填的中转站。迁移后模型前缀从
-	// `openai-compat/xxx` 变成 `custom-<账号名>/xxx`，用户才认得出是哪个渠道。
-	// 幂等：旧账号迁移时会被删除，第二次启动不会再命中。
-	if g.accountStoreErr == nil && cfg.AccountStorePath != "" {
-		g.migrateLegacyRelayAccounts()
-	}
+		// 一次性迁移：早先接在「OpenAI 兼容端点」（内置 openai-compat 空壳）上的中转站账号，
+		// 迁到以账号名命名的独立自定义渠道。判据是"凭据里有 base_url"——内置渠道本身没有
+		// 真实上游，带 base_url 的一定是用户填的中转站。迁移后模型前缀从
+		// `openai-compat/xxx` 变成 `custom-<账号名>/xxx`，用户才认得出是哪个渠道。
+		// 幂等：旧账号迁移时会被删除，第二次启动不会再命中。
+		if g.accountStoreErr == nil && cfg.AccountStorePath != "" {
+			g.migrateLegacyRelayAccounts()
+		}
 	}
 	// 账号恢复后把渠道级自定义请求头套上（保存时已套过的账号会幂等重套）。
 	g.applyProviderTransportAll()
@@ -1521,6 +1532,7 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, proto ir.Protoco
 	defer func() {
 		entry.DurationMS = tm.totalMS()
 		entry.FirstByteMS = tm.firstByteMS()
+		entry.HeaderMS = tm.headerMS()
 		// 真实请求的首 token 时间用来校准线路健康基线（只取成功请求）：
 		// 探针只能反映网络往返，上游变慢只有真实请求看得见。
 		if entry.Status == "ok" && entry.FirstByteMS > 0 && entry.ProviderID != "" {
@@ -1722,7 +1734,7 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, proto ir.Protoco
 	res.ch = g.withEventHooks(ctx, res.ch)
 	// 流内错误（例如 Trae 在 SSE 里报额度耗尽）也要惩罚账号：
 	// 首事件之后的错误由转接器/聚合器写回，不经过 dispatch 的错误分支。
-	res.ch = g.watchStreamErrors(res.ch, res.env)
+	res.ch = g.watchStreamErrors(res.ch, res.env, tm)
 	if g.usage != nil || res.env != nil {
 		res.ch = g.withUsageRecorder(ctx, res.ch, usageCell{
 			Date: usageDate(time.Now()), ProviderID: res.providerID,
@@ -1756,6 +1768,18 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 	// 传 req.ReasoningEffort 进去是为了让组规则能按"请求要求的推理档"出规则
 	// （例如高强度推理只走贵模型）。RouteOutcome.EffortOut 是规则强制指定的
 	// 档位，非空时覆盖请求——只在客户端没有显式指定时生效，用户意图优先。
+	// 总重试预算：从本次请求开始计时，跨所有尝试共享。
+	//
+	// 没有它时，MaxAttempts(5) × FirstByteTimeout(60s) 的最坏等待是分钟级，
+	// 用户看到的就是"请求挂死/断了"。超预算后不再换账号，直接返回最后一次错误。
+	if g.cfg.RequestBudget > 0 {
+		if _, ok := ctx.Deadline(); !ok {
+			var cancelBudget context.CancelFunc
+			ctx, cancelBudget = context.WithTimeout(ctx, g.cfg.RequestBudget)
+			defer cancelBudget()
+		}
+	}
+
 	bindings, outcome := g.models.ResolveSmartEffortSignals(req.Model, req.LastUserText(),
 		conversationFingerprint(req), req.ReasoningEffort, fromRouter, routeSignalsFor(req))
 	if outcome.EffortOut != "" && req.ReasoningEffort == "" {
@@ -2013,6 +2037,14 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			if attempts >= g.cfg.MaxAttempts {
 				break
 			}
+			// 总预算耗尽：不再换账号空等，直接带着已有错误返回。
+			if deadline, ok := ctx.Deadline(); ok && time.Now().After(deadline) {
+				if lastErr == nil {
+					lastErr = ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed,
+						"重试预算已用尽（%s）", g.cfg.RequestBudget)
+				}
+				break
+			}
 			continue
 		}
 		// 这一轮没有真正发请求，只是都被并发上限挡住：按各渠道自己的等待预算
@@ -2193,27 +2225,95 @@ func (g *Gateway) openStream(ctx context.Context, h pipeline.StreamHandler, env 
 		}
 	}
 
-	ch, err := h(upCtx, env, req)
-	if err != nil {
+	// 首字节预算从"请求开始"计时，而不是从 h() 返回后计时。
+	//
+	// h() 是同步调用：建连(DialTimeout 15s) + TLS 握手(15s) + 等响应头(60s)
+	// 都发生在它内部。旧实现先调 h() 再启动定时器，等于这些阶段完全不受
+	// FirstByteTimeout 约束——上游卡在建连或响应头上时，定时器根本没启动，
+	// 请求能挂到分钟级（报告实测复现）。这里把 h() 放进 goroutine，
+	// 让定时器同时覆盖"建连/响应头"和"首个事件"两段。
+	attemptStart := time.Now()
+	budget := g.cfg.FirstByteTimeout
+	// 渠道级"停滞阈值"优先：某些跨线路上游（如 open-design）路由抖动大，
+	// 等满全局 60 秒毫无意义，配了 StallTimeoutMS 就按它更早判死并换线路。
+	// 之前这个字段只有配置与展示，没有任何执行逻辑。
+	if env != nil {
+		if stall := time.Duration(g.channelNet().Get(env.ProviderID).StallTimeoutMS) * time.Millisecond; stall > 0 && stall < budget {
+			budget = stall
+		}
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		// 已经算出总预算时，单次尝试不能超过剩余时间。
+		if remain := time.Until(deadline); remain > 0 && remain < budget {
+			budget = remain
+		}
+	}
+	if budget <= 0 {
+		budget = time.Second
+	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+
+	type openOut struct {
+		ch  <-chan ir.UnifiedStreamEvent
+		err error
+	}
+	// 带缓冲：定时器先触发时，goroutine 仍能把结果写进去而不泄漏。
+	openCh := make(chan openOut, 1)
+	go func() {
+		c, e := h(upCtx, env, req)
+		openCh <- openOut{ch: c, err: e}
+	}()
+
+	var ch <-chan ir.UnifiedStreamEvent
+	select {
+	case <-ctx.Done():
 		releaseNow()
 		cancelUp()
-		return nil, err
+		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "客户端已取消").WithCause(ctx.Err())
+
+	case <-timer.C:
+		// cancelUp 会中断 h() 内部在途的 HTTP 请求，goroutine 随后退出。
+		releaseNow()
+		cancelUp()
+		return nil, ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed,
+			"上游首字节超时（%s 内未拿到响应）", budget.Round(time.Millisecond)).
+			WithProvider(env.ProviderID).WithRetryable(true)
+
+	case out := <-openCh:
+		if out.err != nil {
+			releaseNow()
+			cancelUp()
+			return nil, out.err
+		}
+		ch = out.ch
 	}
+
 	if releaseSlot != nil {
 		ch = releaseWhenClosed(ch, releaseNow)
 	}
 
-	timer := time.NewTimer(g.cfg.FirstByteTimeout)
-	defer timer.Stop()
+	// 剩余预算继续约束"首个事件"：两段共用同一个 FirstByteTimeout 口径，
+	// 这样"首字节"才真的是"从请求开始到第一个字节"的时间。
+	remain := budget - time.Since(attemptStart)
+	if remain <= 0 {
+		cancelUp()
+		return nil, ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed,
+			"上游首字节超时（%s 内未拿到任何事件）", budget.Round(time.Millisecond)).
+			WithProvider(env.ProviderID).WithRetryable(true)
+	}
+	stallTimer := time.NewTimer(remain)
+	defer stallTimer.Stop()
 
 	select {
 	case <-ctx.Done():
 		cancelUp()
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "客户端已取消").WithCause(ctx.Err())
 
-	case <-timer.C:
+	case <-stallTimer.C:
 		cancelUp()
-		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "上游首字节超时").
+		return nil, ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed,
+			"上游首字节超时（%s 内未拿到任何事件）", budget.Round(time.Millisecond)).
 			WithProvider(env.ProviderID).WithRetryable(true)
 
 	case ev, ok := <-ch:
@@ -2241,7 +2341,9 @@ func (g *Gateway) openStream(ctx context.Context, h pipeline.StreamHandler, env 
 		})
 
 		if tm != nil {
-			tm.markFirstByte()
+			// 这里只表示"上游开始响应"，还没有内容要发给客户端。
+			// 首内容时刻由流处理链路在真正产生正文/思考/工具参数时标记。
+			tm.markHeader()
 		}
 		return prepend(upCtx, ev, ch), nil
 	}
@@ -2665,21 +2767,40 @@ func (g *Gateway) streamOut(w http.ResponseWriter, proto ir.Protocol, res *dispa
 
 // watchStreamErrors 旁路观察流内错误事件：交给 penalize 后原样转发，
 // 不改变事件顺序，也不吞掉事件。
-func (g *Gateway) watchStreamErrors(ch <-chan ir.UnifiedStreamEvent, env *provider.AccountEnv) <-chan ir.UnifiedStreamEvent {
-	if env == nil {
+func (g *Gateway) watchStreamErrors(ch <-chan ir.UnifiedStreamEvent, env *provider.AccountEnv, tm *requestTimer) <-chan ir.UnifiedStreamEvent {
+	if env == nil && tm == nil {
 		return ch
 	}
 	out := make(chan ir.UnifiedStreamEvent, 8)
 	go func() {
 		defer close(out)
 		for ev := range ch {
-			if ev.Type == ir.EventError && ev.Err != nil {
+			if ev.Type == ir.EventError && ev.Err != nil && env != nil {
 				g.penalize(env, ir.AsAPIError(ev.Err))
+			}
+			// 首个**内容**增量才记作首字节：正文、思考、工具参数、usage、结束
+			// 都算"上游真的产出东西了"；EventStart 只是握手，不算。
+			if tm != nil && isContentEvent(ev.Type) {
+				tm.markFirstByte()
 			}
 			out <- ev
 		}
 	}()
 	return out
+}
+
+// isContentEvent 判断事件是否是"对用户有意义的内容"，用于首字节口径。
+//
+// 不把 EventStart 算进去：几乎每个上游都会先发一个空握手事件，把它当首字节
+// 会让"模型还在思考"的请求看起来 TTFT 很低，也让不同渠道之间不可比。
+func isContentEvent(t ir.StreamEventType) bool {
+	switch t {
+	case ir.EventTextDelta, ir.EventReasoningDelta,
+		ir.EventToolCallStart, ir.EventToolCallDelta,
+		ir.EventUsage, ir.EventDone:
+		return true
+	}
+	return false
 }
 
 // collectOut 非流式输出。

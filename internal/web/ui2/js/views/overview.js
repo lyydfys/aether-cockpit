@@ -51,21 +51,43 @@ export default {
 
     async function load() {
       try {
-        const [health, accounts, providers, usage, ledger, quotas, stats, settings, keys, clients, status, runtime] = await Promise.all([
+        // 首屏分两批：先拿"决定页面骨架"的关键数据并立刻渲染，
+        // 再补统计类数据。
+        //
+        // 以前 12 个接口一个 Promise.all 全等：其中 sessions/stats、
+        // usage/quotas、channels/status 都可能慢（要扫盘/探上游），
+        // 任何一个慢都会把整页拖住。现在关键数据一到就先画出来。
+        const [health, accounts, providers, settings, runtime] = await Promise.all([
           api.get('health').catch(() => ({})),
           api.get('accounts').catch(() => ({ accounts: [] })),
           api.get('providers').catch(() => ({ providers: [] })),
+          api.get('settings').catch(() => ({})),
+          api.get('runtime').catch(() => ({})),
+        ]);
+        state.data = {
+          health, accounts: accounts.accounts || [],
+          providers: providers.providers || providers || [], gateway: providers.gateway || {},
+          usage: null, ledger: null, quotas: [], stats: {}, settings,
+          keys: [], clients: [], status: { entries: [], checkedAt: 0 }, runtime,
+        };
+        state.at = Date.now();
+        state.cached = false;
+        render();
+
+        // 第二批：统计与补充信息，到了再刷新一次。
+        const [usage, ledger, quotas, stats, keys, clients, status] = await Promise.all([
           api.get('usage?days=1').catch(() => ({ accounts: [] })),
           api.get('usage/requests?period=today&limit=1').catch(() => null),
           api.get('usage/quotas').catch(() => []),
           withTimeout(api.get('sessions/stats').catch(() => ({})), 3000),
-          api.get('settings').catch(() => ({})),
           api.get('caller-keys').catch(() => ({ keys: [] })),
           api.get('clients').catch(() => ({ clients: [] })),
           api.get('channels/status').catch(() => ({ entries: [], checkedAt: 0 })),
-          api.get('runtime').catch(() => ({})),
         ]);
-        state.data = { health, accounts: accounts.accounts || [], providers: providers.providers || providers || [], gateway: providers.gateway || {}, usage, ledger, quotas: Array.isArray(quotas) ? quotas : [], stats, settings, keys: keys.keys || keys.caller_keys || [], clients: clients.clients || [], status, runtime };
+        Object.assign(state.data, {
+          usage, ledger, quotas: Array.isArray(quotas) ? quotas : [], stats,
+          keys: keys.keys || keys.caller_keys || [], clients: clients.clients || [], status,
+        });
         state.at = Date.now();
         state.cached = false;
         writeSnapshot(state.data);

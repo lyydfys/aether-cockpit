@@ -149,18 +149,18 @@ func (s *usageStore) load() {
 }
 
 // save 原子写盘。调用方持有 mu。
-func (s *usageStore) save() error {
+// saveSnapshot 把快照写盘。不持任何锁，可安全与 record() 并发。
+func (s *usageStore) saveSnapshot(snap usageSnapshot) error {
 	if dir := filepath.Dir(s.path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	s.pruneLocked()
 	f := struct {
-		Version int                              `json:"version"`
-		SavedAt int64                            `json:"saved_at"`
-		Days    map[string]map[string]*usageCell `json:"days"`
-	}{Version: 1, SavedAt: time.Now().Unix(), Days: s.days}
+		Version int                             `json:"version"`
+		SavedAt int64                           `json:"saved_at"`
+		Days    map[string]map[string]usageCell `json:"days"`
+	}{Version: 1, SavedAt: time.Now().Unix(), Days: snap.days}
 	b, err := json.MarshalIndent(f, "", " ")
 	if err != nil {
 		return err
@@ -186,11 +186,42 @@ func (s *usageStore) pruneLocked() {
 	}
 }
 
-// flush 落盘（有变化才写）。
+// flush 落盘。
+//
+// 关键：序列化与磁盘写入**不持锁**。
+//
+// 旧实现在 s.mu 里直接 json.Marshal + WriteFile，而 record() 用的是同一把锁
+// 且在每个请求结束时调用——等于每次落盘都把记账卡住几十到几百毫秒（慢盘更糟）。
+// 现在锁内只做一次快照（浅拷贝结构体指针即可，单元格是追加更新），
+// Marshal/写盘放到锁外，记账不再被 IO 阻塞。
 func (s *usageStore) flush() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	_ = s.save()
+	s.pruneLocked()
+	snap := s.snapshotLocked()
+	s.mu.Unlock()
+	_ = s.saveSnapshot(snap)
+}
+
+// usageSnapshot 是落盘用的不可变快照。
+type usageSnapshot struct {
+	days map[string]map[string]usageCell
+}
+
+// snapshotLocked 在锁内复制出一份可安全序列化的快照（调用方持锁）。
+//
+// 只做值拷贝：单元格是 small struct，按天复制一层的成本远低于持锁 IO。
+func (s *usageStore) snapshotLocked() usageSnapshot {
+	days := make(map[string]map[string]usageCell, len(s.days))
+	for d, cells := range s.days {
+		cp := make(map[string]usageCell, len(cells))
+		for k, c := range cells {
+			if c != nil {
+				cp[k] = *c
+			}
+		}
+		days[d] = cp
+	}
+	return usageSnapshot{days: days}
 }
 
 // StartAutoSave 周期落盘，返回停止函数（停止时做最后一次 flush 并等它写完）。

@@ -29,6 +29,7 @@ var reservedSettingKeys = map[string]bool{
 	// 否则会被当成 UI 偏好塞进 settings.ui，改了不起作用。
 	"first_byte_timeout_sec": true,
 	"max_attempts":           true,
+	"request_budget_sec":     true,
 	// api_key 由内核结构消费（g.GatewayKey()，见 handleUpdateSettings）。
 	// 不拦下来它会顺带落进 settings.ui，变成一份永远不生效的副本：
 	// 界面以为已设置密钥，LAN 检查读 g.GatewayKey() 仍是空 → 用户被拒开局域网。

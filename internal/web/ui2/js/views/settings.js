@@ -382,9 +382,16 @@ export default {
         [3, 5, 8, 10, 15].map((n) => ({ value: n, label: String(n) + ' 次' })),
         ma || 5,
         (val) => save({ max_attempts: Number(val) }, '重试次数'));
+      const rb = Number(s.request_budget_sec || 0);
+      const budgetCtl = select(
+        [[0, '默认（120 秒）'], [60, '60 秒'], [120, '120 秒'], [180, '180 秒'], [300, '300 秒']]
+          .map(([value, label]) => ({ value, label })),
+        rb || 0,
+        (val) => save({ request_budget_sec: Number(val) }, '请求总预算'));
       return section('请求失败自动换号', [
         line('首字节超时', '上游多久没吐第一个字就换账号；调小能更快失败转移，但慢模型容易被误判', fbCtl),
         line('最多尝试账号数', '单个请求最多试几个账号；账号越多、单号额度越小，可以调大', maCtl),
+        line('请求总预算', '为了拿到首字节最多等多久（跨所有重试）；超预算立刻返回，不再换号空等', budgetCtl),
         h('div', { class: 'meta', style: 'line-height:1.6;padding:2px 0 6px' },
           '额度耗尽、限流、登录失效、上游 5xx 都会自动换下一个账号；'
           + '只有请求本身非法（400 参数错误、模型不存在）才直接报错。'),
