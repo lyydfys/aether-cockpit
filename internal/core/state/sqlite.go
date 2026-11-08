@@ -102,7 +102,13 @@ func (s *Store) persistResponse(rec *ResponseRecord) {
 	if s.db == nil || rec == nil {
 		return
 	}
-	items, err := json.Marshal(rec.AccumulatedItems)
+	// 只落本轮增量：有前驱时把完整历史再次写一遍会让存储量按轮数平方增长。
+	// deltaItems 为空 = 没有前驱，此时 AccumulatedItems 本身就是增量。
+	toStore := rec.deltaItems
+	if toStore == nil {
+		toStore = rec.AccumulatedItems
+	}
+	items, err := json.Marshal(toStore)
 	if err != nil {
 		return
 	}
@@ -214,6 +220,9 @@ func (s *Store) restoreFromSQLite() error {
 		}
 		if len(items) > 0 {
 			_ = json.Unmarshal(items, &rec.AccumulatedItems)
+			// 标记为"待拼装"：如果这条有 PreviousID，说明库里存的是增量，
+			// 需要在所有行读完后按链补齐完整历史。
+			rec.deltaItems = rec.AccumulatedItems
 		}
 		if len(output) > 0 {
 			_ = json.Unmarshal(output, &rec.Output)
@@ -224,6 +233,9 @@ func (s *Store) restoreFromSQLite() error {
 		el := s.lru.PushFront(&recordEntry{key: rec.ResponseID, rec: &rec})
 		s.records[rec.ResponseID] = el
 	}
+	// 所有行读完后再按 PreviousID 链拼装完整历史。
+	// 必须在锁内做：拼装会读取其它记录的 AccumulatedItems。
+	assembleChainsLocked(s.records)
 	s.mu.Unlock()
 
 	// --- 签名 ---
@@ -281,6 +293,9 @@ func (s *Store) pruneSQLite() {
 
 // Close 关闭数据库连接。
 func (s *Store) Close() error {
+	// 先排空后台落盘队列，再关连接：否则最后几条快照会写到已关闭的 db 上。
+	s.drainWriter()
+
 	s.mu.Lock()
 	db := s.db
 	s.db = nil

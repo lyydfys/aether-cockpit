@@ -535,12 +535,16 @@ export function createShell({ navigate }) {
   /* 窄屏点击导航后关闭抽屉；窗口变宽时清掉状态，避免遮罩残留 */
   addEventListener('resize', () => { if (innerWidth > 900 && navIsOpen()) closeNav(); });
 
+  // 元数据只是用来点缀导航/工具条（账号数、版本号、就绪状态）。
+  //
+  // 旧实现在 loadMeta() 完成后无条件再 mountView 一次，等于首屏页面被
+  // 加载两遍：两轮 API 请求 + 两次整页 DOM 重建，用户看到的是"页面闪一下"。
+  // 现在只重画外壳（导航、标题、工具条计数），不重挂视图本体。
   loadMeta().then(() => {
     paintNav();
     if (currentView) {
       paintHead(currentView);
       syncChrome();
-      mountView(currentId, currentView, false);
     }
   });
   addEventListener('aether:refresh', () => refreshAll());

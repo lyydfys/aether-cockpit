@@ -15,7 +15,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"aether-cockpit/internal/core/ir"
@@ -30,7 +32,14 @@ type ResponseRecord struct {
 	UpstreamSessionID string `json:"upstream_session_id,omitempty"`
 	Model             string `json:"model"`
 	// AccumulatedItems 是截止本轮结束的全量上下文，用于跨账号故障转移。
+	//
+	// 注意：这个字段在内存里始终是**完整历史**（调用方依赖它直接回填）。
+	// 但落盘时只写本轮增量（见 deltaItems），加载后再按 PreviousID 链拼装，
+	// 避免同一段对话在每一轮都被完整复制一遍（O(n²) 存储）。
 	AccumulatedItems []ir.UnifiedItem `json:"accumulated_items"`
+	// deltaItems 是"本轮新增"的条目，仅用于落盘。
+	// 为空表示这条记录没有前驱，AccumulatedItems 本身就是增量。
+	deltaItems []ir.UnifiedItem
 	// Output 是这次响应返回给客户端的 output 项（Responses 协议），
 	// 供 GET /v1/responses/{id} 回放；Fast-Path 直通时直接取自上游 JSON。
 	Output    []any `json:"output,omitempty"`
@@ -77,6 +86,16 @@ type Store struct {
 	db *sql.DB
 	// persistMu 单独保护数据库写入，与内存锁分离，避免磁盘 IO 阻塞读请求。
 	persistMu sync.Mutex
+
+	// writeCh 是"写后置"队列：落盘由后台 goroutine 串行消费。
+	//
+	// 为什么不直接同步写：persistResponse 虽在内存锁之外，但仍然发生在
+	// 请求的收尾路径上——慢盘（机械盘/杀软实时扫描）会把每个请求的尾延迟
+	// 拉高几十毫秒。队列满时回退为同步写，保证任何情况下都不丢数据。
+	writeCh chan *ResponseRecord
+	writeWg sync.WaitGroup
+	// closed 标记队列已关闭，后续写入退化为同步。
+	closed atomicBool
 }
 
 type sigEntry struct {
@@ -132,6 +151,8 @@ func New(opts Options) *Store {
 	}
 
 	s.load()
+	// 有 SQLite 时启动后台落盘；没有就什么都不做（纯内存模式）。
+	s.startWriter()
 	return s
 }
 
@@ -144,6 +165,14 @@ func fallbackName(snapshot string) string {
 
 // PutResponse 写入或更新一条响应快照。
 func (s *Store) PutResponse(rec *ResponseRecord) {
+	// 先算好"本轮增量"：落盘只写它，避免每轮重复存整段历史。
+	// 必须在拿 s.mu 之前调用（deltaOf 内部会加锁）。
+	if rec != nil && rec.deltaItems == nil {
+		rec.deltaItems = s.deltaOf(rec)
+		if rec.deltaItems == nil && rec.PreviousID == "" {
+			// 无前驱：整条就是增量，标记为"已确定全量"由落盘侧处理。
+		}
+	}
 	if rec == nil || rec.ResponseID == "" {
 		return
 	}
@@ -160,7 +189,7 @@ func (s *Store) PutResponse(rec *ResponseRecord) {
 		s.lru.MoveToFront(el)
 		s.dirty = true
 		s.mu.Unlock()
-		s.persistResponse(rec)
+		s.enqueuePersist(rec)
 		return
 	}
 
@@ -171,7 +200,7 @@ func (s *Store) PutResponse(rec *ResponseRecord) {
 	s.mu.Unlock()
 
 	// 落盘放在锁外：磁盘 IO 不应阻塞其他请求的读取。
-	s.persistResponse(rec)
+	s.enqueuePersist(rec)
 }
 
 // GetResponse 读取一条响应快照。
@@ -438,4 +467,181 @@ func (s *Store) StartAutoSave(interval time.Duration) func() {
 		once.Do(func() { close(stop) })
 		<-done
 	}
+}
+
+// atomicBool 是极简的原子布尔（只用于"队列是否已关闭"这一处）。
+type atomicBool struct {
+	v int32
+}
+
+func (b *atomicBool) Store(x bool) {
+	var n int32
+	if x {
+		n = 1
+	}
+	atomic.StoreInt32(&b.v, n)
+}
+
+func (b *atomicBool) Load() bool { return atomic.LoadInt32(&b.v) == 1 }
+
+// enqueuePersist 把落盘任务交给后台 goroutine，调用方立即返回。
+//
+// 队列满（后台写不过来，通常是慢盘）时回退为同步写：
+// 宁可这一个请求慢一点，也不能丢快照——丢了就等于把用户的会话上下文弄断。
+func (s *Store) enqueuePersist(rec *ResponseRecord) {
+	if s.db == nil {
+		return
+	}
+	if s.closed.Load() || s.writeCh == nil {
+		s.persistResponse(rec)
+		return
+	}
+	select {
+	case s.writeCh <- rec:
+	default:
+		s.persistResponse(rec)
+	}
+}
+
+// startWriter 启动后台落盘 goroutine（有 SQLite 时才启动）。
+func (s *Store) startWriter() {
+	if s.db == nil {
+		return
+	}
+	s.writeCh = make(chan *ResponseRecord, 256)
+	s.writeWg.Add(1)
+	go func() {
+		defer s.writeWg.Done()
+		for rec := range s.writeCh {
+			s.persistResponse(rec)
+		}
+	}()
+}
+
+// drainWriter 停止后台写入并等积压写完（关停/测试收尾用）。
+func (s *Store) drainWriter() {
+	if s.writeCh == nil {
+		return
+	}
+	s.closed.Store(true)
+	close(s.writeCh)
+	s.writeCh = nil
+	s.writeWg.Wait()
+}
+
+// assembleChainsLocked 把"增量"记录按 PreviousID 链还原成完整历史。
+//
+// 落盘只存增量（避免 O(n²) 存储），但调用方（回填 previous_response_id、
+// GET /v1/responses、input_items）都需要完整历史。这里在加载完成后统一拼装：
+// 先按链深度排序，深度小的先拼，保证每条只拼一次。
+func assembleChainsLocked(records map[string]*list.Element) {
+	// 收集待拼装的记录（deltaItems 非空且 delta != 完整历史时无法判断，
+	// 统一按"有 PreviousID 就拼"处理；没有前驱的记录 delta 就是全量）。
+	type item struct {
+		rec *ResponseRecord
+	}
+	all := make([]*ResponseRecord, 0, len(records))
+	for _, el := range records {
+		all = append(all, el.Value.(*recordEntry).rec)
+	}
+
+	// 计算每条记录的链深度（沿 PreviousID 向上数，最多 maxChainDepth 层防环）。
+	const maxChainDepth = 500
+	depth := make(map[string]int, len(all))
+	var depthOf func(id string, seen map[string]bool) int
+	depthOf = func(id string, seen map[string]bool) int {
+		if d, ok := depth[id]; ok {
+			return d
+		}
+		if seen[id] || len(seen) > maxChainDepth {
+			return 0
+		}
+		seen[id] = true
+		el, ok := records[id]
+		if !ok {
+			return 0
+		}
+		prev := el.Value.(*recordEntry).rec.PreviousID
+		if prev == "" {
+			depth[id] = 0
+			return 0
+		}
+		d := depthOf(prev, seen) + 1
+		depth[id] = d
+		return d
+	}
+	for _, r := range all {
+		depthOf(r.ResponseID, map[string]bool{})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return depth[all[i].ResponseID] < depth[all[j].ResponseID]
+	})
+
+	resolved := make(map[string]bool, len(all))
+	for _, r := range all {
+		if r.deltaItems == nil {
+			resolved[r.ResponseID] = true
+			continue
+		}
+		if r.PreviousID == "" {
+			// 没有前驱：库里的就是全量。
+			resolved[r.ResponseID] = true
+			continue
+		}
+		// 有前驱：完整历史 = 前驱完整历史 + 本轮增量。
+		prevEl, ok := records[r.PreviousID]
+		if !ok {
+			// 前驱已被淘汰：保留增量，至少不会比"什么都没有"更差。
+			resolved[r.ResponseID] = true
+			continue
+		}
+		prev := prevEl.Value.(*recordEntry).rec
+		if !resolved[prev.ResponseID] {
+			// 前驱还没拼装（链上有断点或成环）：跳过，保持增量。
+			resolved[r.ResponseID] = true
+			continue
+		}
+		merged := make([]ir.UnifiedItem, 0, len(prev.AccumulatedItems)+len(r.deltaItems))
+		merged = append(merged, prev.AccumulatedItems...)
+		merged = append(merged, r.deltaItems...)
+		r.AccumulatedItems = merged
+		resolved[r.ResponseID] = true
+	}
+}
+
+// deltaOf 计算"本轮新增"：完整历史减去前驱历史的前缀。
+//
+// 若完整历史不是以前驱历史为前缀（例如客户端改写了历史），返回 nil，
+// 此时落盘退回写全量——正确性优先于存储优化。
+func (s *Store) deltaOf(rec *ResponseRecord) []ir.UnifiedItem {
+	if rec.PreviousID == "" || len(rec.AccumulatedItems) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	prevEl, ok := s.records[rec.PreviousID]
+	var prevLen int
+	var prevItems []ir.UnifiedItem
+	if ok {
+		prev := prevEl.Value.(*recordEntry).rec
+		prevLen = len(prev.AccumulatedItems)
+		prevItems = prev.AccumulatedItems
+	}
+	s.mu.Unlock()
+	if !ok || prevLen == 0 || len(rec.AccumulatedItems) < prevLen {
+		return nil
+	}
+	// 前缀必须完全一致才敢只存增量。
+	for i := 0; i < prevLen; i++ {
+		if !sameItem(prevItems[i], rec.AccumulatedItems[i]) {
+			return nil
+		}
+	}
+	return rec.AccumulatedItems[prevLen:]
+}
+
+// sameItem 比较两个 item 是否等价（只比影响回填语义的字段）。
+func sameItem(a, b ir.UnifiedItem) bool {
+	return a.Type == b.Type && a.Role == b.Role && a.ID == b.ID &&
+		a.Text == b.Text && a.CallID == b.CallID &&
+		a.Name == b.Name && a.Arguments == b.Arguments && a.Output == b.Output
 }

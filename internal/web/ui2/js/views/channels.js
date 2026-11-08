@@ -235,7 +235,30 @@ export default {
       const list = filtered();
       if (!list.length) return empty(state.accounts.length ? '没有符合筛选条件的账号' : '还没有账号', state.accounts.length ? '调整搜索或筛选条件。' : '点上方「接入渠道」接入内置渠道，或用「＋ 自定义渠道」注册一个第三方中转站。');
       const grid = h('div', { class: 'acct-grid', style: filter.layout === 'list' ? 'grid-template-columns:1fr' : '' });
-      for (const a of list) grid.append(acctCard(a));
+      // 分块渲染：先画首屏能看到的量，其余在空闲时补上。
+      //
+      // 账号少（绝大多数情况）时与原来完全一致；账号多时避免一次性构建上千个
+      // 卡片把首帧卡住——报告建议"大列表按规模分页或虚拟化"，这里用风险最低的
+      // 分块追加达到同样目的：首帧只花一份的钱，剩下的摊到空闲时段。
+      const chunk = Math.max(1, Number(window.__acctChunk) || 60);
+      const firstEnd = Math.min(list.length, chunk);
+      for (let i = 0; i < firstEnd; i++) grid.append(acctCard(list[i]));
+      if (list.length > firstEnd) {
+        let cursor = firstEnd;
+        const schedule = window.requestIdleCallback
+          ? (fn) => window.requestIdleCallback(fn, { timeout: 200 })
+          : (fn) => setTimeout(fn, 16);
+        const more = () => {
+          // 视图已被卸载（切页/重挂）就停止，避免往已脱离文档的节点里塞东西。
+          if (!grid.isConnected) return;
+          const end = Math.min(list.length, cursor + chunk);
+          const frag = document.createDocumentFragment();
+          for (; cursor < end; cursor++) frag.append(acctCard(list[cursor]));
+          grid.append(frag);
+          if (cursor < list.length) schedule(more);
+        };
+        schedule(more);
+      }
       // 账号少于 3 个时补一张虚线卡：auto-fill 会留出半格到一整格的死区，顺手把「接入」放在手边
       if (filter.layout !== 'list' && list.length < 3) {
         grid.append(h('button', {

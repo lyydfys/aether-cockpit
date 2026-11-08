@@ -123,7 +123,11 @@ export default {
         state.view = data || {};
         state.rows = (data?.rows || []).map(fromLedger);
         state.pricing = { currency: pricing.currency || 'USD', usd_cny: Number(pricing.usd_cny) || 7.2 };
-        render();
+        // 自动轮询（silent）只刷新列表，不重建页面：
+        // 重建会把搜索框整个换掉，用户正在输入的词、焦点和滚动位置全丢
+        // （报告指出的"日志自动刷新重建搜索控件"）。
+        if (silent) paintList();
+        else render();
       } catch (e) {
         clear(host);
         host.append(errorBox('日志读取失败：' + (e.message || e), load));
