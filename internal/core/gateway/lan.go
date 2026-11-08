@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -121,6 +122,13 @@ func (g *Gateway) SetLAN(on bool) error {
 	defer g.lan.mu.Unlock()
 	if g.lan.on == on {
 		return nil
+	}
+	// 没有可用凭证时不开局域网：这样的端口上每个远程请求都会 401，
+	// 用户看到的是"开了但什么都连不上"，很难联想到密钥。
+	// 校验放在 SetLAN（而不是只放在某个 handler 里），才能保证
+	// /api/settings、/api/settings/lan、RestoreLAN 三条入口口径一致。
+	if on && g.GatewayKey() == "" && (g.callerKeys == nil || !g.callerKeys.hasEnabled()) {
+		return errLANNoCredential
 	}
 	if !on {
 		if g.lan.srv != nil {
@@ -287,3 +295,7 @@ func maskGatewayKey(key string) string {
 	}
 	return k[:3] + strings.Repeat("…", 3) + k[len(k)-4:]
 }
+
+// errLANNoCredential 表示"还没有任何可用于远程鉴权的凭证"。
+// 用哨兵值让上层能识别出这是可引导用户解决的问题，而不是端口错误。
+var errLANNoCredential = errors.New("先在网关页创建一个调用方密钥（或设置网关密钥），否则远程请求会全部被拒绝")

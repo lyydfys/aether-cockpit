@@ -212,8 +212,13 @@ export default {
     function network(s) {
       return [
         section('监听', [
-          line('局域网访问', '其它电脑可访问这个网关（仍需密钥或调用方密钥）', toggle(!!s.lan, (on) => save({ lan: on }, '局域网访问'))),
+          // 局域网开关：走 /api/settings/lan（会真正重新绑定 0.0.0.0:主端口+1）。
+          // 开之前必须有密钥，否则远程请求会被全拒——这里先做一次前置校验，
+          // 用可读的提示把用户引到下面的「网关密钥」行，而不是甩一个 400。
+          line('局域网访问', lanHint(s), toggle(!!s.lan, (on) => setLan(on))),
           line('监听地址', '只读；端口在启动参数里设置', h('span', { class: 'mono meta' }, s.addr || '—')),
+          line('局域网地址', '开启后其它设备填这里；端口是主端口+1', lanAddrControl(s)),
+          line('网关密钥', '调用 /v1 与远程管理时携带；留空 = 仅本机免鉴权', gatewayKeyControl(s)),
           line('数据目录', '账号、设置与账本都在这里', h('span', { class: 'mono meta' }, s.dir || '—')),
         ]),
         section('网络', [
@@ -225,6 +230,87 @@ export default {
         workbuddyIdentitySection(),
         failoverSection(s),
       ];
+    }
+
+    // lanHint 给局域网开关一行可读的状态说明。
+    //
+    // 用户最常见的问题是"开了但连不上/打不开"，原因基本都是没设密钥；
+    // 把这句话放在开关旁边，比事后弹一个 400 有用。
+    function lanHint(s) {
+      if (!s.api_key_set) return '其它电脑可访问；开启前需要先在下面设置「网关密钥」，否则远程请求会被全部拒绝';
+      return '其它电脑可访问这个网关（携带网关密钥或调用方密钥）';
+    }
+
+    // lanAddrControl 显示局域网地址。
+    //
+    // 有多个网卡时全列出来会把这一行撑爆（描述文字被挤成竖排）。这里只显示
+    // 第一个可用地址 + 一个"共 N 个"的悬停提示，配一个复制按钮。
+    function lanAddrControl(s) {
+      const urls = s.lanURLs || [];
+      if (!s.lan) return h('span', { class: 'mono meta' }, '未开启');
+      if (!urls.length) {
+        return h('span', { class: 'meta' }, '已开启，但没拿到网卡地址（检查网络或防火墙）');
+      }
+      const first = urls[0];
+      const more = urls.length > 1 ? ' 等 ' + urls.length + ' 个地址' : '';
+      return h('div', { class: 'inline', style: 'gap:8px;justify-content:flex-end;flex-wrap:wrap' },
+        h('span', { class: 'mono', style: 'font-size:12px', title: urls.join('\n') }, first + more),
+        iconBtn('copy', '复制局域网地址', () => copyText(first)));
+    }
+
+    // gatewayKeyControl 设置/清除网关密钥。
+    //
+    // 后端只回显打码值（sk-………1234），所以这里永远是空输入框 + 状态提示：
+    // 把打码值塞回输入框会导致用户一点保存就把真密钥覆盖成省略号。
+    function gatewayKeyControl(s) {
+      const inp = input({ type: 'password', placeholder: s.api_key_set ? '已设置（' + (s.api_key || '') + '）；留空不改' : 'sk-aether-…（留空 = 免鉴权）' });
+      const clear = btn('清除', { ghost: true, onClick: async () => {
+        const ok = await confirmDialog('清除网关密钥？',
+          '远程与局域网请求将全部被拒绝，直到重新设置密钥。本机访问不受影响。',
+          { danger: true, confirmText: '清除' });
+        if (!ok) return;
+        try {
+          await api.post('settings', { api_key: '' });
+          toast('网关密钥已清除');
+          await refreshSelf();
+        } catch (e) { toast('清除失败：' + (e.message || e)); }
+      } });
+      return h('div', { class: 'inline' }, inp,
+        btn('保存', { primary: true, onClick: async () => {
+          const v = inp.value.trim();
+          if (!v) { toast('请输入密钥，或用「清除」按钮关闭鉴权'); return; }
+          try {
+            await api.post('settings', { api_key: v });
+            inp.value = '';
+            toast('网关密钥已更新');
+            await refreshSelf();
+          } catch (e) { toast('保存失败：' + (e.message || e)); }
+        } }),
+        clear);
+    }
+
+    // setLan 开/关联网监听，并把"没密钥"这种可预期失败翻译成可行动的提示。
+    async function setLan(on) {
+      try {
+        await api.post('settings/lan', { on });
+        toast(on ? '局域网已开启' : '局域网已关闭');
+        await refreshSelf();
+      } catch (e) {
+        const msg = String(e.message || e);
+        if (/密钥|api key|caller key/i.test(msg)) {
+          toast('开启局域网前需要先设置「网关密钥」');
+        } else {
+          toast('切换局域网失败：' + msg);
+        }
+      }
+    }
+
+    // refreshSelf 重新拉一次设置并重绘（密钥状态、lanURLs 都变了）。
+    async function refreshSelf() {
+      try {
+        state.s = await api.get('settings');
+        render();
+      } catch {}
     }
 
     // failoverSection 暴露"一个账号挂了会不会自动换号"的两个关键旋钮。

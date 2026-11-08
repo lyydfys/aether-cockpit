@@ -599,6 +599,9 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		// APIKey 是网关鉴权密钥。过去这个字段没有对应分支，前端提交的密钥
 		// 只会落进 settings.ui（永不生效的副本），于是"填了密钥仍然被拒"。
 		APIKey *string `json:"api_key"`
+		// LAN 是局域网开关。它同样被 reservedSettingKeys 拦住（不进 settings.ui），
+		// 又一直没有对应分支 → 设置页那个开关点了等于没点。
+		LAN *bool `json:"lan"`
 		// Proxy 在运行中切换全局代理（http/https/socks5），空串关闭。
 		Proxy *string `json:"proxy"`
 		// Port 让设置页整份保存 prefs 时也能切换端口（幂等）。
@@ -688,6 +691,15 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		key := strings.TrimSpace(*body.APIKey)
 		g.SetGatewayKey(key)
 		g.settings.APIKey = key
+	}
+	if body.LAN != nil {
+		// 走 SetLAN 真正改监听；被拒（没密钥）时原样返回错误，让前端能提示。
+		if err := g.SetLAN(*body.LAN); err != nil {
+			g.settingsMu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		g.settings.LAN = *body.LAN
 	}
 	if body.ModelPrices != nil {
 		g.settings.ModelPrices = *body.ModelPrices
