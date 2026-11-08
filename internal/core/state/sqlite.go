@@ -84,7 +84,15 @@ func openSQLite(path string) (*sql.DB, error) {
 		!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 		log.Printf("[WARN] responses.output 迁移失败: %v", err)
 	}
+	// stored_full：标记"这条落盘时写的是完整历史"（而非增量）。
+	// 没有它，加载时无法区分增量与全量，会把前驱历史重复拼一次。
+	if _, err := db.Exec(`ALTER TABLE responses ADD COLUMN stored_full INTEGER DEFAULT 0`); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		log.Printf("[WARN] responses.stored_full 迁移失败: %v", err)
+	}
+
 	return db, nil
+
 }
 
 // attachSQLite 挂载数据库并恢复历史数据。
@@ -123,8 +131,8 @@ func (s *Store) persistResponse(rec *ResponseRecord) {
 	defer s.persistMu.Unlock()
 
 	_, err = s.db.Exec(`
-		INSERT INTO responses (id, previous_id, provider_id, account_id, upstream_session, model, items, output, created_at, expires_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)
+		INSERT INTO responses (id, previous_id, provider_id, account_id, upstream_session, model, items, output, created_at, expires_at, stored_full)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			previous_id=excluded.previous_id,
 			provider_id=excluded.provider_id,
@@ -136,7 +144,8 @@ func (s *Store) persistResponse(rec *ResponseRecord) {
 			created_at=excluded.created_at,
 			expires_at=excluded.expires_at`,
 		rec.ResponseID, rec.PreviousID, rec.ProviderID, rec.AccountID,
-		rec.UpstreamSessionID, rec.Model, items, output, rec.CreatedAt, rec.ExpiresAt)
+		rec.UpstreamSessionID, rec.Model, items, output, rec.CreatedAt, rec.ExpiresAt,
+		boolToInt(rec.storedFull))
 	if err != nil {
 		log.Printf("[WARN] 快照落盘失败 %s: %v", rec.ResponseID, err)
 	}
@@ -197,7 +206,7 @@ func (s *Store) restoreFromSQLite() error {
 
 	// --- 快照 ---
 	rows, err := s.db.Query(`
-		SELECT id, previous_id, provider_id, account_id, upstream_session, model, items, output, created_at, expires_at
+		SELECT id, previous_id, provider_id, account_id, upstream_session, model, items, output, created_at, expires_at, COALESCE(stored_full, 0)
 		FROM responses
 		WHERE expires_at = 0 OR expires_at > ?
 		ORDER BY created_at ASC
@@ -210,14 +219,17 @@ func (s *Store) restoreFromSQLite() error {
 	s.mu.Lock()
 	for rows.Next() {
 		var (
-			rec    ResponseRecord
-			items  []byte
-			output []byte
+			rec      ResponseRecord
+			items    []byte
+			output   []byte
+			storedFl int
 		)
 		if err := rows.Scan(&rec.ResponseID, &rec.PreviousID, &rec.ProviderID, &rec.AccountID,
-			&rec.UpstreamSessionID, &rec.Model, &items, &output, &rec.CreatedAt, &rec.ExpiresAt); err != nil {
+			&rec.UpstreamSessionID, &rec.Model, &items, &output, &rec.CreatedAt, &rec.ExpiresAt,
+			&storedFl); err != nil {
 			continue
 		}
+		rec.storedFull = storedFl != 0
 		if len(items) > 0 {
 			_ = json.Unmarshal(items, &rec.AccumulatedItems)
 			// 标记为"待拼装"：如果这条有 PreviousID，说明库里存的是增量，

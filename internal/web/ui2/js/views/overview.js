@@ -29,12 +29,25 @@ function writeSnapshot(data) {
 }
 const isTest = (id) => /^mock/.test(id) || id === 'openai-compat';
 
+// liveState 指向当前挂载实例的 state，供 unmount 清理定时器用。
+let liveState = null;
+
 export default {
   title: '概览',
   subtitle: '今天哪些渠道能用、还剩多少、什么时候恢复',
 
+  // 切页时停掉未触发的额度重试定时器：
+  // 否则页面已经离开，2.5s/6s 后的重试仍会打 usage/quotas。
+  unmount() {
+    if (!liveState) return;
+    for (const t of liveState.timers) clearTimeout(t);
+    liveState.timers.length = 0;
+    liveState = null;
+  },
+
   mount(host, ctx) {
     const state = { data: null, timers: [], at: 0, cached: false };
+    liveState = state;
     // 单个接口不应把首屏拖住（会话扫描在冷启动/多 WSL 环境下可能很慢）。
     const withTimeout = (p, ms) => Promise.race([p, new Promise((res) => setTimeout(() => res({}), ms))]);
 

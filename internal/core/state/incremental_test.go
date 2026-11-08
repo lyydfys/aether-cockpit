@@ -1,6 +1,8 @@
 package state
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -145,4 +147,96 @@ func osStat(path string) (int64, error) {
 		return 0, err
 	}
 	return fi.Size(), nil
+}
+
+// 前缀不匹配时会退回写全量；加载时不能再拼一次前驱历史（否则历史翻倍）。
+func TestFullPersistFallbackDoesNotDuplicate(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	s := New(Options{SQLitePath: dbPath, MaxRecords: 1000, TTL: time.Hour})
+
+	// 第 1 轮：A、B 两条。
+	s.PutResponse(&ResponseRecord{
+		ResponseID: "p1", Model: "m",
+		AccumulatedItems: []ir.UnifiedItem{
+			{Type: ir.ItemTypeMessage, Role: "user", Text: "A"},
+			{Type: ir.ItemTypeMessage, Role: "assistant", Text: "B"},
+		},
+	})
+	// 第 2 轮：客户端改写了历史（不是 p1 的超集）→ deltaOf 返回 nil → 落全量。
+	rewritten := []ir.UnifiedItem{
+		{Type: ir.ItemTypeMessage, Role: "user", Text: "X"}, // 与 A 不同
+		{Type: ir.ItemTypeMessage, Role: "assistant", Text: "Y"},
+		{Type: ir.ItemTypeMessage, Role: "user", Text: "Z"},
+	}
+	s.PutResponse(&ResponseRecord{
+		ResponseID: "p2", PreviousID: "p1", Model: "m",
+		AccumulatedItems: append([]ir.UnifiedItem(nil), rewritten...),
+	})
+	_ = s.Close()
+
+	s2 := New(Options{SQLitePath: dbPath, MaxRecords: 1000, TTL: time.Hour})
+	defer s2.Close()
+	rec, ok := s2.GetResponse("p2")
+	if !ok {
+		t.Fatal("p2 丢失")
+	}
+	// 必须仍然是 3 条，不能变成 2+3=5 条。
+	if len(rec.AccumulatedItems) != 3 {
+		t.Fatalf("历史被重复拼装：长度 = %d，want 3（%+v）",
+			len(rec.AccumulatedItems), rec.AccumulatedItems)
+	}
+	if rec.AccumulatedItems[0].Text != "X" {
+		t.Fatalf("首项 = %q，want X", rec.AccumulatedItems[0].Text)
+	}
+}
+
+// 旧库升级：responses 表没有 stored_full 列时，必须能自动补列并正常读取。
+func TestOldSchemaMigrationAddsStoredFull(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "old.db")
+
+	// 手工建一个"旧版"库：只有老列，没有 stored_full。
+	// 这里不能用 openSQLite（它会顺手建最新表结构并补列）。
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	_, err = db.Exec(`CREATE TABLE responses (
+		id TEXT PRIMARY KEY, previous_id TEXT, provider_id TEXT, account_id TEXT,
+		upstream_session TEXT, model TEXT, items BLOB, output BLOB,
+		created_at INTEGER, expires_at INTEGER)`)
+	if err != nil {
+		t.Fatalf("create old table: %v", err)
+	}
+	items := mustJSONStr(t, []ir.UnifiedItem{{Type: ir.ItemTypeMessage, Role: "user", Text: "老数据"}})
+	_, err = db.Exec(`INSERT INTO responses (id, previous_id, provider_id, account_id, upstream_session, model, items, output, created_at, expires_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"old-1", "", "p", "a", "", "m", items, nil, 1, 0)
+	if err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+	_ = db.Close()
+
+	// 用当前代码打开：应自动补列，且旧数据可读。
+	s := New(Options{SQLitePath: dbPath, MaxRecords: 100, TTL: time.Hour})
+	defer s.Close()
+	rec, ok := s.GetResponse("old-1")
+	if !ok {
+		t.Fatal("旧数据读不出来（迁移破坏了兼容性）")
+	}
+	if len(rec.AccumulatedItems) != 1 || rec.AccumulatedItems[0].Text != "老数据" {
+		t.Fatalf("旧数据内容不对: %+v", rec.AccumulatedItems)
+	}
+	// 旧记录没有前驱，不需要拼装，长度必须仍是 1。
+	if rec.storedFull {
+		t.Fatal("旧记录不该被标记为 storedFull")
+	}
+}
+
+func mustJSONStr(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return b
 }

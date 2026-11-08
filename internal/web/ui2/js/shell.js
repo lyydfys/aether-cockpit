@@ -426,6 +426,10 @@ export function createShell({ navigate }) {
     if (!view) return;
     const routeChanged = id !== currentId;
     const leavingHUD = currentId === 'hud' && id !== 'hud';
+    // 先让上一个视图清理（停定时器/轮询），再切到新视图。
+    if (currentView && currentView !== view && typeof currentView.unmount === 'function') {
+      try { currentView.unmount(); } catch (e) { console.warn('[unmount] 清理失败', e); }
+    }
     currentId = id;
     currentView = view;
     app.classList.toggle('hud-mode', id === 'hud');

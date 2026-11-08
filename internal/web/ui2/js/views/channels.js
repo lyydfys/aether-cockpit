@@ -25,12 +25,25 @@ const POOL = { 'Claude and GPT models': 'Claude', 'Gemini Models': 'Gemini' };
 // 但它的模型又以 openai-compat/xxx 对外暴露 —— 前缀不可读且来源不明。
 const isTest = (id) => /^mock/.test(id);
 
+// liveState 供 unmount 清理定时器。
+let liveState = null;
+
 export default {
   title: '账号与额度',
   subtitle: '账号、模型与余量，一眼看到底',
 
+  // 切页时停掉"额度延迟补拉"等未触发的定时器，
+  // 避免页面离开后还在打接口。
+  unmount() {
+    if (!liveState) return;
+    for (const t of liveState.timers) clearTimeout(t);
+    liveState.timers.length = 0;
+    liveState = null;
+  },
+
   mount(host, ctx) {
     const state = { accounts: [], providers: [], usage: {}, settings: {}, presets: null, picked: new Set(), timers: [] };
+    liveState = state;
     host.append(skeleton(8));
 
     // 搜索/筛选走局部重绘：数据已经在 state 里，render() 不发请求。

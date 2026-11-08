@@ -40,6 +40,12 @@ type ResponseRecord struct {
 	// deltaItems 是"本轮新增"的条目，仅用于落盘。
 	// 为空表示这条记录没有前驱，AccumulatedItems 本身就是增量。
 	deltaItems []ir.UnifiedItem
+	// storedFull 表示"这一条落盘时写的是完整历史"（而非增量）。
+	//
+	// deltaOf 在前缀不匹配时返回 nil，落盘退回写全量；加载时必须知道
+	// 这件事，否则会再拼一次前驱历史，让上下文翻倍。用显式标记比
+	// "猜前缀"可靠。
+	storedFull bool
 	// Output 是这次响应返回给客户端的 output 项（Responses 协议），
 	// 供 GET /v1/responses/{id} 回放；Fast-Path 直通时直接取自上游 JSON。
 	Output    []any `json:"output,omitempty"`
@@ -167,10 +173,12 @@ func fallbackName(snapshot string) string {
 func (s *Store) PutResponse(rec *ResponseRecord) {
 	// 先算好"本轮增量"：落盘只写它，避免每轮重复存整段历史。
 	// 必须在拿 s.mu 之前调用（deltaOf 内部会加锁）。
-	if rec != nil && rec.deltaItems == nil {
+	if rec != nil && rec.deltaItems == nil && !rec.storedFull {
 		rec.deltaItems = s.deltaOf(rec)
-		if rec.deltaItems == nil && rec.PreviousID == "" {
-			// 无前驱：整条就是增量，标记为"已确定全量"由落盘侧处理。
+		if rec.deltaItems == nil {
+			// 算不出增量（无前驱 / 前缀不匹配 / 前驱已淘汰）：
+			// 落盘写全量，并标记出来供加载时判断。
+			rec.storedFull = true
 		}
 	}
 	if rec == nil || rec.ResponseID == "" {
@@ -588,16 +596,25 @@ func assembleChainsLocked(records map[string]*list.Element) {
 			resolved[r.ResponseID] = true
 			continue
 		}
-		// 有前驱：完整历史 = 前驱完整历史 + 本轮增量。
+		// 有前驱：先判断库里存的到底是"增量"还是"全量"。
+		//
+		// deltaOf 在前缀不匹配时会返回 nil，落盘因此退回写全量。
+		// 这类记录加载后不能再去拼前驱，否则历史会被重复一遍。
+		// 判据：已是前驱历史的前缀 → 库里存的是全量，跳过。
 		prevEl, ok := records[r.PreviousID]
 		if !ok {
-			// 前驱已被淘汰：保留增量，至少不会比"什么都没有"更差。
+			// 前驱已被淘汰：保留原样，至少不会比"什么都没有"更差。
 			resolved[r.ResponseID] = true
 			continue
 		}
 		prev := prevEl.Value.(*recordEntry).rec
 		if !resolved[prev.ResponseID] {
-			// 前驱还没拼装（链上有断点或成环）：跳过，保持增量。
+			// 前驱还没拼装（链上有断点或成环）：跳过，保持原样。
+			resolved[r.ResponseID] = true
+			continue
+		}
+		if r.storedFull || hasItemPrefix(r.deltaItems, prev.AccumulatedItems) {
+			// 库里已经是完整历史（回退写全量的情况），不要再拼一次。
 			resolved[r.ResponseID] = true
 			continue
 		}
@@ -644,4 +661,25 @@ func sameItem(a, b ir.UnifiedItem) bool {
 	return a.Type == b.Type && a.Role == b.Role && a.ID == b.ID &&
 		a.Text == b.Text && a.CallID == b.CallID &&
 		a.Name == b.Name && a.Arguments == b.Arguments && a.Output == b.Output
+}
+
+// hasItemPrefix 判断 items 是否以 prefix 开头（用于识别"库里存的是全量"）。
+func hasItemPrefix(items, prefix []ir.UnifiedItem) bool {
+	if len(prefix) == 0 || len(items) < len(prefix) {
+		return false
+	}
+	for i := range prefix {
+		if !sameItem(items[i], prefix[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// boolToInt 把布尔转成 SQLite 的 0/1。
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
