@@ -19,7 +19,7 @@ jobs:
       contents: read
     steps:
       - name: Check out source
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -136,7 +136,7 @@ jobs:
       contents: read
     steps:
       - name: Check out source
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -249,7 +249,7 @@ jobs:
       contents: write
     steps:
       - name: Check out tag for release verification
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
