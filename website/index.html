@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="glass">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aether Cockpit — 把 AI 编程渠道收拢到一个本机入口</title>
+<meta name="description" content="Aether Cockpit 将你有权使用的订阅账号与模型 API 接入统一的本机网关，让 Claude Code、Codex CLI、Gemini CLI、OpenCode 共用一套端点。账号池、模型路由、故障转移、额度与用量集中可见，数据留在本机。">
+<meta name="theme-color" content="#eef2fa">
+
+<!-- 社交分享卡：图片由 scripts/make-og.py 从站点自身渲染生成，
+     保证分享图与真实首屏一致。 -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Aether Cockpit">
+<meta property="og:title" content="Aether Cockpit — 把 AI 编程渠道收拢到一个本机入口">
+<meta property="og:description" content="本地优先的算力聚合网关：一个客户端配置指向多个渠道，账号按策略轮转，额度、用量与请求日志集中在一页。凭证与记录不出你的电脑。">
+<meta property="og:url" content="https://lyydfys.github.io/aether-cockpit/">
+<meta property="og:image" content="https://lyydfys.github.io/aether-cockpit/assets/img/og-cover.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Aether Cockpit 首屏：把散落的 AI 渠道收拢成一个入口">
+<meta property="og:locale" content="zh_CN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Aether Cockpit — 把 AI 编程渠道收拢到一个本机入口">
+<meta name="twitter:description" content="本地优先的算力聚合网关：一个端点汇聚多渠道，账号轮转、额度可见，凭证不出本机。">
+<meta name="twitter:image" content="https://lyydfys.github.io/aether-cockpit/assets/img/og-cover.png">
+
+<link rel="canonical" href="https://lyydfys.github.io/aether-cockpit/">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/img/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/css/site.css">
+<script>
+  // 在首帧之前定主题：用户上次选择 > 系统偏好 > 黑。
+  // 放在样式表之后、body 之前，避免出现一闪而过的错误配色。
+  (function () {
+    try {
+      var saved = localStorage.getItem("aether-theme");
+      var ok = saved === "light" || saved === "dark" || saved === "glass";
+      // 默认是柔光玻璃（浅）。系统偏好不再参与默认判断——
+      // 玻璃是这套站点的品牌表情，不能因为访客系统是深色就换掉。
+      document.documentElement.dataset.theme = ok ? saved : "glass";
+    } catch (e) {
+      document.documentElement.dataset.theme = "glass";
+    }
+  })();
+</script>
+</head>
+<body>
+
+<div class="g-atmos" aria-hidden="true"></div>
+
+<a class="skip-link"  href="#capability">跳到主要内容</a>
+
+<!-- 品牌标识的 SVG 符号：几何逐字照搬 internal/web/ui2/assets/aether-cockpit.svg
+     统一使用完整版（含浅色底板、4 个青点与右下路由徽标）。
+     底板不是装饰：它复现 appicon.png 在系统中的真实呈现，
+     同时为青点与路由标提供对比度——这是它们在 40px 仍可辨的前提。 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="bm-full" viewBox="0 0 108 108">
+      <rect class="bm-bg" width="108" height="108" rx="20"/>
+      <path class="bm-bubble" d="M54,20 C35.22,20 20,33.43 20,50 C20,59.39 24.87,67.76 32.22,73.19 L28,88 L43.55,83.33 C46.86,84.45 50.36,85 54,85 C72.78,85 88,71.57 88,55 C88,38.43 72.78,20 54,20 Z"/>
+      <path class="bm-star" d="M54,34 L57,47 L70,50 L57,53 L54,66 L51,53 L38,50 L51,47 Z"/>
+      <circle class="bm-dot-a" cx="36" cy="38" r="3.5"/>
+      <circle class="bm-dot-a" cx="72" cy="62" r="3.5"/>
+      <circle class="bm-dot-b" cx="42" cy="68" r="2.5"/>
+      <circle class="bm-dot-b" cx="66" cy="36" r="2"/>
+      <g class="bm-extras">
+        <circle cx="77" cy="75" r="11" fill="#fff" stroke="#13a99b" stroke-width="1.7"/>
+        <path d="M72.5 75 H81.5" stroke="#1a73e8" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+        <circle cx="72.5" cy="75" r="2.1" fill="#13a99b"/>
+        <circle cx="77" cy="75" r="2.5" fill="#1a73e8"/>
+        <circle cx="81.5" cy="75" r="2.1" fill="#13a99b"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<!-- ==========================================================
+     开屏：图标成图
+     底板 → 气泡 → 星芒 → 青点 → 路由徽标，五层落定后飞入导航
+     ========================================================== -->
+<div id="ignition" data-step="0" role="presentation">
+  <div class="ignition-glow" aria-hidden="true"></div>
+  <canvas id="ignition-canvas"></canvas>
+
+  <div class="ignition-stage">
+    <div class="ignition-mark" id="ignition-mark">
+      <svg viewBox="0 0 108 108" aria-label="Aether Cockpit 标识">
+        <rect class="bm-bg" width="108" height="108" rx="20"/>
+        <path class="bm-bubble" d="M54,20 C35.22,20 20,33.43 20,50 C20,59.39 24.87,67.76 32.22,73.19 L28,88 L43.55,83.33 C46.86,84.45 50.36,85 54,85 C72.78,85 88,71.57 88,55 C88,38.43 72.78,20 54,20 Z"/>
+        <path class="bm-star" d="M54,34 L57,47 L70,50 L57,53 L54,66 L51,53 L38,50 L51,47 Z"/>
+        <circle class="bm-dot-a" cx="36" cy="38" r="3.5"/>
+        <circle class="bm-dot-a" cx="72" cy="62" r="3.5"/>
+        <circle class="bm-dot-b" cx="42" cy="68" r="2.5"/>
+        <circle class="bm-dot-b" cx="66" cy="36" r="2"/>
+        <circle class="bm-plate" cx="77" cy="75" r="11"/>
+        <path class="bm-link" d="M72.5 75 H81.5"/>
+        <circle class="bm-node-a" cx="72.5" cy="75" r="2.1"/>
+        <circle class="bm-node-b" cx="77" cy="75" r="2.5"/>
+        <circle class="bm-node-a" cx="81.5" cy="75" r="2.1"/>
+      </svg>
+    </div>
+
+    <div class="ignition-words">
+      <div class="ignition-name" aria-label="Aether Cockpit">
+        <span>A</span><span>E</span><span>T</span><span>H</span><span>E</span><span>R</span>
+        <span style="width:.3em"></span>
+        <span>C</span><span>O</span><span>C</span><span>K</span><span>P</span><span>I</span><span>T</span>
+      </div>
+      <div class="ignition-tag">多源归一 · 本机网关</div>
+    </div>
+  </div>
+
+  <div class="ignition-meter" aria-hidden="true"><i></i></div>
+  <button class="ignition-skip" id="ignition-skip" type="button">Skip / 跳过</button>
+</div>
+
+<!-- ==========================================================
+     导航
+     ========================================================== -->
+<header class="site-nav" id="site-nav">
+  <div class="shell nav-inner">
+    <a class="brand" href="#top" aria-label="Aether Cockpit 首页">
+      <span class="nav-mark-slot" id="nav-mark-slot" aria-hidden="true">
+        <svg class="brandmark" viewBox="0 0 108 108"><use href="#bm-full"/></svg>
+      </span>
+      <span class="brand-name">Aether Cockpit<em> / 算力聚合网关</em></span>
+    </a>
+
+    <nav class="nav-links" aria-label="主导航">
+      <a href="#capability">能力</a>
+      <a href="#stage">工作台</a>
+      <a href="#routing">路由</a>
+      <a href="#channels">渠道</a>
+      <a href="#security">安全</a>
+      <a href="#download">下载</a>
+    </nav>
+
+    <div class="nav-tail">
+      <button
+        class="nav-toggle"
+        type="button"
+        aria-label="打开导航菜单"
+        aria-expanded="false"
+        aria-controls="nav-drawer"
+      >
+        <span></span><span></span><span></span>
+      </button>
+      <a class="btn btn--quiet" href="#faq">常见问题</a>
+      <a class="btn btn--secondary" href="https://github.com/lyydfys/aether-cockpit" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+      <div class="theme-switch" role="group" aria-label="配色">
+        <button type="button" data-theme-set="glass" aria-pressed="true" aria-label="柔光玻璃" title="柔光玻璃">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M12 3.4 19.2 7v8.4a1 1 0 0 1-.5.9L12 20.6 5.3 16.3a1 1 0 0 1-.5-.9V7Z"/>
+            <path d="M5 7.4 12 11.6l7-4.2M12 11.6v8.8"/>
+          </svg>
+        </button>
+        <button type="button" data-theme-set="light" aria-pressed="false" aria-label="纯白" title="纯白">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="12" cy="12" r="4.2"/>
+            <path d="M12 2.6v2.2M12 19.2v2.2M4.6 12H2.4M21.6 12h-2.2M6.4 6.4 4.9 4.9M19.1 19.1l-1.5-1.5M17.6 6.4l1.5-1.5M4.9 19.1l1.5-1.5"/>
+          </svg>
+        </button>
+        <button type="button" data-theme-set="dark" aria-pressed="false" aria-label="纯黑" title="纯黑">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M20.2 14.6A8.4 8.4 0 0 1 9.4 3.8 8.6 8.6 0 1 0 10.8 20.3a8.4 8.4 0 0 1 9.4-5.7Z"/>
+          </svg>
+        </button>
+      </div>
+      <a class="btn btn--primary" href="#download">下载</a>
+    </div>
+  </div>
+
+  <!-- 小屏抽屉导航：桌面端隐藏 -->
+  <div class="nav-scrim" id="nav-scrim" hidden></div>
+  <div class="nav-drawer" id="nav-drawer" hidden>
+    <a href="#capability">能力</a>
+    <a href="#stage">工作台</a>
+    <a href="#routing">路由</a>
+    <a href="#channels">渠道</a>
+    <a href="#security">安全</a>
+    <a href="#download">下载</a>
+    <a href="#faq">常见问题</a>
+    <a href="https://github.com/lyydfys/aether-cockpit" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ==========================================================
+       HERO
+       ========================================================== -->
+  <section class="hero">
+    <div class="hero-grid-bg" aria-hidden="true"></div>
+    <div class="hero-glow" aria-hidden="true"></div>
+
+    <div class="shell">
+      <div class="hero-layout">
+      <div class="hero-copy">
+        <p class="eyebrow" data-reveal>Local-first gateway</p>
+        <h1 class="hero-title" data-reveal style="--d:60ms">
+          把散落的 AI 渠道<br>
+          <span class="accent">收拢成一个入口</span>
+        </h1>
+        <p class="hero-sub" data-reveal style="--d:120ms">
+          Aether Cockpit 在本机跑一层聚合网关：一个客户端配置指向多个渠道，
+          账号按策略轮转，额度、用量与请求日志集中在同一页。凭证与记录不出你的电脑。
+        </p>
+
+        <div class="hero-cta" data-reveal style="--d:180ms">
+          <a class="btn btn--primary btn--lg" href="#download">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a.75.75 0 0 1 .75.75v7.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V2.25A.75.75 0 0 1 8 1.5ZM2.75 12a.75.75 0 0 1 .75.75v.5c0 .14.11.25.25.25h8.5a.25.25 0 0 0 .25-.25v-.5a.75.75 0 0 1 1.5 0v.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-.5a.75.75 0 0 1 .75-.75Z"/></svg>
+            下载桌面版
+          </a>
+          <a class="btn btn--secondary btn--lg" href="#stage">看看它长什么样</a>
+        </div>
+
+        <div class="hero-meta" data-reveal style="--d:240ms">
+          <span><i></i>默认只监听 127.0.0.1</span>
+          <span><i></i>凭证不出机</span>
+          <span><i></i>Apache-2.0 · 开源</span>
+        </div>
+
+        <div class="hero-platforms" role="tablist" aria-label="平台" data-reveal style="--d:280ms">
+          <button class="platform-tab" type="button" role="tab" data-platform="desktop" aria-selected="true">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.6 10.4 4.6v6.9H3V5.6Zm8.6-1.1L21 3v8.5h-9.4V4.5ZM3 12.6h7.4v6.9L3 18.4v-5.8Zm8.6 0H21V21l-9.4-1.3v-7.1Z"/></svg>
+            <span class="platform-label">桌面版<small>Windows x64</small></span>
+          </button>
+          <button class="platform-tab" type="button" role="tab" data-platform="mobile" aria-selected="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="6" y="2.2" width="12" height="19.6" rx="2.6"/><path d="M10 18.6h4"/></svg>
+            <span class="platform-label">手机版<small>Android arm64</small></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 双端展台：桌面一台，手机一排 -->
+      <div class="showcase" data-focus="desktop" data-reveal style="--d:300ms">
+        <div class="device-desktop">
+          <div class="laptop">
+            <div class="laptop-screen">
+              <img src="assets/img/shots/overview.webp" alt="桌面版概览页：六个示例渠道汇入统一端点" width="1440" height="920" loading="eager" decoding="async">
+              <div class="laptop-bar" aria-hidden="true"><i></i><i></i><i></i></div>
+            </div>
+            <div class="laptop-base" aria-hidden="true"></div>
+          </div>
+          <div class="device-label">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.6 10.4 4.6v6.9H3V5.6Zm8.6-1.1L21 3v8.5h-9.4V4.5ZM3 12.6h7.4v6.9L3 18.4v-5.8Zm8.6 0H21V21l-9.4-1.3v-7.1Z"/></svg>
+            <b>桌面版</b> Windows 10/11 · 解压即用，浏览器打开 127.0.0.1:7860
+          </div>
+        </div>
+
+        <div class="device-mobile">
+          <div class="phone-rail">
+            <div class="phone">
+              <div class="phone-screen">
+                <img src="assets/img/shots/m-overview.webp" alt="Android 版概览页" width="720" height="1600" loading="eager" decoding="async">
+                <div class="phone-notch" aria-hidden="true"></div>
+                <span class="phone-name">概览</span>
+              </div>
+            </div>
+            <div class="phone">
+              <div class="phone-screen">
+                <img src="assets/img/shots/m-settings.webp" alt="Android 版设置页" width="720" height="1600" loading="eager" decoding="async">
+                <div class="phone-notch" aria-hidden="true"></div>
+                <span class="phone-name">设置</span>
+              </div>
+            </div>
+            <div class="phone">
+              <div class="phone-screen">
+                <img src="assets/img/shots/m-quota.webp" alt="Android 版额度页：账号与额度、模型与余量一眼看到底" width="720" height="1600" loading="eager" decoding="async">
+                <div class="phone-notch" aria-hidden="true"></div>
+                <span class="phone-name">额度</span>
+              </div>
+            </div>
+            <div class="phone">
+              <div class="phone-screen">
+                <img src="assets/img/shots/m-more.webp" alt="Android 版更多页" width="720" height="1600" loading="eager" decoding="async">
+                <div class="phone-notch" aria-hidden="true"></div>
+                <span class="phone-name">更多</span>
+              </div>
+            </div>
+          </div>
+          <div class="device-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="6" y="2.2" width="12" height="19.6" rx="2.6"/><path d="M10 18.6h4"/></svg>
+            <b>手机版</b> 同一网关搬到手机，arm64 · Android 8.0+
+          </div>
+        </div>
+      </div>
+      </div>
+
+      <!-- 链路卡：源 → 汇聚 → 端点 -->
+      <div class="flow-card" data-reveal style="--d:300ms">
+        <div class="flow-head">
+          <div class="flow-title">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="3" cy="8" r="1.8"/><circle cx="13" cy="4" r="1.8"/><circle cx="13" cy="12" r="1.8"/><path d="M4.6 7.2 11.4 4.6M4.6 8.8l6.8 2.6"/></svg>
+            聚合链路
+          </div>
+          <span class="flow-live"><b></b>127.0.0.1:7860</span>
+        </div>
+
+        <div class="flow-body">
+          <div class="source-stack" id="source-stack">
+            <div class="source-row"><span class="source-tag">C</span><span class="source-name">Claude 订阅</span><span class="source-kind">anthropic / messages</span><i class="source-meter" style="--fill:72%"></i></div>
+            <div class="source-row"><span class="source-tag">CX</span><span class="source-name">Codex</span><span class="source-kind">openai / responses</span><i class="source-meter" style="--fill:58%"></i></div>
+            <div class="source-row"><span class="source-tag">G</span><span class="source-name">Gemini</span><span class="source-kind">google / generate</span><i class="source-meter" style="--fill:44%"></i></div>
+            <div class="source-row"><span class="source-tag">O</span><span class="source-name">OpenAI 兼容</span><span class="source-kind">openai / chat</span><i class="source-meter" style="--fill:63%"></i></div>
+            <div class="source-row"><span class="source-tag">Q</span><span class="source-name">Qoder</span><span class="source-kind">subscription</span><i class="source-meter" style="--fill:36%"></i></div>
+          </div>
+
+          <div class="flow-merge">
+            <svg viewBox="0 0 200 240" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M0 24C90 24 110 120 200 120"/>
+              <path d="M0 72C90 72 110 120 200 120"/>
+              <path d="M0 120H200"/>
+              <path d="M0 168C90 168 110 120 200 120"/>
+              <path d="M0 216C90 216 110 120 200 120"/>
+            </svg>
+
+            <div class="endpoint-card">
+              <div class="ep-title">统一端点</div>
+              <div class="endpoint-row">
+                <span>Anthropic</span><code>http://127.0.0.1:7860</code>
+                <button class="copy-btn" type="button" data-copy="http://127.0.0.1:7860" aria-label="复制 Anthropic 端点"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 3.5v-.6a1 1 0 0 0-1-1H3.6a1 1 0 0 0-1 1v5.9a1 1 0 0 0 1 1h.6"/></svg></button>
+              </div>
+              <div class="endpoint-row">
+                <span>OpenAI</span><code>http://127.0.0.1:7860/v1</code>
+                <button class="copy-btn" type="button" data-copy="http://127.0.0.1:7860/v1" aria-label="复制 OpenAI 端点"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 3.5v-.6a1 1 0 0 0-1-1H3.6a1 1 0 0 0-1 1v5.9a1 1 0 0 0 1 1h.6"/></svg></button>
+              </div>
+              <div class="endpoint-row">
+                <span>Gemini</span><code>http://127.0.0.1:7860/v1beta</code>
+                <button class="copy-btn" type="button" data-copy="http://127.0.0.1:7860/v1beta" aria-label="复制 Gemini 端点"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 3.5v-.6a1 1 0 0 0-1-1H3.6a1 1 0 0 0-1 1v5.9a1 1 0 0 0 1 1h.6"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-stats" data-reveal style="--d:360ms">
+        <div class="hero-stat"><b data-count="4">4</b><span>协议家族 · Chat / Responses / Messages / Gemini</span></div>
+        <div class="hero-stat"><b data-count="19">19</b><span>渠道类型 · 订阅账号与 API 平台</span></div>
+        <div class="hero-stat"><b data-count="2">2</b><span>平台 · Windows x64 与 Android arm64</span></div>
+        <div class="hero-stat"><b>127<small>.0.0.1</small></b><span>默认回环监听 · 凭证不出机</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       能力
+       ========================================================== -->
+  <section class="section" id="capability">
+    <div class="shell">
+      <div class="caps-head">
+        <div>
+          <p class="eyebrow" data-reveal>能力矩阵</p>
+          <h2 class="h2" data-reveal style="--d:60ms">多出来的，是同一张网关上的一层调度</h2>
+        </div>
+        <p class="lede" data-reveal style="--d:120ms">
+          和直接开各家客户端相比，Aether Cockpit 不改你的工作方式：
+          客户端还是那个客户端，只是它们背后的出口变成了你自己的一池渠道。
+        </p>
+      </div>
+
+      <div class="caps-grid">
+        <article class="cap" data-reveal>
+          <div class="cap-ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="15" height="11" rx="2"/><path d="M7 17h6M10 14.5V17"/></svg></div>
+          <h3>客户端各用所长</h3>
+          <p>Claude Code、Codex CLI、Gemini CLI、OpenCode 共用本机网关；按客户端能力自动选 Chat、Responses、Messages 或 Gemini 协议。</p>
+          <div class="cap-foot"><span class="chip">4 协议</span><span class="chip">流式</span><span class="chip">工具调用</span></div>
+        </article>
+
+        <article class="cap" data-reveal style="--d:60ms">
+          <div class="cap-ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="6" r="2.6"/><circle cx="14" cy="8" r="2.6"/><circle cx="8.5" cy="14.5" r="2.6"/><path d="M8.2 7.3 11.6 7.8M7.2 8.6l1 3.4M12.6 10.2l-2.4 2.6"/></svg></div>
+          <h3>账号进池，按策略分配</h3>
+          <p>同一渠道的多个账号放进池子，用标签批量管理，配合自动刷新与健康探测，把请求交给当下更合适的那个。</p>
+          <div class="cap-foot"><span class="chip">账号池</span><span class="chip">标签</span><span class="chip">健康探测</span></div>
+        </article>
+
+        <article class="cap" data-reveal style="--d:120ms">
+          <div class="cap-ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 16.5v-11M2.5 16.5h15"/><path d="M5.5 12.5 9 8.5l3 2.5 4.5-6"/></svg></div>
+          <h3>用量、额度与成本在一处</h3>
+          <p>请求数、Token、缓存命中与成本按时间和渠道聚合；额度和探测结果贴着渠道展示，不用再翻好几个控制台。</p>
+          <div class="cap-foot"><span class="chip">Usage</span><span class="chip">Quota</span><span class="chip">Cost</span></div>
+        </article>
+
+        <article class="cap" data-reveal>
+          <div class="cap-ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10 2.5 3.5 6v5c0 3.4 2.8 5.6 6.5 6.5 3.7-.9 6.5-3.1 6.5-6.5V6L10 2.5Z"/><path d="m7.2 9.8 2 2 3.6-3.8"/></svg></div>
+          <h3>本机优先的隐私边界</h3>
+          <p>默认只绑回环地址；凭证写入本机数据目录并由加密层保护；日志默认只记元数据，可配脱敏规则后导出。</p>
+          <div class="cap-foot"><span class="chip">127.0.0.1</span><span class="chip">脱敏</span><span class="chip">不出机</span></div>
+        </article>
+
+        <article class="cap" data-reveal style="--d:60ms">
+          <div class="cap-ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 10h4l2 4 3-9 2 5h3"/></svg></div>
+          <h3>路由与故障转移</h3>
+          <p>粘性会话保证同一条对话落到同一个账号；优先级、轮转、额度感知与意图路由按需组合，失败时换一个再试。</p>
+          <div class="cap-foot"><span class="chip">Sticky</span><span class="chip">Failover</span><span class="chip">白名单</span></div>
+        </article>
+
+        <article class="cap" data-reveal style="--d:120ms">
+          <div class="cap-ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="6" height="6" rx="1.4"/><rect x="11.5" y="2.5" width="6" height="6" rx="1.4"/><rect x="2.5" y="11.5" width="6" height="6" rx="1.4"/><path d="M11.5 14.5h6M14.5 11.5v6"/></svg></div>
+          <h3>周边工作流也收拢</h3>
+          <p>客户端连接配置一键写入或恢复；提示词、Skills、MCP 服务、子代理与独立客户端实例，在同一处维护。</p>
+          <div class="cap-foot"><span class="chip">Skills</span><span class="chip">MCP</span><span class="chip">Agents</span></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       工作台展示
+       ========================================================== -->
+  <section class="section" id="stage">
+    <div class="shell">
+      <div class="caps-head" style="margin-bottom:26px">
+        <div>
+          <p class="eyebrow" data-reveal>工作台</p>
+          <h2 class="h2" data-reveal style="--d:60ms">四个页面，把运维缩到一屏</h2>
+        </div>
+        <p class="lede" data-reveal style="--d:120ms">
+          下面四张截图取自隔离的演示配置，账号、额度与版本号都是合成数据。
+          切换标签页看每一页实际是什么样子。
+        </p>
+      </div>
+
+      <div class="stage-panel" data-reveal>
+        <div class="stage-tabs" role="tablist" aria-label="工作台页面">
+          <button type="button" class="stage-tab" role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true" data-shot="overview">概览</button>
+          <button type="button" class="stage-tab" role="tab" id="tab-channels" aria-controls="panel-channels" aria-selected="false" data-shot="channels" tabindex="-1">接入渠道</button>
+          <button type="button" class="stage-tab" role="tab" id="tab-usage" aria-controls="panel-usage" aria-selected="false" data-shot="usage" tabindex="-1">用量</button>
+          <button type="button" class="stage-tab" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false" data-shot="settings" tabindex="-1">设置</button>
+        </div>
+
+        <div class="stage-viewport">
+          <img class="stage-shot" data-active="true" data-shot="overview" src="assets/img/shots/overview.webp" alt="概览页：六个示例渠道汇入统一端点，账号、额度、调用与探测状态集中在一页" width="1440" height="920" loading="lazy" decoding="async">
+          <img class="stage-shot" data-shot="channels" src="assets/img/shots/channels.webp" alt="接入渠道页：订阅渠道与 API 平台的分类目录" width="1440" height="920" loading="lazy" decoding="async">
+          <img class="stage-shot" data-shot="usage" src="assets/img/shots/usage.webp" alt="用量页：请求数、Token 与成本按时间和渠道聚合" width="1440" height="920" loading="lazy" decoding="async">
+          <img class="stage-shot" data-shot="settings" src="assets/img/shots/settings.webp" alt="设置页：本机网关监听、局域网共享、访问控制与脱敏选项" width="1440" height="920" loading="lazy" decoding="async">
+        </div>
+
+        <div class="stage-caption">
+          <span data-caption-for="overview"><b>概览</b> · 今天哪些渠道能用、还剩多少、什么时候恢复</span>
+          <span data-caption-for="channels" hidden><b>接入渠道</b> · 订阅账号与本机授权导入，按类型分组</span>
+          <span data-caption-for="usage" hidden><b>用量</b> · 请求、Token 与成本趋势，按渠道与模型分布</span>
+          <span data-caption-for="settings" hidden><b>设置</b> · 监听地址、局域网共享、访问控制与脱敏</span>
+          <span class="mono">演示数据</span>
+        </div>
+      </div>
+
+      <div class="phone-wall-head" data-reveal>
+        <h3>手机端四个页面</h3>
+        <span>同一套网关跑在手机上 · arm64-v8a · Android 8.0+</span>
+      </div>
+
+      <div class="phone-wall">
+          <figure class="phone" data-reveal style="--d:0ms">
+            <div class="phone-screen">
+              <img src="assets/img/shots/m-overview.webp" alt="Android 版概览页：网关状态、可用账号与今日用量" width="720" height="1600" loading="lazy" decoding="async">
+              <div class="phone-notch" aria-hidden="true"></div>
+              <span class="phone-name">概览</span>
+            </div>
+            <figcaption>网关状态、可用账号与今日用量</figcaption>
+          </figure>
+          <figure class="phone" data-reveal style="--d:60ms">
+            <div class="phone-screen">
+              <img src="assets/img/shots/m-settings.webp" alt="Android 版设置页：监听、局域网、代理与隐私开关" width="720" height="1600" loading="lazy" decoding="async">
+              <div class="phone-notch" aria-hidden="true"></div>
+              <span class="phone-name">设置</span>
+            </div>
+            <figcaption>监听、局域网、代理与隐私开关</figcaption>
+          </figure>
+          <figure class="phone" data-reveal style="--d:120ms">
+            <div class="phone-screen">
+              <img src="assets/img/shots/m-quota.webp" alt="Android 版额度页：账号渠道、额度窗口与余量进度" width="720" height="1600" loading="lazy" decoding="async">
+              <div class="phone-notch" aria-hidden="true"></div>
+              <span class="phone-name">额度</span>
+            </div>
+            <figcaption>账号、模型与余量，一眼看到底</figcaption>
+          </figure>
+          <figure class="phone" data-reveal style="--d:180ms">
+            <div class="phone-screen">
+              <img src="assets/img/shots/m-more.webp" alt="Android 版更多页：接入渠道、余额与请求记录" width="720" height="1600" loading="lazy" decoding="async">
+              <div class="phone-notch" aria-hidden="true"></div>
+              <span class="phone-name">更多</span>
+            </div>
+            <figcaption>接入渠道、余额与请求记录</figcaption>
+          </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       路由策略（交互）
+       ========================================================== -->
+  <section class="section" id="routing">
+    <div class="shell">
+      <div class="caps-head">
+        <div>
+          <p class="eyebrow" data-reveal>调度策略</p>
+          <h2 class="h2" data-reveal style="--d:60ms">同一个请求，四种分发方式</h2>
+        </div>
+        <p class="lede" data-reveal style="--d:120ms">
+          点一下左边的策略，看请求落在哪个账号上。实际使用时这些策略可以叠加，
+          也可以用虚拟模型组把一组上游包装成一个模型名。
+        </p>
+      </div>
+
+      <div class="route-wrap">
+        <div class="route-list" role="group" aria-label="路由策略选择">
+          <button class="route-item" type="button" data-strategy="sticky" aria-pressed="true">
+            <h3><i></i>粘性会话</h3>
+            <p>同一条对话始终命中同一个账号，避免上下文反复失效</p>
+          </button>
+          <button class="route-item" type="button" data-strategy="round" aria-pressed="false">
+            <h3><i></i>轮转</h3>
+            <p>按顺序分摊到池内账号，把请求峰值摊平</p>
+          </button>
+          <button class="route-item" type="button" data-strategy="priority" aria-pressed="false">
+            <h3><i></i>优先级</h3>
+            <p>先打排在前面的账号，用尽或不可用才降级</p>
+          </button>
+          <button class="route-item" type="button" data-strategy="quota" aria-pressed="false">
+            <h3><i></i>额度感知</h3>
+            <p>按剩余额度分配请求，把快见底的账号往后排</p>
+          </button>
+        </div>
+
+        <div class="route-stage">
+          <div class="route-canvas" id="route-canvas">
+            <svg class="route-svg" viewBox="0 0 340 300" preserveAspectRatio="none" aria-hidden="true">
+              <path data-link="a" d="M24 150C110 150 130 56 250 56"/>
+              <path data-link="b" d="M24 150H250"/>
+              <path data-link="c" d="M24 150C110 150 130 244 250 244"/>
+            </svg>
+            <div class="route-puck" data-node="req" style="left:7.1%;top:50%">你</div>
+            <div class="route-puck" data-node="a" style="left:73.5%;top:18.7%">A<small>余量 62%</small></div>
+            <div class="route-puck" data-node="b" style="left:73.5%;top:50%">B<small>余量 88%</small></div>
+            <div class="route-puck" data-node="c" style="left:73.5%;top:81.3%">C<small>余量 21%</small></div>
+          </div>
+          <p class="route-note" id="route-note">sticky → 账号 A · 已绑定会话</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       渠道
+       ========================================================== -->
+  <section class="section" id="channels">
+    <div class="shell">
+      <div class="caps-head">
+        <div>
+          <p class="eyebrow" data-reveal>渠道覆盖</p>
+          <h2 class="h2" data-reveal style="--d:60ms">订阅账号、API 平台与兼容端点</h2>
+        </div>
+        <p class="lede" data-reveal style="--d:120ms">
+          下面只是代表性示例。登录方式、额度与模型能力因渠道和账号权限而异，
+          完整清单以应用当前版本里显示的为准。
+        </p>
+      </div>
+
+      <div class="matrix">
+        <div class="matrix-cell"><i>QD</i>Qoder</div>
+        <div class="matrix-cell"><i>TR</i>Trae</div>
+        <div class="matrix-cell"><i>WB</i>WorkBuddy</div>
+        <div class="matrix-cell"><i>CB</i>CodeBuddy</div>
+        <div class="matrix-cell"><i>ZC</i>ZCode</div>
+        <div class="matrix-cell"><i>MM</i>MiniMax</div>
+        <div class="matrix-cell"><i>CL</i>Claude</div>
+        <div class="matrix-cell"><i>CX</i>Codex</div>
+        <div class="matrix-cell"><i>CP</i>GitHub Copilot</div>
+        <div class="matrix-cell"><i>CU</i>Cursor</div>
+        <div class="matrix-cell"><i>AG</i>Antigravity</div>
+        <div class="matrix-cell"><i>KR</i>Kiro</div>
+        <div class="matrix-cell"><i>DV</i>Devin</div>
+        <div class="matrix-cell"><i>OC</i>OpenCode</div>
+        <div class="matrix-cell"><i>OA</i>OpenAI 兼容</div>
+        <div class="matrix-cell"><i>AZ</i>Azure OpenAI</div>
+        <div class="matrix-cell"><i>GM</i>Gemini</div>
+        <div class="matrix-cell"><i>VT</i>Vertex AI</div>
+        <div class="matrix-cell"><i>BR</i>Amazon Bedrock</div>
+        <div class="matrix-cell"><i>+</i>自定义 spec</div>
+      </div>
+      <p class="matrix-note">列出的是可接入的类型，不代表账号已登录，也不保证每个渠道都支持相同的模型与功能。</p>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       安全（浅色反转）
+       ========================================================== -->
+  <section class="section" id="security" style="padding-block:0">
+    <div class="security" data-reveal>
+      <p class="eyebrow">安全与数据</p>
+      <h2 class="h2">它是一台本机网关，不是一个托管代理</h2>
+      <p class="lede">这一页值得认真读完：你交给它的东西，只应该待在你自己的机器上。</p>
+
+      <div class="sec-grid">
+        <div class="sec-item">
+          <h3><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 2.8 4.4v4c0 3 2.2 4.8 5.2 5.8 3-1 5.2-2.8 5.2-5.8v-4L8 1.8Z"/></svg>凭证存在哪里</h3>
+          <p>账号凭证、Cookie、OAuth 令牌与代理口令写入本机数据目录（accounts.json、state.db 与平台密钥库），由项目自己的加密层保护。</p>
+        </div>
+        <div class="sec-item">
+          <h3><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.2"/><path d="M8 5v3.4l2.2 1.3"/></svg>会不会上传</h3>
+          <p>除了你自己配置的上游渠道，不回传账号、提示词或用量。更新检查只请求发布页的公开接口，并且可以关掉。</p>
+        </div>
+        <div class="sec-item">
+          <h3><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.4" y="7" width="11.2" height="6.6" rx="1.6"/><path d="M5.2 7V5a2.8 2.8 0 0 1 5.6 0v2"/></svg>监听范围</h3>
+          <p>默认只绑定 127.0.0.1。开启局域网共享后网关才对外网段开放，管理接口仍然要求应用内会话凭据。</p>
+        </div>
+        <div class="sec-item">
+          <h3><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2.6h8v10.8l-4-2.4-4 2.4V2.6Z"/></svg>日志脱敏</h3>
+          <p>请求日志默认只记元数据（时间、模型、状态、耗时、Token），内置脱敏引擎可按前缀或正则替换凭证与个人信息。</p>
+        </div>
+      </div>
+
+      <div class="sec-foot">
+        <span>127.0.0.1:7860</span>
+        <span>完整请求体不落盘</span>
+        <span>导出前自动脱敏</span>
+        <span>可关闭的更新检查</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       下载
+       ========================================================== -->
+  <section class="section" id="download">
+    <div class="shell">
+      <div class="caps-head">
+        <div>
+          <p class="eyebrow" data-reveal>开始使用</p>
+          <h2 class="h2" data-reveal style="--d:60ms">两条产物，同名同版本</h2>
+        </div>
+        <p class="lede" data-reveal style="--d:120ms">
+          从 Releases 页面拿最新构建。桌面版解压后直接运行，手机版是正式签名的 APK。
+        </p>
+      </div>
+
+      <div class="dl-grid">
+        <article class="dl-card" data-kind="windows" data-reveal>
+          <div class="dl-top">
+            <span class="dl-ico"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.6 10.4 4.6v6.9H3V5.6Zm8.6-1.1L21 3v8.5h-9.4V4.5ZM3 12.6h7.4v6.9L3 18.4v-5.8Zm8.6 0H21V21l-9.4-1.3v-7.1Z"/></svg></span>
+            <div>
+              <h3>Windows x64</h3>
+              <p>Windows 10/11 · 桌面版</p>
+            </div>
+          </div>
+          <div class="dl-file"><code>AetherCockpit-&lt;版本&gt;-windows-amd64.zip</code><span>ZIP</span></div>
+          <a class="btn btn--primary btn--block" href="https://github.com/lyydfys/aether-cockpit/releases/latest" target="_blank" rel="noopener">前往 Releases 下载</a>
+          <p class="dl-note">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2h.01"/></svg>
+            需要 Microsoft Edge WebView2 Runtime；解压后运行 AetherCockpit.exe
+          </p>
+        </article>
+
+        <article class="dl-card" data-kind="android" data-reveal style="--d:80ms">
+          <div class="dl-top">
+            <span class="dl-ico"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.3 9.9a1.15 1.15 0 0 1 1.15 1.15v5.2a1.15 1.15 0 1 1-2.3 0v-5.2A1.15 1.15 0 0 1 6.3 9.9Zm11.4 0a1.15 1.15 0 0 1 1.15 1.15v5.2a1.15 1.15 0 1 1-2.3 0v-5.2A1.15 1.15 0 0 1 17.7 9.9ZM7.9 9.5h8.2v8.2a1.5 1.5 0 0 1-1.5 1.5h-.9v2.4a1.15 1.15 0 1 1-2.3 0V19.2h-1.5v2.4a1.15 1.15 0 1 1-2.3 0V19.2h-.2a1.5 1.5 0 0 1-1.5-1.5V9.5Zm.2-1.2c.3-1.9 2.2-3.3 4.4-3.3s4.1 1.4 4.4 3.3H8.1Z"/></svg></span>
+            <div>
+              <h3>Android arm64</h3>
+              <p>arm64-v8a · Android 8.0+（API 26）</p>
+            </div>
+          </div>
+          <div class="dl-file"><code>AetherCockpit-&lt;版本&gt;-android-arm64-v8a.apk</code><span>APK</span></div>
+          <a class="btn btn--primary btn--block" href="https://github.com/lyydfys/aether-cockpit/releases/latest" target="_blank" rel="noopener">前往 Releases 下载</a>
+          <p class="dl-note">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2h.01"/></svg>
+            侧载安装需允许「未知来源」；仅支持 arm64-v8a 设备
+          </p>
+        </article>
+      </div>
+
+      <div class="dl-req" data-reveal style="--d:120ms">
+        <div><b>桌面版</b>Windows 10/11 x64 · WebView2 Runtime</div>
+        <div><b>手机版</b>arm64-v8a · 允许未知来源安装</div>
+        <div><b>无头版</b>压缩包内附 CLI，可不开图形界面</div>
+        <div><b>源码构建</b>Go 1.26+ · Node.js 20+ · JDK 17+</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       快速开始
+       ========================================================== -->
+  <section class="section" id="quickstart" style="padding-top:0">
+    <div class="shell">
+      <div class="caps-head" style="margin-bottom:0">
+        <div>
+          <p class="eyebrow" data-reveal>三步跑通</p>
+          <h2 class="h2" data-reveal style="--d:60ms">从安装到第一个请求</h2>
+        </div>
+        <p class="lede" data-reveal style="--d:120ms">
+          默认端口 7860。模型名用「渠道 ID/模型名」的形式，
+          真实可用名称以界面或 /v1/models 返回结果为准。
+        </p>
+      </div>
+
+      <div class="steps">
+        <div class="step" data-reveal><h3>启动网关</h3><p>运行应用，浏览器打开 127.0.0.1:7860 进入工作台；端口被占用可在设置页改。</p></div>
+        <div class="step" data-reveal style="--d:60ms"><h3>接入渠道</h3><p>添加一个你有权使用的订阅账号或 API 服务，然后在「网关与探针」跑一次探测。</p></div>
+        <div class="step" data-reveal style="--d:120ms"><h3>指向客户端</h3><p>复制对应客户端的接入配置，把 base_url 指到本机网关，模型名填渠道 ID/模型名。</p></div>
+      </div>
+
+      <div class="code-block" data-reveal>
+        <div class="code-head">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span>PowerShell</span>
+          <button class="copy-btn" type="button" data-copy-target="code-body" aria-label="复制示例命令">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 3.5v-.6a1 1 0 0 0-1-1H3.6a1 1 0 0 0-1 1v5.9a1 1 0 0 0 1 1h.6"/></svg>
+          </button>
+        </div>
+        <div class="code-body" id="code-body"><pre><span class="c"># 1) 列出当前可路由的模型</span>
+curl.exe http://127.0.0.1:7860/v1/models `
+  -H "<span class="k">Authorization</span>: Bearer <span class="s">YOUR_GATEWAY_KEY</span>"
+
+<span class="c"># 2) 发一条对话请求</span>
+curl.exe http://127.0.0.1:7860/v1/chat/completions `
+  -H "<span class="k">Authorization</span>: Bearer <span class="s">YOUR_GATEWAY_KEY</span>" `
+  -H "<span class="k">Content-Type</span>: application/json" `
+  -d '{"model":"<span class="s">&lt;provider-id&gt;/&lt;model-id&gt;</span>","messages":[{"role":"user","content":"你好"}]}'</pre></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       FAQ
+       ========================================================== -->
+  <section class="section" id="faq" style="padding-top:0">
+    <div class="shell">
+      <p class="eyebrow" data-reveal>常见问题</p>
+      <h2 class="h2" data-reveal style="--d:60ms;margin-top:14px">上手时最容易卡住的几件事</h2>
+
+      <div class="faq" data-reveal>
+        <details open>
+          <summary>端口 7860 被占用怎么办？</summary>
+          <p>在设置页把监听端口改成其它值后重启网关，或用启动参数指定。判断占用者可以用 <code>netstat -ano | findstr :7860</code>（Windows）。改端口后，客户端的接入地址也要一起改。</p>
+        </details>
+        <details>
+          <summary>开了局域网共享，另一台设备还是连不上？</summary>
+          <p>按顺序查三件事：两台设备是否在同一网段（跨 VLAN、访客网络、客户端隔离都会挡）；主机防火墙是否放行该端口；管理接口需要应用内会话凭据，另一台设备能连的是网关 API 端点，并且要带上你配置的网关密钥。</p>
+        </details>
+        <details>
+          <summary>模型名到底该填什么？</summary>
+          <p>用「渠道 ID/模型名」的形式，例如 <code>openai-compat/gpt-4.1</code>。具体可用名称以界面显示或 <code>/v1/models</code> 的返回为准，不同账号权限能看到的模型并不一样。</p>
+        </details>
+        <details>
+          <summary>更新检查报错，是应用坏了吗？</summary>
+          <p>不是。更新检查请求的是发布页的公开接口，在部分网络环境下会返回 5xx 或超时；界面会显示检查失败，其余功能不受影响。可以稍后重试，或直接去 Releases 页面手动下载。</p>
+        </details>
+        <details>
+          <summary>APK 装不上，提示「未知来源」或「不安全」？</summary>
+          <p>侧载 APK 需要先在系统里允许该来源（设置 → 应用 → 特殊权限 → 安装未知应用）。同时确认设备是 arm64-v8a 且系统不低于 Android 8.0；x86 模拟器与 32 位设备不在支持范围内。</p>
+        </details>
+        <details>
+          <summary>为什么手机上没有桌面端的某些能力？</summary>
+          <p>WSL 发行版探测、Windows 客户端进程接管、本机客户端扫描、PC 隔离实例这几项依赖 Windows 本机环境，Android 上无法等价实现，因此界面上直接标注并说明原因，而不是放一个点了没反应的入口。</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==========================================================
+       结尾 CTA
+       ========================================================== -->
+  <section class="finale">
+    <div class="finale-glow" aria-hidden="true"></div>
+    <div class="shell">
+      <h2 class="h2" data-reveal>让渠道各就各位</h2>
+      <p class="lede" data-reveal style="--d:60ms">
+        下载、接入、复制配置，三步之后你的客户端就不再只认一家上游。
+      </p>
+      <div class="finale-cta" data-reveal style="--d:120ms">
+        <a class="btn btn--primary btn--lg" href="https://github.com/lyydfys/aether-cockpit/releases/latest" target="_blank" rel="noopener">下载最新版本</a>
+        <a class="btn btn--secondary btn--lg" href="https://github.com/lyydfys/aether-cockpit" target="_blank" rel="noopener">在 GitHub 上查看</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ==========================================================
+     Footer
+     ========================================================== -->
+<footer class="site-foot">
+  <div class="shell">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top">
+          <span class="nav-mark-slot" style="width:30px;height:30px" aria-hidden="true">
+            <svg class="brandmark" viewBox="0 0 108 108"><use href="#bm-full"/></svg>
+          </span>
+          <span class="brand-name">Aether Cockpit</span>
+        </a>
+        <p>把分散在 CLI、IDE 与 API 配置里的 AI 编程渠道，收拢到一个本机入口。Apache-2.0 许可，源码开放。</p>
+      </div>
+
+      <div class="foot-col">
+        <h3>产品</h3>
+        <a href="#capability">能力矩阵</a>
+        <a href="#stage">工作台</a>
+        <a href="#channels">渠道覆盖</a>
+        <a href="#download">下载安装</a>
+      </div>
+      <div class="foot-col">
+        <h3>文档</h3>
+        <a href="https://github.com/lyydfys/aether-cockpit/blob/main/docs/QUICKSTART.md" target="_blank" rel="noopener">快速上手</a>
+        <a href="https://github.com/lyydfys/aether-cockpit/blob/main/docs/FEATURES.md" target="_blank" rel="noopener">能力与兼容性</a>
+        <a href="https://github.com/lyydfys/aether-cockpit/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">架构说明</a>
+        <a href="https://github.com/lyydfys/aether-cockpit/blob/main/docs/ADD_PROVIDER.md" target="_blank" rel="noopener">新增渠道</a>
+      </div>
+      <div class="foot-col">
+        <h3>社区</h3>
+        <a href="https://github.com/lyydfys/aether-cockpit" target="_blank" rel="noopener">GitHub 仓库</a>
+        <a href="https://github.com/lyydfys/aether-cockpit/issues" target="_blank" rel="noopener">问题反馈</a>
+        <a href="https://github.com/lyydfys/aether-cockpit/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">贡献指南</a>
+        <a href="https://github.com/sponsors/lyydfys" target="_blank" rel="noopener">赞助支持</a>
+      </div>
+    </div>
+
+    <div class="foot-end">
+      <span>© 2026 Aether Cockpit Contributors · Apache License 2.0</span>
+      <span class="spacer">
+        <a href="https://github.com/lyydfys/aether-cockpit/blob/main/PRIVACY.md" target="_blank" rel="noopener">隐私说明</a>
+        <a href="https://github.com/lyydfys/aether-cockpit/blob/main/SECURITY.md" target="_blank" rel="noopener">安全政策</a>
+        <a href="https://github.com/lyydfys/aether-cockpit/blob/main/NOTICE" target="_blank" rel="noopener">第三方归属</a>
+      </span>
+    </div>
+  </div>
+</footer>
+
+<noscript>
+  <style>
+    #ignition { display: none !important; }
+    .site-nav { background: rgba(15,17,21,.92) !important; }
+    [data-reveal] { opacity: 1 !important; transform: none !important; }
+    .site-nav .nav-mark-slot > svg { opacity: 1 !important; }
+  </style>
+</noscript>
+
+<script src="assets/js/ignition.js" defer></script>
+<script src="assets/js/site.js" defer></script>
+</body>
+</html>

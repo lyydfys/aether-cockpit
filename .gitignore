@@ -88,6 +88,7 @@ docs/assets/
 *.keystore
 signing.properties
 
-# 站点提案草稿与产物（非本仓交付物）
+# 站点提案草稿（非本仓交付物）
 /docs/site-proposal/
-/website/
+
+# /website/ 是官网源码，已纳入版本管理，勿再忽略。

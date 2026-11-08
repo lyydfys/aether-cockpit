@@ -1,0 +1,71 @@
+name: site
+
+# 官网部署：只发布 website/ 目录到 GitHub Pages。
+# 与 release.yml（产物发布）、ci.yml（编译测试）互不干扰。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个部署；新的提交取消排队中的旧任务
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 静态检查
+        run: |
+          set -e
+          # 站点是零构建静态页，这里只做最基本的完整性检查，
+          # 防止把半成品推上线（例如引用了不存在的资源）。
+          test -f website/index.html
+          test -f website/assets/css/site.css
+          test -f website/assets/js/site.js
+          test -f website/assets/js/ignition.js
+
+          # 页面里引用的本地资源必须都存在
+          missing=0
+          while read -r p; do
+            [ -z "$p" ] && continue
+            if [ ! -f "website/$p" ]; then
+              echo "::error file=website/index.html::引用的资源不存在: $p"
+              missing=1
+            fi
+          done < <(grep -oE '(src|href)="assets/[^"]+"' website/index.html \
+                   | sed -E 's/^(src|href)="//; s/"$//' | sort -u)
+          [ "$missing" -eq 0 ] || exit 1
+
+          # 品牌资源必须存在（图标是站点身份的核心）
+          test -f website/assets/img/favicon.svg
+          test -f website/assets/img/apple-touch-icon.png
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          # 只上传站点目录，仓库其余部分不进 Pages
+          path: website
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
