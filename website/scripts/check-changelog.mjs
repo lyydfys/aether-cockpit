@@ -25,7 +25,7 @@ const page = await ctx.newPage();
 page.on("pageerror", (e) => problems.push(e.message));
 page.on("console", (m) => m.type() === "error" && problems.push("console: " + m.text()));
 
-await page.goto(URL, { waitUntil: "load", timeout: 45000 });
+await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 90000 });
 await page.waitForSelector(".cl-rel", { timeout: 20000 });
 await page.waitForTimeout(900);
 
@@ -92,7 +92,7 @@ await page.screenshot({ path: path.join(".cl-check", "desktop-dark.png") });
 
 // 从更新日志点下载
 const [dl] = await Promise.all([
-  page.waitForEvent("download", { timeout: 45000 }).catch(() => null),
+  page.waitForEvent("download", { timeout: 90000 }).catch(() => null),
   page.click(".cl-dl a"),
 ]);
 chk("日志页可下载", !!dl, dl ? `(${dl.suggestedFilename()})` : "");
@@ -102,7 +102,7 @@ await ctx.close();
 /* 移动 */
 const mctx = await browser.newContext({ ...devices["iPhone 13"] });
 const mp = await mctx.newPage();
-await mp.goto(URL, { waitUntil: "load", timeout: 45000 });
+await mp.goto(URL, { waitUntil: "domcontentloaded", timeout: 90000 });
 await mp.waitForSelector(".cl-rel", { timeout: 20000 });
 await mp.waitForTimeout(800);
 

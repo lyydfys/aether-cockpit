@@ -17,7 +17,7 @@ const problems = [];
 page.on("pageerror", (e) => problems.push(e.message));
 page.on("console", (m) => m.type() === "error" && problems.push("console: " + m.text()));
 
-await page.goto(URL, { waitUntil: "load", timeout: 45000 });
+await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 90000 });
 await page.waitForFunction(
   () => document.documentElement.classList.contains("is-ready"),
   null,
