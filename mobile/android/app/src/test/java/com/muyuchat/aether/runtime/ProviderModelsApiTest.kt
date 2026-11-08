@@ -41,7 +41,7 @@ class ProviderModelsApiTest {
     fun blankEntriesAreDropped() {
         val models = parseProviderModels("""{"models":["a","","  ","b"],"source":"vendor"}""")
         assertEquals(listOf("a", "b"), models.models)
-        assertTrue(providerModelsSummary(models).contains("供应商实时"))
+        assertTrue(providerModelsSummary(models).contains("上游实时"))
     }
 
     @Test

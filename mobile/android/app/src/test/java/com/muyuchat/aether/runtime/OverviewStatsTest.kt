@@ -213,9 +213,11 @@ class OverviewStatsTest {
 
     @Test
     fun testProviderRuleMatchesDesktop() {
-        // 桌面 overview.js:30：`/^mock/.test(id) || id === 'openai-compat'`——只看前缀
+        // 桌面 channels.js：`const isTest = (id) => /^mock/.test(id)`——只看前缀。
+        // `openai-compat` **不再**算测试渠道：它是通用接入渠道，隐藏它会让用户接在
+        // 该渠道上的账号在额度页/概览里彻底消失。
         assertTrue(isTestProviderId("mock-fast"))
-        assertTrue(isTestProviderId("openai-compat"))
+        assertTrue(!isTestProviderId("openai-compat"))
         assertTrue(!isTestProviderId("claude"))
         // 只认前缀：名字里含 mock 但不在开头的渠道不算测试渠道
         assertTrue(!isTestProviderId("acme-mock"))

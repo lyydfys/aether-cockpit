@@ -48,9 +48,11 @@ internal fun formatUsageCost(value: Double): String {
 }
 
 /**
- * 测试渠道判定：与桌面 `overview.js:30` 的 `isTest()` 同一套规则
- * 测试渠道判定：只有 `mock` 前缀。`openai-compat` 是**通用接入渠道**，不是测试渠道——
- * 隐藏它会让用户接在该渠道上的账号在额度页/概览里彻底消失（但模型仍以 openai-compat/ 前缀对外）。
+ * 测试渠道判定：只有 `mock` 前缀。
+ *
+ * `openai-compat` **不再**算测试渠道：它是通用接入渠道，隐藏它会让用户接在该渠道上的
+ * 账号在额度页/概览里彻底消失（但模型仍以 `openai-compat/` 前缀对外暴露）。
+ */
 internal fun isTestProviderId(id: String): Boolean =
     id.startsWith("mock")
 

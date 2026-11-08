@@ -60,7 +60,9 @@ class NoExternalProjectNamesContractTest {
             "libre" + "chat",
         )
         val regex = Regex(tokens.joinToString("|"), RegexOption.IGNORE_CASE)
-        val skipDirs = setOf(".git", "node_modules", ".gradle", "build", "bin", "out")
+        // `data` 是运行时下载的第三方目录缓存（models.dev 等），不是本仓源码：
+        // 它是上游提供的 JSON，里面出现某个项目的名字不代表我们在引用它。
+        val skipDirs = setOf(".git", "node_modules", ".gradle", "build", "bin", "out", "data")
         val textExts = setOf(
             "go", "md", "js", "mjs", "ts", "css", "html", "json", "jsonc", "sh", "ps1",
             "yml", "yaml", "kt", "kts", "xml", "txt", "properties", "toml", "mod", "sum",
