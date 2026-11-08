@@ -37,6 +37,7 @@ TAGNAME=$(awk -F'\t' '$1=="TAG"{print $2}' /tmp/release.tsv)
 echo "== 版本: $TAGNAME"
 
 changed=0
+FAILED=0
 while IFS=$'\t' read -r kind name size url; do
   [ "$kind" = "ASSET" ] || continue
 
@@ -53,13 +54,36 @@ while IFS=$'\t' read -r kind name size url; do
   fi
 
   echo "   下载 $name ($(( size / 1048576 )) MB)"
-  curl -fsSL --max-time 600 --retry 3 --retry-delay 2 \
-       -o "$target.part" "$url"
+  # GitHub 的 release 下载偶发 5xx（实测遇到过 504）。
+  # 多试几轮、每次退避，失败则保留 .part 供下次断点续传。
+  ok=0
+  for attempt in 1 2 3 4 5; do
+    # 注意：不要用 --retry-all-errors（curl 7.71+ 才有，这台服务器不支持）
+    if curl -fsSL --max-time 900 --retry 3 --retry-delay 3 \
+             -C - -o "$target.part" "$url"; then
+      ok=1
+      break
+    fi
+    echo "      第 $attempt 次失败，$((attempt * 5)) 秒后重试"
+    sleep $((attempt * 5))
+  done
+
+  if [ "$ok" -ne 1 ]; then
+    echo "!! 下载失败: $name" >&2
+    echo "   已保留 $target.part，下次运行会从断点继续" >&2
+    FAILED=1
+    continue
+  fi
+
   mv "$target.part" "$target"
   changed=$((changed + 1))
 done < /tmp/release.tsv
 
 # 清理旧版本文件（只保留当前 release 的产物，避免磁盘堆积）
+# 有下载失败时跳过清理，否则会把还能用的旧版本删掉
+if [ "$FAILED" -ne 0 ]; then
+  echo "== 有文件未下载成功，跳过清理旧版本"
+else
 echo "== 清理非当前版本"
 for f in "$DEST"/*.apk "$DEST"/*.zip; do
   [ -e "$f" ] || continue
@@ -70,6 +94,7 @@ for f in "$DEST"/*.apk "$DEST"/*.zip; do
     changed=$((changed + 1))
   fi
 done
+fi
 
 # 写一个清单，供官网显示版本号与校验值
 python3 - "$DEST" "$TAGNAME" /tmp/release.tsv <<'PY'
@@ -109,3 +134,8 @@ PY
 
 echo "== 完成，本次变动 $changed 项"
 du -sh "$DEST"
+
+if [ "$FAILED" -ne 0 ]; then
+  echo "!! 有文件下载失败，manifest 可能不完整" >&2
+  exit 1
+fi

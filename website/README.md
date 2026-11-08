@@ -104,6 +104,7 @@ Docker 与宿主机 nginx 两种方式，nginx 配置实测 12 项通过。
 \\ash
 python scripts/set-site-url.py https://你的域名      # 1. 设站点地址
 python scripts/package.py                           # 2. 打包（宿主机方式）
+# 发版后同步安装包与更新日志：bash /opt/aether-site/sync-all.sh
 docker compose -f deploy/docker-compose.yml up -d --build   # 3a. Docker
 \\n
 ## 资源与性能
