@@ -549,10 +549,17 @@ func (g *Gateway) handleEdgeAuto(w http.ResponseWriter, r *http.Request) {
 			st := edgeAuto.snapshot(host)
 			st.Enabled = cfg.Enabled
 			st.Path = cfg.Path
+			// cfg 的字段带 omitempty：未显式设置时会被序列化成零值省略，
+			// 前端于是不知道该显示 300 还是空白。这里回传"实际会用的值"。
+			effective := cfg
+			effective.IntervalSec = int(cfg.interval() / time.Second)
+			effective.ThresholdMS = int(cfg.thresholdMS())
+			effective.HealthSec = int(cfg.healthInterval() / time.Second)
 			out = append(out, map[string]any{
-				"config": cfg,
-				"state":  st,
-				"pins":   g.hostPins().Get(host),
+				"config":    effective,
+				"state":     st,
+				"pins":      g.hostPins().Get(host),
+				"effective": true,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"hosts": out})

@@ -649,3 +649,43 @@
   color: var(--red); white-space: pre-wrap; word-break: break-word;
   font-size: 11px; line-height: 1.5; max-height: 180px; overflow: auto;
 }
+
+/* ---------- 渠道详情 · 网络参数格 ----------
+ * 这些参数是"一组等价的数字旋钮"（预热/在途上限、重扫/阈值/采样）。
+ * 原来每个都是"标签 + 88px 输入 + 按钮"挤在一条 inline 行里，
+ * 在 140px 标签列旁边会被压成竖排。改成等宽小格后自动换行、对齐稳定。 */
+.param-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+}
+.num-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.num-field-k {
+  color: var(--muted);
+  font-size: var(--fs-s);
+  white-space: nowrap;
+}
+.num-field .input {
+  width: 96px;
+}
+.param-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  /* 按钮组与参数格底对齐；单独一行时也不会被压扁 */
+  margin-left: auto;
+}
+
+/* 窄屏：参数格自然换行，按钮组不再右推 */
+@media (max-width: 640px) {
+  .param-actions { margin-left: 0; }
+  .num-field .input { width: 100%; min-width: 80px; }
+  .num-field { flex: 1 1 96px; }
+}

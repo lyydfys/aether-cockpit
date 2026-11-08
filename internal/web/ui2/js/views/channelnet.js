@@ -9,6 +9,14 @@ import { btn, chip, input, toast, errorBox } from '../components.js';
 
 const NUM = { type: 'number', min: '0', style: 'width:88px' };
 
+// 鍙傛暟妗嗭細鏍囩鍦ㄤ笂銆佽緭鍏ュ湪涓嬶紝瀹藉害鑷€傘€?
+// 鎶婁竴鎺掑弬鏁版嫥鎵嬪垎缁勬垚鏍煎瓙锛岃€屼笉鏄?鏍囩鍚?杈撳叆 鎸ゆ垚涓€琛屸€斺€?
+// detail-field 鍙湁 140px 鏍囩鍒楋紝鍐嶅鍗佸嚑涓厓绱犱細琚尋鎴愮旱鎺掋€?
+function numField(label, el) {
+  return h('label', { class: 'num-field' },
+    h('span', { class: 'num-field-k' }, label), el);
+}
+
 // hostFromBase 从 base URL 里取主机名。
 function hostFromBase(base) {
   try {
@@ -26,12 +34,13 @@ export function channelNetFields(providerId, baseUrl) {
   const pre = input({ ...NUM, placeholder: '45' });
   const inflight = input({ ...NUM, placeholder: '4' });
   const liveCount = chip('在途 —', 'plain');
-  const saveRow = h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' },
-    h('span', { class: 'meta' }, '预热(秒)'), pre,
-    h('span', { class: 'meta' }, '在途上限'), inflight,
-    btn('保存', { onClick: () => saveProfile() }),
-    btn('恢复默认', { ghost: true, onClick: () => saveProfile(true) }),
-    liveCount);
+  const saveRow = h('div', { class: 'param-grid' },
+    numField('预热(秒)', pre),
+    numField('在途上限', inflight),
+    h('div', { class: 'param-actions' },
+      btn('保存', { onClick: () => saveProfile() }),
+      btn('恢复默认', { ghost: true, onClick: () => saveProfile(true) }),
+      liveCount));
   const profileNote = h('div', { class: 'meta', style: 'line-height:1.6' },
     '预热 = 每隔 N 秒打一次 /models（不消耗 token）把 TCP+TLS 保持热态；'
     + '在途上限 = 同时最多几条流，防止并发互相拖慢。都填 0 即恢复默认。');
@@ -42,9 +51,11 @@ export function channelNetFields(providerId, baseUrl) {
   const hostInput = input({ value: hostFromBase(baseUrl), placeholder: 'amr-link.example.com' });
   const result = h('div', { style: 'display:grid;gap:6px' });
   const pinRow = h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' });
+  hostInput.style.minWidth = '260px';
   const edgeBlock = h('div', { style: 'display:grid;gap:10px' },
+    // 域名框独占一行（它比按钮长得多），按钮另起一行，避免被压成几个字的宽度。
+    hostInput,
     h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' },
-      hostInput,
       btn('测一下', { ghost: true, onClick: () => diagnose() }),
       btn('扫描并钉住', { ghost: true, onClick: () => scan() }),
       btn('全量扫描', { ghost: true, onClick: () => scan(true) })),
@@ -63,14 +74,16 @@ export function channelNetFields(providerId, baseUrl) {
   const autoInterval = input({ ...NUM, placeholder: '300' });
   const autoThreshold = input({ ...NUM, placeholder: '150' });
   const autoHealth = input({ ...NUM, placeholder: '30' });
-  const autoStatus = h('div', { class: 'meta', style: 'line-height:1.6' });
-  const autoBtn = btn('开启自动切换', { ghost: true, onClick: () => setAuto(true) });
-  const autoOff = btn('关闭', { ghost: true, onClick: () => setAuto(false) });
+  const autoStatus = h('div', { class: 'meta', style: 'line-height:1.7;display:grid;gap:2px' });
+  const autoBtn = btn('开启自动切换', { primary: true, onClick: () => setAuto(true) });
+  const autoOff = btn('关闭自动切换', { ghost: true, onClick: () => setAuto(false) });
+  autoPath.style.minWidth = '240px';
   const autoBlock = h('div', { style: 'display:grid;gap:8px' },
-    h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' }, autoPath,
-      h('span', { class: 'meta' }, '重扫(秒)'), autoInterval,
-      h('span', { class: 'meta' }, '阈值(ms)'), autoThreshold,
-      h('span', { class: 'meta' }, '采样(秒)'), autoHealth),
+    autoPath,
+    h('div', { class: 'param-grid' },
+      numField('重扫(秒)', autoInterval),
+      numField('阈值(ms)', autoThreshold),
+      numField('采样(秒)', autoHealth)),
     h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' }, autoBtn, autoOff),
     autoStatus,
     h('div', { class: 'meta', style: 'line-height:1.6' },
@@ -153,15 +166,27 @@ export function channelNetFields(providerId, baseUrl) {
       }
       const cfg = row.config || {};
       const st = row.state || {};
-      autoBtn.textContent = cfg.enabled ? '已开启' : '开启自动切换';
+      // 开启后主按钮变成不可点的状态标签；关闭按钮只在开启时出现。
+      autoBtn.textContent = cfg.enabled ? '自动切换已开启' : '开启自动切换';
       autoBtn.disabled = !!cfg.enabled;
-      autoOff.disabled = !cfg.enabled;
+      autoOff.hidden = !cfg.enabled;
       if (cfg.path) autoPath.value = cfg.path;
       if (cfg.interval_sec) autoInterval.value = String(cfg.interval_sec);
       if (cfg.threshold_ms) autoThreshold.value = String(cfg.threshold_ms);
       if (cfg.health_sec) autoHealth.value = String(cfg.health_sec);
       const pins = (row.pins || []).join(', ');
       const bits = [];
+      // 上次全量扫描距今多久 + 下次什么时候扫：没有这两项，用户无法判断
+      // "看到的数据是不是陈旧的"，只能凭感觉怀疑（这正是之前的反馈）。
+      const scanEvery = Number(cfg.interval_sec) > 0 ? Number(cfg.interval_sec) : 300;
+      if (st.last_run) {
+        const age = Math.max(0, Math.floor(Date.now() / 1000 - st.last_run));
+        bits.push('上次扫描 ' + (age < 60 ? age + ' 秒前' : Math.floor(age / 60) + ' 分钟前'));
+        const next = Math.max(0, scanEvery - age);
+        bits.push('下次 ' + (next <= 0 ? '即将' : (next < 60 ? next + ' 秒后' : Math.ceil(next / 60) + ' 分钟后')));
+      } else if (cfg.enabled) {
+        bits.push('尚未完成首轮扫描');
+      }
       if (pins) bits.push('当前线路 ' + pins);
       if (st.current_ms) bits.push('当前 ' + st.current_ms + 'ms / 成功 ' + (st.current_ok || 0) + ' 次');
       if (st.best_ip) bits.push('最优 ' + st.best_ip + '（' + (st.best_ms || 0) + 'ms）');
@@ -176,8 +201,10 @@ export function channelNetFields(providerId, baseUrl) {
       for (const a of (st.alerts || []).slice(0, 3)) {
         const t2 = new Date((a.at || 0) * 1000);
         const hhmm = String(t2.getHours()).padStart(2, '0') + ':' + String(t2.getMinutes()).padStart(2, '0');
-        autoStatus.append(h('div', { class: 'meta', style: 'color:' + (a.level === 'warn' ? 'var(--red, #dc2626)' : 'inherit') },
-          hhmm + ' · ' + (a.message || '')));
+        autoStatus.append(h('div', {
+          class: 'meta',
+          style: 'margin-top:2px;line-height:1.7;color:' + (a.level === 'warn' ? 'var(--red, #dc2626)' : 'inherit'),
+        }, hhmm + '  ' + (a.message || '')));
       }
     } catch (e) {
       autoStatus.append(h('span', null, '读取失败：' + (e.message || e)));
