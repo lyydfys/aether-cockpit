@@ -24,6 +24,11 @@ services:
 
     # 静态站只读，少一条被写入的路径
     read_only: true
+
+    # 下载产物由 sync-downloads.sh 写到宿主机这个目录，
+    # 再挂进容器。不打进镜像：发版时换文件即可，不用重建镜像。
+    volumes:
+      - ./downloads:/usr/share/nginx/html/downloads:ro
     tmpfs:
       - /var/cache/nginx
       - /var/run

@@ -451,6 +451,103 @@
     });
   }
 
+  /* ---------- 8.7) 下载区：从 manifest 同步版本与大小 ----------
+     下载文件镜像在本站 /download/ 下，发版后由 sync-downloads.sh 更新。
+     页面不写死版本号，改从 manifest.json 读取，避免发版后文案对不上。
+     读不到就保持 HTML 里的兜底值，不影响下载本身。 */
+  function humanSize(bytes) {
+    if (!bytes || bytes < 1024) return bytes + " B";
+    const mb = bytes / 1048576;
+    return mb >= 1 ? mb.toFixed(1) + " MB" : (bytes / 1024).toFixed(0) + " KB";
+  }
+
+  const autoLinks = {};
+
+  function applyAutoLink() {
+    const links = document.querySelectorAll("[data-dl-auto]");
+    if (!links.length) return;
+    const ua = navigator.userAgent || "";
+    const isAndroid = /Android/i.test(ua);
+    const url = isAndroid ? autoLinks.android : autoLinks.windows;
+    if (!url) return;
+    links.forEach((a) => {
+      a.setAttribute("href", url);
+      // 安卓上把文案说清楚，避免用户点完才发现装不上
+      if (isAndroid) a.textContent = "下载 Android 版";
+    });
+  }
+
+  async function syncDownloadInfo() {
+    let data;
+    try {
+      const res = await fetch("/download/manifest.json", { cache: "no-store" });
+      if (!res.ok) return;
+      data = await res.json();
+    } catch (err) {
+      // 离线或清单尚未生成：保留 HTML 兜底值
+      return;
+    }
+    if (!data || !Array.isArray(data.assets)) return;
+
+    const version = data.version || "";
+    const verEls = document.querySelectorAll("[data-dl-version]");
+    verEls.forEach((el) => {
+      if (version) el.textContent = version;
+    });
+
+    const lineEl = document.querySelector("[data-dl-version-line]");
+    if (lineEl && version) lineEl.textContent = "当前版本 " + version;
+
+    data.assets.forEach((asset) => {
+      const name = String(asset.name || "");
+      let kind = null;
+      if (/\.apk$/i.test(name)) kind = "android";
+      else if (/\.zip$/i.test(name)) kind = "windows";
+      if (!kind || !asset.url) return;
+
+      // 按钮：贴上真实地址（万一版本变了，链接自动跟对）
+      document.querySelectorAll(`[data-dl-btn="${kind}"]`).forEach((a) => {
+        a.setAttribute("href", asset.url);
+      });
+
+      // 大小标签
+      const sizeEl = document.querySelector(`[data-dl-size="${kind}"]`);
+      if (sizeEl && asset.size) sizeEl.textContent = humanSize(asset.size);
+
+      // 底部 CTA：按当前设备指向合适的包（安卓给 APK，其余给 Windows）
+      if (kind === "android" || kind === "windows") {
+        autoLinks[kind] = asset.url;
+      }
+
+      // 文件名与版本：优先只更新版本节点，保留 <code> 结构；
+      // 若该节点不存在（例如换成纯文本），整体重写兜底。
+      const fileBox = document.querySelector(`[data-dl-file="${kind}"] code`);
+      if (fileBox) {
+        const verNode = fileBox.querySelector("[data-dl-version]");
+        if (verNode) {
+          if (version) verNode.textContent = version.replace(/^v(?=\d)/, "");
+        } else if (name) {
+          fileBox.textContent = name;
+        }
+      }
+    });
+  }
+
+  syncDownloadInfo().then(applyAutoLink);
+
+  // 点击下载时给一点反馈（大文件下载浏览器不会有立即反馈）
+  document.querySelectorAll("[data-dl-btn]").forEach((a) => {
+    a.addEventListener("click", () => {
+      a.classList.add("is-downloading");
+      const label = a.textContent;
+      a.textContent = "开始下载…";
+      setTimeout(() => {
+        a.classList.remove("is-downloading");
+        a.textContent = label;
+      }, 2200);
+    });
+  });
+
   /* ---------- 9) 锚点平滑滚动（补偿固定导航高度） ---------- */
   document.querySelectorAll('a[href^="#"]').forEach((a) => {
     a.addEventListener("click", (e) => {

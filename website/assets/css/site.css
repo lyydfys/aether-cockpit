@@ -2224,6 +2224,44 @@ svg {
   gap: 16px;
 }
 
+/* ---------- 下载区补充：版本行与校验链接 ---------- */
+.dl-hash {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.dl-hash a {
+  color: var(--fg-2);
+  border-bottom: 1px solid transparent;
+  transition: color 0.16s, border-color 0.16s;
+}
+
+.dl-hash a:hover {
+  color: var(--fg);
+  border-bottom-color: var(--line-strong);
+}
+
+.dl-hash-sep {
+  color: var(--faint);
+  user-select: none;
+}
+
+/* 下载按钮上的文件大小提示 */
+.dl-file [data-dl-size] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 下载进行中的按钮状态 */
+.btn.is-downloading {
+  pointer-events: none;
+  opacity: 0.72;
+}
+
 /* =========================================================
    柔光玻璃材质（Soft Light Glass）
    ---------------------------------------------------------

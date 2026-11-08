@@ -4,6 +4,7 @@
 .review/
 .review-*/
 .online-check/
+.dl-check/
 
 # 临时校验产物
 _*.png

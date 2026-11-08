@@ -636,7 +636,7 @@
           <h2 class="h2" data-reveal style="--d:60ms">两条产物，同名同版本</h2>
         </div>
         <p class="lede" data-reveal style="--d:120ms">
-          从 Releases 页面拿最新构建。桌面版解压后直接运行，手机版是正式签名的 APK。
+          直接从这里下载，走官网线路。桌面版解压后直接运行，手机版是正式签名的 APK。
         </p>
       </div>
 
@@ -649,8 +649,8 @@
               <p>Windows 10/11 · 桌面版</p>
             </div>
           </div>
-          <div class="dl-file"><code>AetherCockpit-&lt;版本&gt;-windows-amd64.zip</code><span>ZIP</span></div>
-          <a class="btn btn--primary btn--block" href="https://github.com/lyydfys/aether-cockpit/releases/latest" target="_blank" rel="noopener">前往 Releases 下载</a>
+          <div class="dl-file" data-dl-file="windows"><code>AetherCockpit-<span data-dl-version>0.4.1</span>-windows-amd64.zip</code><span data-dl-size="windows">28.4 MB</span></div>
+          <a class="btn btn--primary btn--block" data-dl-btn="windows" href="/download/AetherCockpit-0.4.1-windows-amd64.zip" download>下载 Windows 版</a>
           <p class="dl-note">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2h.01"/></svg>
             需要 Microsoft Edge WebView2 Runtime；解压后运行 AetherCockpit.exe
@@ -665,14 +665,22 @@
               <p>arm64-v8a · Android 8.0+（API 26）</p>
             </div>
           </div>
-          <div class="dl-file"><code>AetherCockpit-&lt;版本&gt;-android-arm64-v8a.apk</code><span>APK</span></div>
-          <a class="btn btn--primary btn--block" href="https://github.com/lyydfys/aether-cockpit/releases/latest" target="_blank" rel="noopener">前往 Releases 下载</a>
+          <div class="dl-file" data-dl-file="android"><code>AetherCockpit-<span data-dl-version>0.4.1</span>-android-arm64-v8a.apk</code><span data-dl-size="android">24.1 MB</span></div>
+          <a class="btn btn--primary btn--block" data-dl-btn="android" href="/download/AetherCockpit-0.4.1-android-arm64-v8a.apk" download>下载 Android 版</a>
           <p class="dl-note">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2h.01"/></svg>
             侧载安装需允许「未知来源」；仅支持 arm64-v8a 设备
           </p>
         </article>
       </div>
+
+      <p class="dl-hash" data-reveal style="--d:100ms">
+        <span data-dl-version-line>当前版本 0.4.1</span>
+        <span class="dl-hash-sep" aria-hidden="true">·</span>
+        <a href="/download/SHA256SUMS.txt" download>校验值 SHA256</a>
+        <span class="dl-hash-sep" aria-hidden="true">·</span>
+        <a href="https://github.com/lyydfys/aether-cockpit/releases" target="_blank" rel="noopener">查看更新日志</a>
+      </p>
 
       <div class="dl-req" data-reveal style="--d:120ms">
         <div><b>桌面版</b>Windows 10/11 x64 · WebView2 Runtime</div>
@@ -774,7 +782,7 @@ curl.exe http://127.0.0.1:7860/v1/chat/completions `
         下载、接入、复制配置，三步之后你的客户端就不再只认一家上游。
       </p>
       <div class="finale-cta" data-reveal style="--d:120ms">
-        <a class="btn btn--primary btn--lg" href="https://github.com/lyydfys/aether-cockpit/releases/latest" target="_blank" rel="noopener">下载最新版本</a>
+        <a class="btn btn--primary btn--lg" data-dl-btn="auto" data-dl-auto href="/download/AetherCockpit-0.4.1-windows-amd64.zip" download>下载最新版本</a>
         <a class="btn btn--secondary btn--lg" href="https://github.com/lyydfys/aether-cockpit" target="_blank" rel="noopener">在 GitHub 上查看</a>
       </div>
     </div>
