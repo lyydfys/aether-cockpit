@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           # 只上传站点目录，仓库其余部分不进 Pages
           path: website
