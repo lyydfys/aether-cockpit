@@ -1016,6 +1016,7 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/settings/proxy", g.handleProxySetting)
 	m.HandleFunc("POST /api/proxy/check", g.handleProxyCheck)
 	m.HandleFunc("POST /api/settings/lan", g.handleLANSettings)
+	m.HandleFunc("POST /api/settings/gateway-key", g.handleGatewayKeyGenerate)
 	m.HandleFunc("POST /api/settings/autostart", g.handleAutoStartSetting)
 	m.HandleFunc("POST /api/settings/cors", g.handleCORSSettings)
 	m.HandleFunc("POST /api/settings/search-quota", g.handleSearchQuota)

@@ -262,8 +262,54 @@ export default {
     //
     // 后端只回显打码值（sk-………1234），所以这里永远是空输入框 + 状态提示：
     // 把打码值塞回输入框会导致用户一点保存就把真密钥覆盖成省略号。
+    // gatewayKeyControl 网关密钥：一键生成 / 手填 / 清除。
+    //
+    // 参考移动端做法：密钥由**服务端**生成（crypto/rand），明文只在生成
+    // 那一次回显，之后只给打码值。手填仍保留（用户想用自己的密钥时），
+    // 但要求 >= 16 字符，后端会再校验一次。
     function gatewayKeyControl(s) {
-      const inp = input({ type: 'password', placeholder: s.api_key_set ? '已设置（' + (s.api_key || '') + '）；留空不改' : 'sk-aether-…（留空 = 免鉴权）' });
+      const inp = input({
+        type: 'text',
+        placeholder: s.api_key_set ? '已设置（' + (s.api_key || '') + '）；可重新生成或手填' : '点「生成」自动创建，或手填 >= 16 字符',
+      });
+      let fresh = '';   // 刚生成的明文，仅本页可见，用于复制
+      const copyBtn = iconBtn('copy', '复制密钥', () => {
+        const v = fresh || inp.value.trim();
+        if (!v) { toast('没有可复制的密钥'); return; }
+        copyText(v);
+      });
+      copyBtn.hidden = true;
+
+      const gen = async () => {
+        const ok = await confirmDialog(
+          s.api_key_set ? '重新生成网关密钥？' : '生成网关密钥？',
+          '使用旧密钥的客户端会立刻无法接入，需要更新配置。新密钥只显示这一次，请及时复制。',
+          { danger: !!s.api_key_set, confirmText: '生成' },
+        );
+        if (!ok) return;
+        try {
+          const r = await api.post('settings/gateway-key', {});
+          fresh = r.api_key || '';
+          inp.value = fresh;
+          copyBtn.hidden = !fresh;
+          toast('已生成新密钥，请复制保存');
+          await refreshSelf({ keepKey: fresh });
+        } catch (e) {
+          toast('生成失败：' + (e.message || e));
+        }
+      };
+
+      const save = async () => {
+        const v = inp.value.trim();
+        if (!v) { toast('请输入密钥，或用「清除」按钮关闭鉴权'); return; }
+        if (v.length < 16) { toast('密钥至少 16 个字符，建议直接点「生成」'); return; }
+        try {
+          await api.post('settings', { api_key: v });
+          toast('网关密钥已更新');
+          await refreshSelf();
+        } catch (e) { toast('保存失败：' + (e.message || e)); }
+      };
+
       const clear = btn('清除', { ghost: true, onClick: async () => {
         const ok = await confirmDialog('清除网关密钥？',
           '远程与局域网请求将全部被拒绝，直到重新设置密钥。本机访问不受影响。',
@@ -275,17 +321,12 @@ export default {
           await refreshSelf();
         } catch (e) { toast('清除失败：' + (e.message || e)); }
       } });
-      return h('div', { class: 'inline' }, inp,
-        btn('保存', { primary: true, onClick: async () => {
-          const v = inp.value.trim();
-          if (!v) { toast('请输入密钥，或用「清除」按钮关闭鉴权'); return; }
-          try {
-            await api.post('settings', { api_key: v });
-            inp.value = '';
-            toast('网关密钥已更新');
-            await refreshSelf();
-          } catch (e) { toast('保存失败：' + (e.message || e)); }
-        } }),
+
+      return h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' },
+        inp,
+        btn('生成', { primary: true, onClick: gen }),
+        btn('保存', { ghost: true, onClick: save }),
+        copyBtn,
         clear);
     }
 
@@ -295,6 +336,7 @@ export default {
         await api.post('settings/lan', { on });
         toast(on ? '局域网已开启' : '局域网已关闭');
         await refreshSelf();
+        return true;
       } catch (e) {
         const msg = String(e.message || e);
         if (/密钥|api key|caller key/i.test(msg)) {
@@ -302,14 +344,24 @@ export default {
         } else {
           toast('切换局域网失败：' + msg);
         }
+        // 返回 false 让开关回滚——否则界面显示"已开启"但实际没开。
+        return false;
       }
     }
 
     // refreshSelf 重新拉一次设置并重绘（密钥状态、lanURLs 都变了）。
-    async function refreshSelf() {
+    async function refreshSelf(opts) {
       try {
         state.s = await api.get('settings');
         render();
+        // 刚生成的明文不在 GET 回显里（后端只给打码值），重绘后要手动填回，
+        // 否则用户刚看到的密钥一闪就没了、没法复制。
+        if (opts && opts.keepKey) {
+          const row = [...document.querySelectorAll('.set-row')]
+            .find((r) => r.querySelector('.t')?.textContent.trim() === '网关密钥');
+          const el = row && row.querySelector('input');
+          if (el) el.value = opts.keepKey;
+        }
       } catch {}
     }
 

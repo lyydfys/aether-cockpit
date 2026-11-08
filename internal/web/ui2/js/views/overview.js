@@ -531,12 +531,14 @@ export default {
           { danger: exists, confirmText: exists ? '轮换' : '生成' },
         );
         if (!ok) return;
-        const key = 'sk-aether-' + Array.from(crypto.getRandomValues(new Uint8Array(16))).map((b) => b.toString(16).padStart(2, '0')).join('');
+        // 统一走服务端生成（crypto/rand + 立即持久化），
+        // 与设置页的「生成」是同一个接口、同一套形态。
         try {
-          await api.post('settings', { api_key: key });
+          const r = await api.post('settings/gateway-key', {});
           toast(exists ? '密钥已轮换' : '密钥已生成');
+          if (r && r.api_key) copyText(r.api_key);
           await load();
-        } catch (e) { toast('保存失败：' + (e.message || e)); }
+        } catch (e) { toast('生成失败：' + (e.message || e)); }
       };
 
       // 掩码 → 眼睛看明文 → 复制；轮换走破坏性确认

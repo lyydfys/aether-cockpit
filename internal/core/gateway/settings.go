@@ -689,6 +689,13 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if body.APIKey != nil {
 		// 空串 = 关闭鉴权（仅本机监听时的合理默认）；否则立即生效，不用重启。
 		key := strings.TrimSpace(*body.APIKey)
+		// 手填的密钥太短等于没有：拦在这里，别等被人扫端口才发现。
+		// 生成接口产出固定 sk-aether-<32hex>，不受这条限制。
+		if key != "" && !gatewayKeyPlausible(key) {
+			g.settingsMu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "网关密钥至少 16 个字符（可用「生成」自动创建）"})
+			return
+		}
 		g.SetGatewayKey(key)
 		g.settings.APIKey = key
 	}

@@ -78,12 +78,31 @@ export function toggle(on, onChange, opts = {}) {
     class: 'toggle' + (on ? ' on' : ''), type: 'button', role: 'switch',
     'aria-checked': on ? 'true' : 'false', disabled: opts.disabled, title: opts.title || '', 'aria-label': opts.label || opts.title || null,
     // 自己维护视觉状态：弹窗里的开关没有二次渲染，不能等调用方重绘。
-    onclick: () => {
+    //
+    // 但"先乐观翻转"有个副作用：onChange 失败（比如后端拒绝开启局域网）时
+    // 开关会停在错误的位置，界面显示"已开启"而实际没开——用户看到的就是
+    // 开关是绿的、地址却写着"未开启"。所以这里等 onChange 的结果，
+    // 失败就回滚。
+    onclick: async () => {
       if (opts.disabled) return;
-      const next = !b.classList.contains('on');
+      const prev = b.classList.contains('on');
+      const next = !prev;
       b.classList.toggle('on', next);
       b.setAttribute('aria-checked', next ? 'true' : 'false');
-      onChange(next);
+      b.disabled = true;
+      try {
+        const ok = await onChange(next);
+        // onChange 返回 false 表示"明确失败"：回滚到原状态。
+        if (ok === false) {
+          b.classList.toggle('on', prev);
+          b.setAttribute('aria-checked', prev ? 'true' : 'false');
+        }
+      } catch {
+        b.classList.toggle('on', prev);
+        b.setAttribute('aria-checked', prev ? 'true' : 'false');
+      } finally {
+        b.disabled = false;
+      }
     },
   }, h('i'));
   return b;
