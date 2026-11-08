@@ -3,6 +3,7 @@
 .shots-*/
 .review/
 .review-*/
+.online-check/
 
 # 临时校验产物
 _*.png

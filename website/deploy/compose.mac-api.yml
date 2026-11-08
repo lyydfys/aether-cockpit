@@ -1,0 +1,56 @@
+# Aether Cockpit 官网 —— 部署到 mac-api 生产服务器
+#
+# 与通用 docker-compose.yml 的差别：
+#   1. **不映射任何宿主机端口** —— 80/443 已被现有 Caddy 占用，
+#      本站只挂在 mac-api_mac-net 内网，由 Caddy 反代 aether-site:80
+#   2. 网络用外部已有的 mac-api_mac-net，不新建
+#   3. 内存上限收到 64M（服务器总内存 1.8G，可用仅约 500M）
+#
+# 目录：/opt/aether-site/
+# 启动：docker compose -f docker-compose.yml up -d --build
+
+services:
+  site:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aether-site:latest
+    container_name: aether-site
+    restart: unless-stopped
+
+    # 刻意不写 ports：由 Caddy 在同一内网里直接访问
+    expose:
+      - "80"
+
+    # 静态站只读，少一条被写入的路径
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+
+    networks:
+      - mac-net
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  mac-net:
+    external: true
+    name: mac-api_mac-net

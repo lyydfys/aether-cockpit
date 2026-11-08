@@ -12,6 +12,8 @@ COPY assets/    /usr/share/nginx/html/assets/
 
 # 容器内 nginx 配置
 COPY deploy/nginx-container.conf /etc/nginx/conf.d/default.conf
+# 安全响应头（被各 location include）
+COPY deploy/security-headers.conf /etc/nginx/security-headers.conf
 
 # 默认配置里那个 50x 页面用不上，去掉减少混淆
 RUN rm -f /usr/share/nginx/html/index.nginx-debian.html
