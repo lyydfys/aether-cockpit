@@ -147,7 +147,13 @@ internal fun OnboardPage(
     val cachedProviders by viewModel.cachedProviders.collectAsStateWithLifecycle()
     LaunchedEffect(providers) { viewModel.rememberProviders(providers) }
     val offlineCache = !status.running && providers.isEmpty() && cachedProviders.providers.isNotEmpty()
-    val shownProviders = if (offlineCache) cachedProviders.providers else providers
+    // 接入页不列「OpenAI 兼容端点」（provider id `openai-compat`）。
+    // 它是**通用空壳渠道**：接进去的账号其模型 id 永远是 `openai-compat/<模型名>`，
+    // 前缀读不出是哪个上游；而且它只是个占位渠道，没有真实厂商语义。
+    // 中转站/自建端点的正确入口是下面的「自定义渠道（第三方中转站）」卡片：
+    // 会建出 `custom-<渠道名>` 的独立渠道，前缀可读、可整条删除、多个中转站互不干扰。
+    val shownProviders = (if (offlineCache) cachedProviders.providers else providers)
+        .filterNot { it.id == "openai-compat" }
     val filtered = applyOnboardQuery(shownProviders, accounts, query, filters)
     // 名称排序按字母分组（目录顺序）；筛选/排序入口已按用户要求移除，默认即此形态。
     val grouped = filters.sort == OnboardSort.NAME

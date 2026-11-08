@@ -48,8 +48,8 @@ data class CustomProviderDraft(
     val modelsText: String = "",
 )
 
-/** 渠道 ID 若手动提供，只允许小写 slug（默认不用）。 */
-internal val CUSTOM_PROVIDER_ID_PATTERN = Regex("^[a-z0-9][a-z0-9._-]{0,63}$")
+/** 渠道 ID 若手动提供，允许小写 slug 与中日韩文字（与后端 slugifyCustomID 一致）。 */
+internal val CUSTOM_PROVIDER_ID_PATTERN = Regex("^[a-z0-9\\u2E80-\\u9FFF\\u3040-\\u30FF\\uAC00-\\uD7AF][a-z0-9._\\-\\u2E80-\\u9FFF\\u3040-\\u30FF\\uAC00-\\uD7AF]{0,63}$")
 
 /** 内置渠道 ID：自定义 id 与它们撞名时，服务端会改内置渠道账号，必须在本地拦下。 */
 internal fun customProviderIdConflict(id: String, existingIds: Set<String>): Boolean =

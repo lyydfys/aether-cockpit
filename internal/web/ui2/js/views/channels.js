@@ -20,7 +20,10 @@ const autoOffLabel = (p) => {
 };
 
 const POOL = { 'Claude and GPT models': 'Claude', 'Gemini Models': 'Gemini' };
-const isTest = (id) => /^mock/.test(id) || id === 'openai-compat';
+// 只有 mock* 算测试渠道。openai-compat 是**通用接入渠道**（接任意 OpenAI 兼容端点），
+// 把它当测试渠隐藏会导致：用户在接入页建的账号在渠道列表/额度页完全看不到，
+// 但它的模型又以 openai-compat/xxx 对外暴露 —— 前缀不可读且来源不明。
+const isTest = (id) => /^mock/.test(id);
 
 export default {
   title: '账号与额度',

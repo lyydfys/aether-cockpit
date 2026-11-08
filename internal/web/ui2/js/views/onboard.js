@@ -227,6 +227,15 @@ export default {
 
 /* 打开某渠道的接入向导；channels 页也复用它。 */
 export function openProvider(p, done) {
+  // 「OpenAI 兼容端点」是**通用接入渠道**，不是具体厂商：它的模型 id 永远是
+  // `openai-compat/<模型名>`，把中转站接在这里会产生不可读的前缀，而且该渠道
+  // 会被渠道列表当测试渠过滤掉，用户在额度页根本看不见自己刚建的账号。
+  // 所以这里直接转去「自定义渠道」抽屉：同样填 地址 + Key + 模型，
+  // 但会建出一条 `custom-<渠道名>` 的独立渠道，前缀可读、能看到、能整条删。
+  if (p.id === 'openai-compat') {
+    openCustomChannelsDrawer({ reload: done });
+    return;
+  }
   const methods = (p.supported_auths || []).slice();
   if (/^minimax-code/.test(p.id)) methods.push('minimax_device');
   if (/^qoder-/.test(p.id)) methods.push('qoder_device');

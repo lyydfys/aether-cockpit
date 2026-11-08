@@ -7,11 +7,12 @@ import (
 	"testing"
 )
 
-// 纯中文名的自定义渠道必须能建：表单上没有"填标识"的位置，
-// slugify 会把中文全滤掉，过去直接报"渠道标识不能为空"，用户无路可走。
+// 纯中文名的自定义渠道必须能建，而且**中文直接成为渠道 id**。
 //
-// 兜底约定与 upsertCustomChannelFromDraft 一致：`relay-<名字短哈希>`。
-func TestCustomChannelChineseNameGetsFallbackID(t *testing.T) {
+// 历史：slugify 只认 ASCII，中文全被滤掉 → 一度直接报"渠道标识不能为空"；
+// 后来兜底成 `relay-<名字哈希>`，可以让用户建出来，但模型前缀是
+// `custom-relay-3f2a1b/xxx`，完全认不出是哪个渠道。现在中文直接进 slug。
+func TestCustomChannelChineseNameBecomesID(t *testing.T) {
 	g := New(Config{SettingsPath: t.TempDir() + "/settings.json", UsagePath: "-"})
 
 	body := `{"name":"测试中转","base_url":"https://relay.example.com/v1","models":["gpt-4o-mini"]}`
@@ -31,11 +32,8 @@ func TestCustomChannelChineseNameGetsFallbackID(t *testing.T) {
 	if ch.Name != "测试中转" {
 		t.Fatalf("name = %q", ch.Name)
 	}
-	if !strings.HasPrefix(ch.ID, "relay-") {
-		t.Fatalf("中文名应回退到 relay-<hash>，实际 %q", ch.ID)
-	}
-	if len(ch.ID) <= len("relay-") {
-		t.Fatalf("id 缺少哈希部分：%q", ch.ID)
+	if ch.ID != "测试中转" {
+		t.Fatalf("中文名应直接成为渠道 id，实际 %q", ch.ID)
 	}
 }
 
@@ -58,19 +56,25 @@ func TestCustomChannelChineseNameIsIdempotent(t *testing.T) {
 	}
 }
 
-// 有 ASCII 字符的名字仍走原有 slugify，不要因为加了兜底就改变既有行为。
-func TestCustomSlugifyUnchangedForASCII(t *testing.T) {
+// slug 规则：ASCII 保留、中文保留、其它折成 `-`、纯符号得空串。
+func TestCustomSlugifyRules(t *testing.T) {
 	cases := map[string]string{
-		"My Relay":      "my-relay",
-		"relay_2026":    "relay-2026",
-		"公司中转 My Relay": "my-relay",
+		"My Relay":          "my-relay",
+		"relay_2026":        "relay-2026",
+		"公司中转 My Relay":  "公司中转-my-relay",
+		"测试中转":             "测试中转",
+		"公司 中转":           "公司-中转",
+		"中转站（测试）":          "中转站-测试",
 	}
 	for in, want := range cases {
 		if got := slugifyCustomID(in); got != want {
 			t.Errorf("slugifyCustomID(%q) = %q，want %q", in, got, want)
 		}
 	}
-	if got := slugifyCustomID("测试中转"); got != "" {
-		t.Fatalf("纯中文仍应返回空串（交给兜底处理），得到 %q", got)
+	// 纯符号没有可读字符，仍然回退给调用方处理。
+	for _, in := range []string{"🎉🎉", "...", "()"} {
+		if got := slugifyCustomID(in); got != "" {
+			t.Errorf("slugifyCustomID(%q) = %q，want 空串", in, got)
+		}
 	}
 }

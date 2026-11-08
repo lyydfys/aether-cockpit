@@ -673,6 +673,14 @@ func New(cfg Config) *Gateway {
 		log.Printf("[WARN] 提升未就绪账号失败: %v", err)
 	} else if promoted > 0 {
 		log.Printf("启动时把 %d 个未就绪账号提升回池", promoted)
+	// 一次性迁移：早先接在「OpenAI 兼容端点」（内置 openai-compat 空壳）上的中转站账号，
+	// 迁到以账号名命名的独立自定义渠道。判据是"凭据里有 base_url"——内置渠道本身没有
+	// 真实上游，带 base_url 的一定是用户填的中转站。迁移后模型前缀从
+	// `openai-compat/xxx` 变成 `custom-<账号名>/xxx`，用户才认得出是哪个渠道。
+	// 幂等：旧账号迁移时会被删除，第二次启动不会再命中。
+	if g.accountStoreErr == nil && cfg.AccountStorePath != "" {
+		g.migrateLegacyRelayAccounts()
+	}
 	}
 	// 账号恢复后把渠道级自定义请求头套上（保存时已套过的账号会幂等重套）。
 	g.applyProviderTransportAll()

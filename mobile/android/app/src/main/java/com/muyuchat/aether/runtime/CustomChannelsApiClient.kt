@@ -98,11 +98,23 @@ internal fun validateCustomChannelBaseUrl(raw: String): String? {
  * 服务端 `slugifyCustomID` 的 Kotlin 镜像：
  * 小写 → 非 [a-z0-9] 收敛成单个 `-` → 去首尾 `-` → 截断 40 字符。
  */
+/**
+ * 把用户输入变成渠道 id 片段。
+ *
+ * 允许：ASCII 字母数字 + 中日韩文字；其余折成单个 `-`。
+ * 放中文进来是因为「公司中转」这类名字此前会被清空，只能回退成 `relay-<hash>`，
+ * 用户看到模型前缀 `custom-relay-3f2a1b/xxx` 完全认不出是自己的渠道。
+ * 与后端 `slugifyCustomID`（internal/core/gateway/custom_channels.go）保持同一规则。
+ */
 internal fun slugifyCustomChannelId(raw: String): String {
     val out = StringBuilder()
     var lastDash = false
     for (ch in raw.trim().lowercase()) {
-        if (ch in 'a'..'z' || ch in '0'..'9') {
+        val keep = ch in 'a'..'z' || ch in '0'..'9' ||
+            ch.code in 0x2E80..0x9FFF ||   // CJK 部首扩展、汉字
+            ch.code in 0x3040..0x30FF ||   // 日文假名
+            ch.code in 0xAC00..0xD7AF      // 韩文音节
+        if (keep) {
             out.append(ch)
             lastDash = false
         } else if (!lastDash && out.isNotEmpty()) {
@@ -110,6 +122,7 @@ internal fun slugifyCustomChannelId(raw: String): String {
             lastDash = true
         }
     }
+    // 按字符（不是字节）截断，避免切断多字节字符。
     return out.toString().trim('-').take(40).trim('-')
 }
 

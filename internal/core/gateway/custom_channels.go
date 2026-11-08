@@ -60,8 +60,14 @@ func customChannelProviderID(id string) string { return "custom-" + id }
 // slugifyCustomID 把用户输入变成合法 id（小写字母/数字/连字符）。
 //
 // 非 ASCII（中文、日文等）不会被转写——它们直接落到 `default` 分支变成连字符，
-// 于是「公司中转」这类纯中文名字会被清成空串。调用方必须能接受空结果并再挑一个
-// 稳定的回退标识（见 `customChannelSlug`）。
+// slugifyCustomID 把用户输入变成渠道 id 片段。
+//
+// 允许的字符：ASCII 字母数字 + **中日韩文字**。其余（空格、标点、符号）折成单个 `-`。
+//
+// 为什么放中文进来：以前只认 ASCII，「公司中转」这类纯中文名会被全部清掉，
+// 只能回退成 `relay-<hash>` —— 用户看到模型前缀是 `custom-relay-3f2a1b/xxx`，
+// 完全认不出是自己的哪个渠道。模型 id 与 /v1/models 的 id 都是普通 JSON 字符串，
+// UTF-8 中文在 HTTP path 里也有明确编码规则，没有副作用。
 func slugifyCustomID(raw string) string {
 	raw = strings.ToLower(strings.TrimSpace(raw))
 	var b strings.Builder
@@ -69,6 +75,15 @@ func slugifyCustomID(raw string) string {
 	for _, r := range raw {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		case r >= 0x2E80 && r <= 0x9FFF: // CJK 部首扩展、汉字
+			b.WriteRune(r)
+			lastDash = false
+		case r >= 0x3040 && r <= 0x30FF: // 日文假名
+			b.WriteRune(r)
+			lastDash = false
+		case r >= 0xAC00 && r <= 0xD7AF: // 韩文音节
 			b.WriteRune(r)
 			lastDash = false
 		default:
@@ -79,8 +94,9 @@ func slugifyCustomID(raw string) string {
 		}
 	}
 	out := strings.Trim(b.String(), "-")
-	if len(out) > 40 {
-		out = strings.Trim(out[:40], "-")
+	// 按**字节**截断会切断多字节字符；这里按 rune 计数，上限 40 个字符。
+	if rs := []rune(out); len(rs) > 40 {
+		out = strings.Trim(string(rs[:40]), "-")
 	}
 	return out
 }
