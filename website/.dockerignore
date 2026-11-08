@@ -1,0 +1,28 @@
+# Docker 构建上下文排除项（上下文 = website/ 根目录）
+#
+# 镜像里只需要 index.html、404.html、assets/、deploy/nginx-container.conf。
+# 注意：不要把 Dockerfile 本身排除，否则 -f deploy/Dockerfile 在部分
+# BuildKit 版本下会找不到文件。
+
+scripts/
+dist/
+
+# 只在宿主机部署方式下用到的文件
+deploy/aether-cockpit.conf
+deploy/docker-compose.yml
+deploy/README.md
+
+# 开发文件
+*.md
+.gitignore
+.git/
+.review/
+.review-*/
+.shots/
+.shots-*/
+_*.png
+_*.txt
+_*.mjs
+_*.sh
+**/__pycache__/
+**/*.pyc

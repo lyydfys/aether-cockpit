@@ -94,6 +94,18 @@ python scripts/serve.py 8125
 - 首帧不闪：`<head>` 内联脚本在 `body` 渲染前定主题；
 - 图标浅色底板**不随主题变**（`#f8f9fa` 是品牌固定值，否则青点失去对比度）。
 
+## 部署
+
+上云服务器的完整步骤见 [deploy/README.md](./deploy/README.md)。
+Docker 与宿主机 nginx 两种方式，nginx 配置实测 12 项通过。
+
+快速开始：
+
+\\ash
+python scripts/set-site-url.py https://你的域名      # 1. 设站点地址
+python scripts/package.py                           # 2. 打包（宿主机方式）
+docker compose -f deploy/docker-compose.yml up -d --build   # 3a. Docker
+\\n
 ## 资源与性能
 
 按国内常见移动网络（1.6 Mbps / 150 ms RTT）实测：
