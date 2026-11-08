@@ -9,10 +9,12 @@ rm -f "$OUT"
 tar -czf "$OUT" \
     index.html \
     404.html \
+    changelog.html \
     assets \
     deploy/Dockerfile \
     deploy/nginx-container.conf \
     deploy/security-headers.conf \
+    deploy/sync-changelog.py \
     deploy/compose.mac-api.yml
 
 echo "打包完成: $(du -h "$OUT" | cut -f1)"

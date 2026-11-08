@@ -6,8 +6,9 @@
 FROM nginx:1.27-alpine
 
 # 站点文件
-COPY index.html /usr/share/nginx/html/index.html
-COPY 404.html   /usr/share/nginx/html/404.html
+COPY index.html     /usr/share/nginx/html/index.html
+COPY 404.html       /usr/share/nginx/html/404.html
+COPY changelog.html /usr/share/nginx/html/changelog.html
 COPY assets/    /usr/share/nginx/html/assets/
 
 # 容器内 nginx 配置

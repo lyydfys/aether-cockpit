@@ -1,0 +1,267 @@
+/* ---------- 更新日志页 ---------- */
+
+.cl-hero {
+  padding-top: clamp(96px, 12vw, 132px);
+  padding-bottom: clamp(20px, 3vw, 32px);
+}
+
+.cl-title {
+  margin: 14px 0 0;
+  font-size: clamp(30px, 4.4vw, 44px);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 650;
+}
+
+.cl-lede {
+  margin-top: 16px;
+  max-width: 46em;
+  font-size: clamp(14.5px, 1.6vw, 16px);
+  line-height: 1.75;
+  color: var(--fg-2);
+}
+
+.cl-meta {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.cl-body {
+  padding-bottom: clamp(60px, 8vw, 100px);
+}
+
+.cl-list {
+  display: grid;
+  gap: 18px;
+  margin-top: 8px;
+}
+
+/* 每个版本一张卡 */
+.cl-rel {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--bg-raise);
+  padding: clamp(20px, 3vw, 28px);
+  backdrop-filter: blur(var(--glass-blur2, 18px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 14px 32px -22px var(--shadow-color);
+}
+
+.cl-rel--latest {
+  border-color: var(--line-strong);
+}
+
+.cl-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cl-ver {
+  font-size: clamp(19px, 2.4vw, 23px);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.cl-date {
+  font-size: 12.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.cl-tag {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  color: var(--accent-on-bg);
+}
+
+/* 正文块 */
+.cl-flow {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--fg-2);
+}
+
+.cl-flow h3,
+.cl-flow h4 {
+  margin: 6px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: -0.005em;
+}
+
+.cl-flow h4 {
+  font-size: 14px;
+  color: var(--fg-2);
+}
+
+.cl-flow p {
+  margin: 0;
+}
+
+.cl-flow ul,
+.cl-flow ol {
+  margin: 0;
+  padding-left: 1.15em;
+  display: grid;
+  gap: 6px;
+}
+
+.cl-flow ul {
+  list-style: disc;
+}
+
+.cl-flow ol {
+  list-style: decimal;
+}
+
+.cl-flow li::marker {
+  color: var(--faint);
+}
+
+.cl-flow code {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--code-bg, rgba(0, 0, 0, 0.16));
+  border: 1px solid var(--line);
+  word-break: break-word;
+}
+
+.cl-flow strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.cl-flow hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 6px 0;
+}
+
+/* 版本附带的下载 */
+.cl-dl {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.cl-dl-label {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+
+.cl-dl a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-2);
+  background: var(--bg-card);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-2);
+  transition: border-color 0.16s, color 0.16s, background 0.16s;
+}
+
+.cl-dl a:hover {
+  border-color: var(--line-strong);
+  color: var(--fg);
+}
+
+.cl-dl .cl-size {
+  font-size: 11.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.cl-empty {
+  margin-top: 28px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+
+.cl-empty a {
+  color: var(--accent-on-bg);
+  border-bottom: 1px solid currentColor;
+}
+
+/* 骨架屏：数据到达前不留白 */
+.cl-skeleton {
+  height: 128px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: var(--bg-raise);
+  animation: cl-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes cl-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cl-skeleton { animation: none; opacity: 0.7; }
+}
+
+@media (max-width: 620px) {
+  .cl-rel {
+    padding: 18px 16px;
+  }
+  .cl-flow {
+    font-size: 14px;
+  }
+  .cl-dl {
+    gap: 8px;
+  }
+  .cl-dl a {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
+
+/* ---------- 导航品牌标记 ----------
+   两个坑，都在首页之外才暴露：
+   1. site.css 有 `.site-nav .nav-mark-slot > svg { opacity: 0 }` —— 首页靠
+      开屏动画结束时把图标"飞入"并置为可见，本页没有开屏，图标会一直是透明的。
+      所以这里必须显式覆盖回 1。
+   2. 图标底板是 #F8F9FA，在柔光玻璃主题的浅色导航上几乎融进背景，
+      加一圈极淡描边和投影让它浮起来。 */
+.site-nav .nav-mark-slot > svg {
+  opacity: 1;
+}
+
+.nav-mark-slot {
+  border-radius: 9px;
+  box-shadow:
+    0 0 0 1px rgba(148, 168, 198, 0.34),
+    0 1px 3px rgba(56, 78, 112, 0.14);
+}
+
+[data-theme="dark"] .nav-mark-slot {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 1px 3px rgba(0, 0, 0, 0.4);
+}

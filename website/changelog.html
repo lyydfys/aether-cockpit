@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="glass">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>更新日志 — Aether Cockpit</title>
+<meta name="description" content="Aether Cockpit 的版本更新记录：每个版本改了什么、修了哪些问题、下载对应构建。">
+<meta name="theme-color" content="#eef2fa">
+<link rel="canonical" href="https://aether.mac-api.xyz/changelog.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Aether Cockpit">
+<meta property="og:title" content="Aether Cockpit 更新日志">
+<meta property="og:description" content="每个版本改了什么、修了哪些问题、下载对应构建。">
+<meta property="og:url" content="https://aether.mac-api.xyz/changelog.html">
+<meta property="og:image" content="https://aether.mac-api.xyz/assets/img/og-cover.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/img/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/css/site.css">
+<link rel="stylesheet" href="assets/css/changelog.css">
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem("aether-theme");
+      var ok = saved === "light" || saved === "dark" || saved === "glass";
+      document.documentElement.dataset.theme = ok ? saved : "glass";
+    } catch (e) {
+      document.documentElement.dataset.theme = "glass";
+    }
+  })();
+</script>
+</head>
+<body>
+<div class="g-atmos" aria-hidden="true"></div>
+
+<!-- 图标 symbol：必须放在使用它的 <use> 之前，否则首屏可能显示空白 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="bm-full" viewBox="0 0 108 108">
+      <rect class="bm-bg" width="108" height="108" rx="20"/>
+      <path class="bm-bubble" d="M54,20 C35.22,20 20,33.43 20,50 C20,59.39 24.87,67.76 32.22,73.19 L28,88 L43.55,83.33 C46.86,84.45 50.36,85 54,85 C72.78,85 88,71.57 88,55 C88,38.43 72.78,20 54,20 Z"/>
+      <path class="bm-star" d="M54,34 L57,47 L70,50 L57,53 L54,66 L51,53 L38,50 L51,47 Z"/>
+      <circle class="bm-dot-a" cx="36" cy="38" r="3.5"/>
+      <circle class="bm-dot-a" cx="72" cy="62" r="3.5"/>
+      <circle class="bm-dot-b" cx="42" cy="68" r="2.5"/>
+      <circle class="bm-dot-b" cx="66" cy="36" r="2"/>
+      <g class="bm-extras">
+        <circle cx="77" cy="75" r="11" fill="#fff" stroke="#13a99b" stroke-width="1.7"/>
+        <path d="M72.5 75 H81.5" stroke="#1a73e8" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+        <circle cx="72.5" cy="75" r="2.1" fill="#13a99b"/>
+        <circle cx="77" cy="75" r="2.5" fill="#1a73e8"/>
+        <circle cx="81.5" cy="75" r="2.1" fill="#13a99b"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<a class="skip-link" href="#log">跳到更新日志</a>
+
+<header class="site-nav" id="site-nav">
+  <div class="shell nav-inner">
+    <a class="brand" href="./" aria-label="Aether Cockpit 首页">
+      <span class="nav-mark-slot" id="nav-mark-slot" aria-hidden="true">
+        <svg class="brandmark" viewBox="0 0 108 108"><use href="#bm-full"></use></svg>
+      </span>
+      <span class="brand-name">Aether Cockpit</span>
+      <span class="brand-sub">/ 算力聚合网关</span>
+    </a>
+
+    <nav class="nav-links" aria-label="主导航">
+      <a href="./#capability">能力</a>
+      <a href="./#stage">工作台</a>
+      <a href="./#routing">路由</a>
+      <a href="./#channels">渠道</a>
+      <a href="./#security">安全</a>
+      <a href="./#download">下载</a>
+    </nav>
+
+    <div class="nav-tail">
+      <button
+        class="nav-toggle"
+        type="button"
+        aria-label="打开导航菜单"
+        aria-expanded="false"
+        aria-controls="nav-drawer"
+      >
+        <span></span><span></span><span></span>
+      </button>
+      <div class="theme-switch" role="group" aria-label="配色">
+        <button type="button" data-theme-set="glass" aria-pressed="true" aria-label="柔光玻璃" title="柔光玻璃">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M12 3.4 19.2 7v8.4a1 1 0 0 1-.5.9L12 20.6 5.3 16.3a1 1 0 0 1-.5-.9V7Z"/>
+            <path d="M5 7.4 12 11.6l7-4.2M12 11.6v8.8"/>
+          </svg>
+        </button>
+        <button type="button" data-theme-set="light" aria-pressed="false" aria-label="纯白" title="纯白">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="12" cy="12" r="4.2"/>
+            <path d="M12 2.6v2.2M12 19.2v2.2M4.6 12H2.4M21.6 12h-2.2M6.4 6.4 4.9 4.9M19.1 19.1l-1.5-1.5M17.6 6.4l1.5-1.5M4.9 19.1l1.5-1.5"/>
+          </svg>
+        </button>
+        <button type="button" data-theme-set="dark" aria-pressed="false" aria-label="纯黑" title="纯黑">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M20.2 14.6A8.4 8.4 0 0 1 9.4 3.8 8.6 8.6 0 1 0 10.8 20.3a8.4 8.4 0 0 1 9.4-5.7Z"/>
+          </svg>
+        </button>
+      </div>
+      <a class="btn btn--primary" href="./#download">下载</a>
+    </div>
+  </div>
+
+  <div class="nav-scrim" id="nav-scrim" hidden></div>
+  <div class="nav-drawer" id="nav-drawer" hidden>
+    <a href="./#capability">能力</a>
+    <a href="./#stage">工作台</a>
+    <a href="./#routing">路由</a>
+    <a href="./#channels">渠道</a>
+    <a href="./#security">安全</a>
+    <a href="./#download">下载</a>
+    <a href="./changelog.html">更新日志</a>
+    <a href="https://github.com/lyydfys/aether-cockpit" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</header>
+
+<main id="log">
+  <section class="cl-hero">
+    <div class="shell">
+      <p class="eyebrow">CHANGELOG</p>
+      <h1 class="cl-title">更新日志</h1>
+      <p class="cl-lede">
+        每个版本改了什么、修了哪些问题。安装包可以直接从本站下载，
+        不必跳转到代码托管平台。
+      </p>
+      <p class="cl-meta" id="cl-meta" aria-live="polite">正在读取版本信息…</p>
+    </div>
+  </section>
+
+  <section class="cl-body">
+    <div class="shell">
+      <div class="cl-list" id="cl-list"></div>
+      <p class="cl-empty" id="cl-empty" hidden>
+        暂时读不到更新日志。可以到
+        <a href="https://github.com/lyydfys/aether-cockpit/releases" target="_blank" rel="noopener">发布页</a>
+        查看，或稍后刷新。
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="shell foot-end">
+    <span>© 2026 Aether Cockpit · Apache-2.0</span>
+    <span class="spacer">
+      <a href="./">首页</a>
+      <a href="./#download">下载</a>
+      <a href="https://github.com/lyydfys/aether-cockpit" target="_blank" rel="noopener">GitHub</a>
+    </span>
+  </div>
+</footer>
+
+
+<script type="module" src="assets/js/changelog.js"></script>
+<script src="assets/js/site.js" defer></script>
+</body>
+</html>

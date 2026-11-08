@@ -134,9 +134,19 @@ function check(name, ok, detail = "") {
   await page.waitForTimeout(400);
   const drawer = await page.evaluate(() => {
     const d = document.getElementById("nav-drawer");
-    return { hidden: d.hidden, links: d.querySelectorAll("a").length };
+    const as = [...d.querySelectorAll("a")];
+    return {
+      hidden: d.hidden,
+      links: as.length,
+      hrefs: as.map((a) => a.getAttribute("href") || ""),
+    };
   });
-  check("抽屉可展开", !drawer.hidden && drawer.links === 8, `(${drawer.links} 个入口)`);
+  check(
+    "抽屉可展开",
+    !drawer.hidden && drawer.links >= 8,
+    `(${drawer.links} 个入口)`
+  );
+  check("抽屉含更新日志", drawer.hrefs.some((h) => h.includes("changelog")), "");
 
   await page.screenshot({ path: path.join(".online-check", "mobile-drawer.png") });
   await ctx.close();
