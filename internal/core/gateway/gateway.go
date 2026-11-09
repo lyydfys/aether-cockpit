@@ -992,6 +992,7 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/accounts/{id}/checkin", g.handleCheckIn)
 	m.HandleFunc("GET /api/runtime", g.handleRuntime)
 	m.HandleFunc("GET /api/logs", g.handleLogs)
+	m.HandleFunc("DELETE /api/logs", g.handleClearLogs)
 	// 内置工具服务：客户端可直接调用，也可由智能体作为工具使用。
 	m.HandleFunc("POST /v1/tools/web_search", g.auth(g.handleToolWebSearch))
 	m.HandleFunc("POST /v1/images/generations", g.auth(g.handleImageGenerate))
@@ -1037,6 +1038,7 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/settings/{key}", g.handleUISetting)
 	m.HandleFunc("POST /api/settings/allowips", g.handleAllowIPsSettings)
 	m.HandleFunc("GET /api/usage", g.handleUsage)
+	m.HandleFunc("DELETE /api/usage", g.handleUsageClear)
 	// 订阅额度卡片（aether 用量页的 subscriptions 区）。
 	m.HandleFunc("GET /api/channels/status", g.handleChannelStatus)
 	m.HandleFunc("POST /api/channels/check", g.handleChannelCheck)
@@ -1099,6 +1101,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("GET /api/usage/quotas/history", g.handleUsageQuotasHistory)
 	m.HandleFunc("GET /api/usage/quotas/history/holds", g.handleQuotaHistoryHolds)
 	m.HandleFunc("GET /api/usage/requests", g.handleLedger)
+	m.HandleFunc("DELETE /api/usage/requests", g.handleLedgerClear)
+	m.HandleFunc("DELETE /api/usage/requests/{id}", g.handleLedgerDeleteOne)
 	m.HandleFunc("GET /api/usage/requests.csv", g.handleLedgerCSV)
 	m.HandleFunc("POST /api/usage/requests/export", g.handleLedgerExport)
 	m.HandleFunc("GET /api/usage/requests/content", g.handleLedgerContent)

@@ -4,28 +4,21 @@ import (
 	"strings"
 
 	"aether-cockpit/internal/core/channels"
-	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/provider"
 )
 
-// defaultConfig 是通用的「OpenAI 兼容端点」，行为与旧版一致。
+// defaultConfig 是通用的「OpenAI 兼容端点」。
+//
+// **不再登记内置模型清单**（曾经塞了 gpt-4o / deepseek-chat / deepseek-reasoner 三条占位）。
+// 理由：
+//   - 这个渠道的定位就是"上游模型名直接透传"，模型清单应当来自上游 `/models`（catalog 的
+//     live 目录），而不是在本地写死几个名字；
+//   - 写死的那三条会在客户端模型列表里变成 `openai-compat/gpt-4o` 这种跟用户实际接入的
+//     上游毫无关系的条目，还会被 `auto/` 自动发现组放大成 `auto/gpt-4o` —— 即"奇奇怪怪的模型名"；
+//   - 空清单时 `/v1/models` 只列上游真实返回的模型，接什么上游就看到什么，不会误导。
 var defaultConfig = Config{
 	ID: "openai-compat", DisplayName: "OpenAI 兼容端点", Family: "generic", RegionTag: "ANY", BrandColor: "#0EA5E9",
 	Description: "接入任意标准 OpenAI 协议端点：官方 API（DeepSeek/Kimi/GLM）、本地推理（Ollama/vLLM）、中转服务。模型名直接透传，无需逐个登记。",
-	Models: []ir.ModelMeta{
-		{
-			ID: "openai-compat/gpt-4o", UpstreamModel: "gpt-4o", DisplayName: "GPT-4o", ContextWindow: 128000,
-			Capabilities: ir.ModelCapabilities{ToolCall: true, Vision: true, Streaming: true},
-		},
-		{
-			ID: "openai-compat/deepseek-chat", UpstreamModel: "deepseek-chat", DisplayName: "DeepSeek Chat", ContextWindow: 64000,
-			Capabilities: ir.ModelCapabilities{ToolCall: true, Streaming: true},
-		},
-		{
-			ID: "openai-compat/deepseek-reasoner", UpstreamModel: "deepseek-reasoner", DisplayName: "DeepSeek Reasoner", ContextWindow: 64000,
-			Capabilities: ir.ModelCapabilities{ToolCall: true, Reasoning: true, Streaming: true},
-		},
-	},
 }
 
 var azureConfig = Config{

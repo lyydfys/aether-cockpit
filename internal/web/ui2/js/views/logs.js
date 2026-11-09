@@ -1,7 +1,7 @@
 /* 请求日志：读取持久化账本，单请求详情含错误解释、耗时分解与 Token/计费。 */
 import { h, clear } from '../dom.js';
 import * as api from '../api.js';
-import { card, chip, btn, iconBtn, input, empty, errorBox, skeleton, toast, fmtDate, fmtTokens, fmtCost, drawer, copyText } from '../components.js';
+import { card, chip, btn, iconBtn, input, empty, errorBox, skeleton, toast, fmtDate, fmtTokens, fmtCost, drawer, copyText, confirmDialog } from '../components.js';
 
 const promptTokens = (e) => (e.input_tokens || 0) + (e.cache_read || 0) + (e.cache_write || 0);
 
@@ -187,7 +187,19 @@ export default {
         live.textContent = state.live ? '自动刷新 · 开' : '自动刷新 · 关';
         toast(state.live ? '每 5 秒刷新日志' : '已关闭自动刷新');
       });
-      c.head.append(h('span', { style: 'flex:1' }), rangeBar, search, seg, live, iconBtn('refresh', '刷新', () => load(true)));
+      // 清空账本：不可撤销的删除，走危险色按钮 + 二次确认。只清逐条记录，
+      // 用量聚合（用量页）与内存请求日志是另外两套数据，各自有入口。
+      const clearBtn = btn('清空', { onClick: async () => {
+        if (!rows.length) { toast('没有可清空的记录'); return; }
+        const ok = await confirmDialog('清空全部请求记录？',
+          '会删掉本机账本 data/ledger 下的全部逐条请求记录（当前 ' + rows.length + ' 条），' +
+          '统计与汇总随之归零，不可撤销。用量页的聚合数字需要单独清空。',
+          { danger: true, confirmText: '清空' });
+        if (!ok) return;
+        try { await api.del('/api/usage/requests'); toast('已清空请求记录'); state.page = 0; load(); }
+        catch (e) { toast('清空失败：' + (e.message || e)); }
+      } });
+      c.head.append(h('span', { style: 'flex:1' }), rangeBar, search, seg, live, clearBtn, iconBtn('refresh', '刷新', () => load(true)));
       const box = h('div', { class: 'list' });
       c.el.append(box);
       host.append(c.el);
@@ -242,7 +254,12 @@ export default {
             h('span', { class: 'log-num log-cost' + (e.priced ? '' : ' muted'), 'data-label': '费用', title: '计价模型：' + (e.pricing_model || '—') }, costText),
             h('div', { class: 'log-status' },
               chip(err ? '失败 ' + (e.http_status || '') : '成功 ' + (e.http_status || ''), err ? 'red' : 'green'),
-              iconBtn('external', '详情', (ev) => { ev.stopPropagation(); openDetail(e); })));
+              iconBtn('external', '详情', (ev) => { ev.stopPropagation(); openDetail(e); }),
+              // 逐条删除：只删这一条，同一天的其它记录不受影响。
+              iconBtn('trash', '删除这条记录', (ev) => {
+                ev.stopPropagation();
+                deleteOne(e);
+              })));
           box.append(node);
         }
         if (pages > 1) {
@@ -261,6 +278,23 @@ export default {
             btn('下一页', { ghost: true, disabled: state.page >= pages - 1, onClick: () => go(state.page + 1) }),
             btn('末页', { ghost: true, disabled: state.page >= pages - 1, onClick: () => go(pages - 1) })));
         }
+      }
+    }
+
+    // 逐条删除：`DELETE /api/usage/requests/{id}`。
+    // 服务端会重写那一天的文件，所以删完必须重新加载，不能只在本地 splice。
+    async function deleteOne(e) {
+      const ok = await confirmDialog('删除这条请求记录？',
+        (e.model || '该记录') + ' · ' + fmtDate(e.time, true, true) +
+        '\n删除后这一条会从本机账本移除，不可撤销；同一天的其它记录不受影响。',
+        { danger: true, confirmText: '删除' });
+      if (!ok) return;
+      try {
+        await api.del('/api/usage/requests/' + encodeURIComponent(e.id || ''));
+        toast('已删除这条记录');
+        load();
+      } catch (err) {
+        toast('删除失败：' + (err.message || err));
       }
     }
 

@@ -189,6 +189,25 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         loadQuotaHistory()
     }
 
+    /**
+     * 清空用量聚合（`DELETE /api/usage`）。
+     *
+     * 只动按天汇总的格子；逐条账本与请求日志有各自的清理入口，这里不联动。
+     * 清完必须 reload，否则页面仍显示清空前的数字。
+     */
+    fun clearUsage(onDone: (Result<Int>) -> Unit = {}) {
+        val status = repository.status.value
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { client.clearUsage(status) }
+            }
+            if (result.isSuccess) {
+                refresh()
+            }
+            onDone(result)
+        }
+    }
+
     /* ---------------- 厂商级「立即签到」 ---------------- */
 
     private val _vendorCheckin = MutableStateFlow<VendorCheckinUiState>(VendorCheckinUiState.Idle)

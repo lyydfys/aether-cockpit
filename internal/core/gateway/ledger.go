@@ -186,6 +186,98 @@ func (s *ledgerStore) add(rec ledgerRecord) {
 	}
 }
 
+// DeleteByID 按记录 ID 删除一条账本记录，返回是否真的删掉了。
+//
+// 账本是按天追加的 JSONL，没有逐条删除的原地操作：删一条必须**重写那一天的文件**。
+// 流程：内存里定位 → 关掉当天的追加句柄（Windows 上打开着的文件无法被 O_TRUNC 重写，
+// 且 Unix 上边删边写会写进已 unlink 的 inode）→ 剩余记录写成 `.tmp` 再 rename（崩溃不留半截文件）
+// → 句柄留空，下次 add 自动重开。
+//
+// 找不到时不报错、返回 false：记录可能已被别的操作删掉，调用方按"没删到"处理即可。
+func (s *ledgerStore) DeleteByID(id string) (bool, error) {
+	if s == nil || s.dir == "" || strings.TrimSpace(id) == "" {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var day string
+	var kept []ledgerRecord
+	found := false
+	// 记录只在它自己那一天里，但 ID 不含天（只含毫秒时间戳），所以按天挨个找。
+	for d, list := range s.days {
+		hit := false
+		kept = make([]ledgerRecord, 0, len(list))
+		for _, r := range list {
+			if r.ID == id {
+				hit = true
+				continue
+			}
+			kept = append(kept, r)
+		}
+		if hit {
+			day = d
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false, nil
+	}
+
+	if len(kept) == 0 {
+		delete(s.days, day)
+	} else {
+		s.days[day] = kept
+	}
+
+	// 当天的追加句柄必须先关，否则重写会和它抢同一个文件。
+	if s.file != nil && s.fileDay == day {
+		_ = s.file.Close()
+	}
+	s.file, s.fileDay = nil, ""
+
+	path := s.path(day)
+	if len(kept) == 0 {
+		// 这一天已经没有记录了，直接删文件比留个空文件干净。
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return true, err
+		}
+		return true, nil
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return true, err
+	}
+	w := bufio.NewWriter(f)
+	for _, r := range kept {
+		b, mErr := json.Marshal(r)
+		if mErr != nil {
+			continue
+		}
+		if _, wErr := w.Write(append(b, '\n')); wErr != nil {
+			_ = f.Close()
+			_ = os.Remove(tmp)
+			return true, wErr
+		}
+	}
+	if err := w.Flush(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return true, err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return true, err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return true, err
+	}
+	return true, nil
+}
+
 // Close 关闭当天文件的追加句柄（测试与优雅退出用）。
 func (s *ledgerStore) Close() error {
 	if s == nil {
@@ -199,6 +291,39 @@ func (s *ledgerStore) Close() error {
 		return err
 	}
 	return nil
+}
+
+// Clear 删除账本目录下的全部 *.jsonl 并清空内存副本。返回被删掉的文件数。
+//
+// 必须先把当天的追加句柄关掉：Windows 上打开着的文件无法删除，
+// 而 Unix 上即使能删，句柄继续写也会写进已 unlink 的 inode（数据凭空消失却仍占空间）。
+func (s *ledgerStore) Clear() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.file != nil {
+		_ = s.file.Close()
+		s.file = nil
+		s.fileDay = ""
+	}
+	removed := 0
+	s.days = make(map[string][]ledgerRecord, 8)
+	if s.dir == "" {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(s.dir, e.Name())); rmErr == nil {
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 // ledgerFilter 是一组筛选条件。

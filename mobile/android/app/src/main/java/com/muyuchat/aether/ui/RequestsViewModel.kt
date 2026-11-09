@@ -245,6 +245,46 @@ class RequestsViewModel(application: Application) : AndroidViewModel(application
         refresh.value++
     }
 
+    /**
+     * 清空请求账本（逐条持久记录）。只动 `/api/usage/requests`；
+     * 用量聚合与请求日志有各自的清理入口，不联动。
+     *
+     * 清完必须 reload：`refresh` 会重新拉一页，否则列表仍显示旧数据；
+     * 同时把分页拉回第一页，避免停在已经不存在的页码上。
+     */
+    fun clearAll(onDone: (Result<Int>) -> Unit = {}) {
+        val status = repository.status.value
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { client.clearRequests(status) }
+            }
+            if (result.isSuccess) {
+                _query.value = _query.value.copy(offset = 0)
+                loadedPeriod = null
+                refresh.value++
+            }
+            onDone(result)
+        }
+    }
+
+    /**
+     * 删掉某一条请求记录。只动这一条；同一天的其它记录不受影响。
+     *
+     * 删完必须 reload：服务端重写了当天文件，本地列表还是旧的。
+     */
+    fun deleteOne(row: RequestRow, onDone: (Result<Boolean>) -> Unit = {}) {
+        val status = repository.status.value
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { client.deleteRequest(status, row.id) }
+            }
+            if (result.isSuccess) {
+                refresh.value++
+            }
+            onDone(result)
+        }
+    }
+
     fun select(row: RequestRow) {
         _selected.value = row
     }

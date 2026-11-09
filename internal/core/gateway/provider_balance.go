@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -86,6 +87,13 @@ func (g *Gateway) queryConfiguredBalance(ctx context.Context, env *provider.Acco
 		// 自定义余额接口没有货币/百分比标记时，按积分展示（本应用的常见口径）。
 		unit = "credits"
 	}
+	// 哨兵值：很多中转站的 billing 接口用 `hard_limit_usd: 1e8` 之类的大数表示"无限额度"，
+	// 真实用量只有几块钱。照原样展示会得到"剩余 $99999999.04 / 上限 $100000000.00"这种
+	// 明显是假的读数，用户会以为余额读错了。这类数值没有任何信息量，直接判为"读不到"。
+	if implausibleBalanceSentinel(amount) {
+		return nil, &balanceConfigError{msg: "余额接口返回的是「无限额度」哨兵值，没有真实余额可读；" +
+			"可以改一个能返回真实余额的字段表达式（如 $data.total_available）"}
+	}
 	q := &provider.QuotaStatus{
 		Balance: amount, BalanceUnit: unit, ReadAt: time.Now().Unix(),
 	}
@@ -96,6 +104,22 @@ func (g *Gateway) queryConfiguredBalance(ctx context.Context, env *provider.Acco
 }
 
 type balanceConfigError struct{ msg string }
+
+// implausibleBalanceSentinel 判断余额数值是不是"无限额度"占位而不是真实余额。
+//
+// 判据是量级而不是具体数字：中转站常用的哨兵是 100000000（1e8）、9999999、1e9 等，
+// 真实个人账号的余额不会到 1e6 美元/积分这个量级。取 1e6 作为分界：
+//   - 中转站/个人用户真实余额在个位到几百区间；
+//   - 团队充值或自建部署的极端情况也远低于 1e6；
+//   - 而 1e8 一类的哨兵一定 >= 1e6。
+//
+// 同时把非有限值（NaN/Inf）也算作不可信：表达式算错会得到这种值，不能让它们进 UI。
+func implausibleBalanceSentinel(v float64) bool {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return true
+	}
+	return v >= 1e6
+}
 
 func (e *balanceConfigError) Error() string { return e.msg }
 
@@ -386,6 +410,11 @@ func (g *Gateway) providerQuotaBalance(w http.ResponseWriter, r *http.Request, i
 	if amount <= 0 {
 		amount = float64(q.Remaining)
 		unit = q.Unit
+	}
+	if implausibleBalanceSentinel(amount) {
+		// 与自定义余额接口同一判据：1e8 一类的"无限额度"占位不是真实余额。
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "渠道返回的是「无限额度」哨兵值，没有真实余额可读"})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "amount": trimFloat(amount, 2), "unit": unit})
 }

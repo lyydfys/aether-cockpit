@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -200,6 +201,24 @@ func (s *usageStore) flush() {
 	snap := s.snapshotLocked()
 	s.mu.Unlock()
 	_ = s.saveSnapshot(snap)
+}
+
+// Clear 清空全部用量聚合并立即落盘。返回被清掉的"天"数。
+//
+// 落盘用的是**空快照**而不是删文件：saveSnapshot 先写 .tmp 再 rename，
+// 崩溃时不会留下半截文件；直接删文件则会让下次 load 读到旧内容（如果删除失败）
+// 或留下 0 字节文件（如果只截断）。
+//
+// 同时把 maxDays 内保留的历史一起清掉——用户点"清空总量"期望的是归零，
+// 不是"只清今天、昨天还在"。
+func (s *usageStore) Clear() int {
+	s.mu.Lock()
+	days := len(s.days)
+	s.days = make(map[string]map[string]*usageCell, 32)
+	s.mu.Unlock()
+
+	_ = s.saveSnapshot(usageSnapshot{days: map[string]map[string]usageCell{}})
+	return days
 }
 
 // usageSnapshot 是落盘用的不可变快照。
@@ -417,6 +436,20 @@ func clientAgentName(id string) string {
 }
 
 // handleUsage GET /api/usage?days=14
+// handleUsageClear DELETE /api/usage
+//
+// 清空用量聚合（按天按渠道/模型/账号汇总的格子，落盘在 usage.json）。
+// 独立于账本（逐条请求记录）与请求日志（内存最近 N 条），三者互不联动。
+func (g *Gateway) handleUsageClear(w http.ResponseWriter, r *http.Request) {
+	if g.usage == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": 0})
+		return
+	}
+	cleared := g.usage.Clear()
+	log.Printf("[USAGE] 按用户请求清空用量聚合：%d 天", cleared)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": cleared})
+}
+
 func (g *Gateway) handleUsage(w http.ResponseWriter, r *http.Request) {
 	days := 14
 	if v := r.URL.Query().Get("days"); v != "" {

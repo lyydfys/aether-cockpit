@@ -122,6 +122,42 @@ class UsageApiClient(
         }
     }
 
+    /**
+     * 清空用量聚合：`DELETE /api/usage`（`usage.go` 的 `handleUsageClear`）。
+     *
+     * 只清按天汇总的格子；逐条账本（`/api/usage/requests`）和请求日志（`/api/logs`）
+     * 是另外两套数据，各自独立清理。
+     */
+    fun clearUsage(status: GatewayStatus): Int {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val connection = (URL("http://${status.addr}/api/usage").openConnection() as HttpURLConnection)
+        connection.connectTimeout = connectTimeoutMs
+        connection.readTimeout = readTimeoutMs
+        connection.requestMethod = "DELETE"
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+        try {
+            val code = connection.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(2_048) }
+                        ?.let { JSONObject(it).optString("error") }
+                }.getOrNull().orEmpty()
+                throw ManagementApiException("http_$code", detail.ifBlank { "管理接口返回 $code" }.take(160))
+            }
+            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { readLimited(it) }
+            return runCatching { JSONObject(body).optInt("cleared", 0) }.getOrDefault(0)
+        } catch (e: ManagementApiException) {
+            throw e
+        } catch (_: IOException) {
+            throw ManagementApiException("network_error", "无法连接本机管理接口")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun readLimited(reader: Reader, limit: Int = 8 * 1024 * 1024): String {
         val buffer = CharArray(8 * 1024)
         val out = StringBuilder()

@@ -62,7 +62,11 @@ class NoExternalProjectNamesContractTest {
         val regex = Regex(tokens.joinToString("|"), RegexOption.IGNORE_CASE)
         // `data` 是运行时下载的第三方目录缓存（models.dev 等），不是本仓源码：
         // 它是上游提供的 JSON，里面出现某个项目的名字不代表我们在引用它。
-        val skipDirs = setOf(".git", "node_modules", ".gradle", "build", "bin", "out", "data")
+        // `.qoder-credits` / `output` 同理，是本地分析产物与报告草稿，不进仓、也不算引用。
+        val skipDirs = setOf(
+            ".git", "node_modules", ".gradle", "build", "bin", "out", "data",
+            ".qoder-credits", "output",
+        )
         val textExts = setOf(
             "go", "md", "js", "mjs", "ts", "css", "html", "json", "jsonc", "sh", "ps1",
             "yml", "yaml", "kt", "kts", "xml", "txt", "properties", "toml", "mod", "sum",

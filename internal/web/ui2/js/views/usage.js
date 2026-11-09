@@ -81,7 +81,22 @@ export default {
             } catch (e) { toast('切换币种失败：' + (e.message || e)); }
           },
         })),
-        h('span', { class: 'meta' }, '汇率 1 USD = ' + state.pricing.usd_cny.toFixed(2) + ' CNY'));
+        h('span', { class: 'meta' }, '汇率 1 USD = ' + state.pricing.usd_cny.toFixed(2) + ' CNY'),
+        // 清空用量聚合：不可撤销，走危险色 + 二次确认。
+        // 只清按天汇总的格子；逐条账本（请求页）与内存请求日志是另外两套数据。
+        btn('清空', {
+          class: 'sm',
+          onClick: async () => {
+            if (!state.view || !state.view.calls) { toast('没有可清空的用量'); return; }
+            const ok = await confirmDialog('清空全部用量数据？',
+              '会把按天、按渠道/模型/账号汇总的全部用量格子清零，趋势图与合计随之归零，' +
+              '不可撤销。逐条请求记录需要到「请求」页单独清空。',
+              { danger: true, confirmText: '清空' });
+            if (!ok) return;
+            try { await api.del('/api/usage'); toast('已清空用量数据'); load(); }
+            catch (e) { toast('清空失败：' + (e.message || e)); }
+          },
+        }));
       return bar;
     }
 

@@ -177,6 +177,85 @@ class RequestsApiClient(
         }
     }
 
+    /**
+     * 删掉**一条**请求记录：`DELETE /api/usage/requests/{id}`（`ledger_api.go` 的 `handleLedgerDeleteOne`）。
+     *
+     * 账本是按天 JSONL，删单条会重写那一天的文件；同一天的其它记录不受影响。
+     * 返回 true 表示确实删到了；记录已被别处删掉时服务端回 404，这里返回 false 而不是抛错。
+     */
+    fun deleteRequest(status: GatewayStatus, id: String): Boolean {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val safeId = id.trim()
+        if (safeId.isEmpty()) {
+            throw ManagementApiException("missing_id", "这条记录没有 id，无法删除")
+        }
+        val path = "/api/usage/requests/" + URLEncoder.encode(safeId, "UTF-8")
+        val connection = (URL("http://${status.addr}$path").openConnection() as HttpURLConnection)
+        connection.connectTimeout = connectTimeoutMs
+        connection.readTimeout = readTimeoutMs
+        connection.requestMethod = "DELETE"
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+        try {
+            val code = connection.responseCode
+            if (code == HttpURLConnection.HTTP_NOT_FOUND) {
+                return false
+            }
+            if (code != HttpURLConnection.HTTP_OK) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(2_048) }
+                        ?.let { JSONObject(it).optString("error") }
+                }.getOrNull().orEmpty()
+                throw ManagementApiException("http_$code", detail.ifBlank { "管理接口返回 $code" }.take(160))
+            }
+            return true
+        } catch (e: ManagementApiException) {
+            throw e
+        } catch (_: IOException) {
+            throw ManagementApiException("network_error", "无法连接本机管理接口")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * 清空请求账本：`DELETE /api/usage/requests`（`ledger_api.go` 的 `handleLedgerClear`）。
+     *
+     * 只清逐条的持久记录；用量聚合（`/api/usage`）与请求日志（`/api/logs`）是另外两套数据，
+     * 有各自的清理入口，这里不做联动。
+     */
+    fun clearRequests(status: GatewayStatus): Int {
+        if (!status.running || status.addr.isBlank() || status.adminSession.isBlank()) {
+            throw ManagementApiException("gateway_not_running", "网关未启动")
+        }
+        val connection = (URL("http://${status.addr}/api/usage/requests").openConnection() as HttpURLConnection)
+        connection.connectTimeout = connectTimeoutMs
+        connection.readTimeout = readTimeoutMs
+        connection.requestMethod = "DELETE"
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Authorization", "Bearer ${status.adminSession}")
+        try {
+            val code = connection.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(2_048) }
+                        ?.let { JSONObject(it).optString("error") }
+                }.getOrNull().orEmpty()
+                throw ManagementApiException("http_$code", detail.ifBlank { "管理接口返回 $code" }.take(160))
+            }
+            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { readLimited(it) }
+            return runCatching { JSONObject(body).optInt("removed", 0) }.getOrDefault(0)
+        } catch (e: ManagementApiException) {
+            throw e
+        } catch (_: IOException) {
+            throw ManagementApiException("network_error", "无法连接本机管理接口")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun readLimited(reader: Reader, limit: Int = 8 * 1024 * 1024): String {
         val buffer = CharArray(8 * 1024)
         val out = StringBuilder()

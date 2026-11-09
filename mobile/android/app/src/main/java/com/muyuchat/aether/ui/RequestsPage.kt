@@ -165,6 +165,8 @@ internal fun RequestsPage(
                         onFailedOnly = onFailedOnly,
                         onRefresh = onRefresh,
                         onExportCsv = onExportCsv,
+                        onClearAll = { viewModel.clearAll() },
+                        onDeleteOne = { viewModel.deleteOne(it) },
                         onSelect = onSelect,
                     )
                 }
@@ -756,7 +758,47 @@ private fun RequestsDetailCard(
     onRefresh: () -> Unit,
     onExportCsv: () -> Unit,
     onSelect: (RequestRow) -> Unit,
+    // 清空账本：不可撤销的删除，必须先二次确认。
+    onClearAll: () -> Unit = {},
+    // 逐条删除某一条记录（按 row.id）。
+    onDeleteOne: (RequestRow) -> Unit = {},
 ) {
+    var clearConfirm by remember { mutableStateOf(false) }
+    if (clearConfirm) {
+        McaDialog(
+            onDismissRequest = { clearConfirm = false },
+            title = {
+                Text(
+                    text = "清空全部请求记录？",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Text(
+                    text = "会删掉本机账本里全部逐条请求记录（当前 ${page.total} 条），" +
+                        "统计与汇总会随之归零，不可撤销。用量页的聚合数字需要单独清空。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        clearConfirm = false
+                        onClearAll()
+                    },
+                    style = McaButtonStyle.Destructive,
+                ) { Text("清空") }
+            },
+            dismissButton = {
+                McaButton(
+                    onClick = { clearConfirm = false },
+                    style = McaButtonStyle.Outlined,
+                ) { Text("取消") }
+            },
+        )
+    }
     DeepCard(contentPadding = DeepListCardPadding) {
         Row(
             modifier = Modifier
@@ -776,6 +818,11 @@ private fun RequestsDetailCard(
                 tone = DeepTone.Neutral,
             )
             Spacer(Modifier.weight(1f))
+            AetherPillButton(
+                text = "清空",
+                onClick = { clearConfirm = true },
+                enabled = page.total > 0,
+            )
             AetherPillButton(
                 text = if (exportState is RequestsExportUiState.Exporting) "导出中…" else "导出",
                 onClick = onExportCsv,
@@ -855,7 +902,7 @@ private fun RequestsDetailCard(
         } else {
             RequestColumnHeader()
             page.rows.forEachIndexed { index, row ->
-                RequestRowView(row, onClick = { onSelect(row) })
+                RequestRowView(row, onClick = { onSelect(row) }, onDelete = { onDeleteOne(row) })
                 if (index < page.rows.lastIndex) {
                     HorizontalDivider(
                         thickness = McaHairline.Width,
@@ -896,7 +943,44 @@ private fun RequestsTab(label: String, selected: Boolean, onClick: () -> Unit) {
 /* ---------------- 行 ---------------- */
 
 @Composable
-private fun RequestRowView(row: RequestRow, onClick: () -> Unit) {
+private fun RequestRowView(row: RequestRow, onClick: () -> Unit, onDelete: () -> Unit = {}) {
+    var confirmDelete by remember { mutableStateOf(false) }
+    if (confirmDelete) {
+        McaDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = {
+                Text(
+                    text = "删除这条请求记录？",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Text(
+                    text = "${formatRowTime(row.timeMs)} · ${row.model}" +
+                        if (row.providerName.isNotBlank()) " · ${row.providerName}" else "" +
+                        "\n删除后这一条会从账本里移除，不可撤销；其余记录不受影响。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        confirmDelete = false
+                        onDelete()
+                    },
+                    style = McaButtonStyle.Destructive,
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                McaButton(
+                    onClick = { confirmDelete = false },
+                    style = McaButtonStyle.Outlined,
+                ) { Text("取消") }
+            },
+        )
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -938,6 +1022,13 @@ private fun RequestRowView(row: RequestRow, onClick: () -> Unit) {
                     row.ok -> DeepTone.Info
                     else -> DeepTone.Danger
                 },
+            )
+            // 逐条删除：只会删这一条，不影响同一天的其它记录。
+            // 放在行尾而不是长按菜单里——用户要的是"每一条都能删"，入口要看得见。
+            AetherCompactIconButton(
+                iconRes = R.drawable.ic_close,
+                contentDescription = "删除这条记录",
+                onClick = { confirmDelete = true },
             )
         }
         Text(

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -105,6 +106,19 @@ func (b *LogBuffer) Recent(limit int) []RequestLog {
 	return out
 }
 
+// Clear 清空全部请求记录。
+//
+// 只保留容量与自增序号（seq 继续往上走）：seq 是"第几条请求"的身份，
+// 清空后复用旧号会让前端同一 key 下的缓存错位。返回被清掉的条数。
+func (b *LogBuffer) Clear() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	n := len(b.entries)
+	b.entries = b.entries[:0]
+	return n
+}
+
 // Stats 汇总统计。
 type LogStats struct {
 	Total      int            `json:"total"`
@@ -165,6 +179,20 @@ func (g *Gateway) handleLogs(w http.ResponseWriter, r *http.Request) {
 		"logs":  g.logs.Recent(limit),
 		"stats": g.logs.Stats(),
 	})
+}
+
+// handleClearLogs DELETE /api/logs
+//
+// 清空请求记录（内存环缓冲）。用量聚合与账本是另外两套数据，各自有独立入口，
+// 这里不动它们——否则用户"只想清空请求列表"会把用量统计一起清掉。
+func (g *Gateway) handleClearLogs(w http.ResponseWriter, r *http.Request) {
+	if g.logs == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": 0})
+		return
+	}
+	cleared := g.logs.Clear()
+	log.Printf("[LOGS] 按用户请求清空请求记录：%d 条", cleared)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": cleared})
 }
 
 // requestTimer 采集一次请求的耗时。

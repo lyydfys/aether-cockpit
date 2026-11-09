@@ -146,7 +146,7 @@ internal fun UsagePage(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(DeepCardGap)) {
                 MobileHeader(status)
-                UsageTitle(state, onRefresh)
+                UsageTitle(state, onRefresh, onClear = { viewModel.clearUsage() })
             }
         }
         // 卡片内容按 `cardOrder` 顺序渲染（顺序是纯本地偏好）。
@@ -335,7 +335,43 @@ private fun UsageCardOrderDialog(
 }
 
 @Composable
-private fun UsageTitle(state: UsageUiState, onRefresh: () -> Unit) {
+private fun UsageTitle(state: UsageUiState, onRefresh: () -> Unit, onClear: () -> Unit) {
+    var clearConfirm by remember { mutableStateOf(false) }
+    if (clearConfirm) {
+        McaDialog(
+            onDismissRequest = { clearConfirm = false },
+            title = {
+                Text(
+                    text = "清空全部用量数据？",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Text(
+                    text = "会把按天、按渠道/模型/账号汇总的全部用量格子清零，趋势图与合计随之归零，" +
+                        "不可撤销。逐条请求记录需要到「请求」页单独清空。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                McaButton(
+                    onClick = {
+                        clearConfirm = false
+                        onClear()
+                    },
+                    style = McaButtonStyle.Destructive,
+                ) { Text("清空") }
+            },
+            dismissButton = {
+                McaButton(
+                    onClick = { clearConfirm = false },
+                    style = McaButtonStyle.Outlined,
+                ) { Text("取消") }
+            },
+        )
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(
             modifier = Modifier.weight(1f),
@@ -351,6 +387,12 @@ private fun UsageTitle(state: UsageUiState, onRefresh: () -> Unit) {
             contentDescription = "刷新用量",
             onClick = onRefresh,
             enabled = state is UsageUiState.Ready || state is UsageUiState.Failed,
+        )
+        AetherCompactIconButton(
+            iconRes = R.drawable.ic_close,
+            contentDescription = "清空用量",
+            onClick = { clearConfirm = true },
+            enabled = state is UsageUiState.Ready,
         )
     }
 }

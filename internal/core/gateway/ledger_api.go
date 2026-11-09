@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -87,6 +88,53 @@ func (g *Gateway) handleLedger(w http.ResponseWriter, r *http.Request) {
 	from, to := ledgerRange(r)
 	view := g.ledger.query(ledgerFilterOf(r), offset, limit, from, to, g.ledgerPrice)
 	writeJSON(w, http.StatusOK, view)
+}
+
+// handleLedgerClear DELETE /api/usage/requests
+//
+// 清空账本（逐条请求记录，落盘在 <data>/ledger/*.jsonl）。
+// 与「清空用量聚合」（/api/usage）和「清空请求日志」（/api/logs）是**三件独立的事**：
+// 用量聚合是每天汇总的格子，请求日志是内存里的最近 N 条，账本是逐条的持久记录。
+// 用户点哪个清哪个，不做联动——否则只想清掉列表却把统计一起归零。
+func (g *Gateway) handleLedgerClear(w http.ResponseWriter, r *http.Request) {
+	if g.ledger == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": 0})
+		return
+	}
+	removed, err := g.ledger.Clear()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "清空账本失败：" + err.Error()})
+		return
+	}
+	log.Printf("[LEDGER] 按用户请求清空账本：删除 %d 个日文件", removed)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed})
+}
+
+// handleLedgerDeleteOne DELETE /api/usage/requests/{id}
+//
+// 删掉**一条**请求记录（按 `id`，形如 `<毫秒时间戳>-<序号>`）。
+// 账本是按天 JSONL，删单条会重写那一天的文件，见 ledgerStore.DeleteByID。
+func (g *Gateway) handleLedgerDeleteOne(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "缺少记录 id"})
+		return
+	}
+	if g.ledger == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "记录不存在或已被删除"})
+		return
+	}
+	removed, err := g.ledger.DeleteByID(id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "删除记录失败：" + err.Error()})
+		return
+	}
+	if !removed {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "记录不存在或已被删除"})
+		return
+	}
+	log.Printf("[LEDGER] 删除单条请求记录 id=%s", id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
 }
 
 // handleLedgerHeatmap GET /api/usage/heatmap
