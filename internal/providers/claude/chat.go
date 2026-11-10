@@ -149,6 +149,14 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 
 // baseURL 返回账号级上游地址；凭证显式填 base_url 时优先（自建中转 / 测试）。
 func baseURL(env *provider.AccountEnv) string {
+	// 优先用"Anthropic 专用端点"。
+	//
+	// 渠道编辑器允许为 chat / anthropic 各填一个地址。openaicompat 委派到本包时
+	// 已经把地址算对了，但这里如果用 base_url 会把它覆盖回 OpenAI 兼容地址，
+	// 拼出 <chat端点>/v1/messages —— 对端没有这个路由，返回 "404 page not found"。
+	if v := strings.TrimRight(strings.TrimSpace(env.GetCredential("anthropic_base_url")), "/"); v != "" {
+		return v
+	}
 	if v := strings.TrimRight(strings.TrimSpace(env.GetCredential("base_url")), "/"); v != "" {
 		return v
 	}

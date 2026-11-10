@@ -235,6 +235,17 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 	// 只能记住其中一个，另外两个协议就会打到错误端点。
 	accountBase := strings.TrimRight(strings.TrimSpace(env.GetCredential("base_url")), "/")
 	protocol := strings.ToLower(strings.TrimSpace(env.GetCredential("api_protocol")))
+	// 账号没显式指定协议时，按入站协议自动对齐。
+	//
+	// 场景：用户在渠道编辑器里填了 Anthropic 端点，然后用 Claude Code 这类
+	// Anthropic 客户端连网关。若不自动对齐，请求会被翻译成 chat 打到
+	// <chat端点>/chat/completions，对端没有这个路由 → "404 page not found"。
+	// 只在"确实配了该协议端点"时才自动选，避免影响没填端点的老渠道。
+	if protocol == "" && p.cfg.AllowAnthropicUpstream &&
+		req.DownstreamProtocol == ir.ProtocolAnthropic &&
+		strings.TrimSpace(env.GetCredential("anthropic_base_url")) != "" {
+		protocol = "anthropic"
+	}
 	if protocol != "" {
 		if per := protocolEndpoint(env, protocol); per != "" {
 			accountBase = per
