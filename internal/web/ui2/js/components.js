@@ -348,7 +348,9 @@ export function secretRow(secret, opts = {}) {
     val.title = '点击眼睛查看并复制完整密钥';
     const plain = { v: '', busy: false };
     const row = h('div', { class: 'key-row' }, val);
-    const hint = h('span', { class: 'meta' }, '已设置（点击查看完整密钥）');
+    // 不再挂常驻提示：眼睛/复制图标本身已经说明操作，
+    // 「已设置（点击查看完整密钥）」这类文字属于噪音。
+
     const eye = iconBtn('eye', '显示完整密钥', async () => {
       if (plain.busy) return;
       if (plain.v) { plain.v = ''; paint(); return; }  // 已显示：再点一次收起
@@ -379,11 +381,9 @@ export function secretRow(secret, opts = {}) {
       eye.setAttribute('aria-pressed', on ? 'true' : 'false');
       eye.setAttribute('title', on ? '隐藏密钥' : '显示完整密钥');
       copyBtn.setAttribute('title', '复制密钥');
-      hint.textContent = on ? '已显示完整密钥' : '已设置（点击查看完整密钥）';
     };
     row.append(eye, copyBtn);
     if (opts.onRotate) row.append(btn(opts.rotateLabel || '轮换', { class: 'sm', onClick: opts.onRotate }));
-    row.append(hint);
     paint();
     return row;
   }
