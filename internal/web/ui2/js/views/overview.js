@@ -576,9 +576,28 @@ export default {
         } catch (e) { toast('生成失败：' + (e.message || e)); }
       };
 
-      // 掩码 → 眼睛看明文 → 复制；轮换走破坏性确认
-      // keyMasked 已是后端打码值：secretRow 会据此隐藏"显示/复制"，只留轮换。
-      const keyRow = secretRow(keyMasked, { onRotate: generateKey, rotateLabel: '轮换', maskedOnly: !!keyMasked });
+      // 掩码 → 眼睛看明文 → 复制；轮换走破坏性确认。
+      //
+      // 打码值本身不可复制（复制到的是省略号），所以「查看/复制」不能靠它：
+      // 点眼睛时才向本机接口取一次明文，拿到后填入并允许复制。
+      // 明文只在内存里活到下次重绘，不写 localStorage。
+      const revealKey = async () => {
+        try {
+          const r = await api.get('settings/gateway-key/reveal');
+          if (!r || !r.api_key) throw new Error('没有可显示的密钥');
+          return r.api_key;
+        } catch (e) {
+          toast('无法查看明文：' + (e.message || e));
+          return null;
+        }
+      };
+      const keyRow = secretRow(keyMasked, {
+        onRotate: generateKey,
+        rotateLabel: '轮换',
+        // 有密钥就打码显示，但**保留**查看/复制能力（点开时按需取明文）。
+        onReveal: keyMasked ? revealKey : null,
+        maskedOnly: false,
+      });
 
       // 用 field() 保留 aria-label 关联，再叠成「标签在上、控件在下」——窄宽度下 URL 才读得全
       const entryField = h('div', { class: 'kv-row' },

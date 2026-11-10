@@ -62,3 +62,32 @@ func (g *Gateway) handleGatewayKeyGenerate(w http.ResponseWriter, r *http.Reques
 func gatewayKeyPlausible(key string) bool {
 	return len(strings.TrimSpace(key)) >= 16
 }
+
+// handleGatewayKeyReveal GET /api/settings/gateway-key/reveal
+//
+// 回显当前网关密钥明文，供本机用户"看一眼再复制"。
+//
+// 为什么需要：密钥以前只有两种状态——生成时回显一次、之后永不可见。
+// 用户过两天想填到另一台设备上，就只能重新轮换一次（还连带把已在用的
+// 客户端全部踢下线）。打码值又不能复制（复制到的是省略号）。
+//
+// 安全边界：只允许本机（127.0.0.1 / ::1）访问，且拒绝任何带转发头的请求。
+// 局域网/公网访问永远拿不到明文——那等同于把门锁交出去。
+func (g *Gateway) handleGatewayKeyReveal(w http.ResponseWriter, r *http.Request) {
+	if !isLocalRequest(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "网关密钥明文只允许在本机查看",
+		})
+		return
+	}
+	key := g.GatewayKey()
+	if key == "" {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "还没有设置网关密钥"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"api_key":        key,
+		"api_key_masked": maskGatewayKey(key),
+		"api_key_set":    true,
+	})
+}

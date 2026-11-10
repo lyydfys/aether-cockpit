@@ -322,9 +322,25 @@ export default {
         } catch (e) { toast('清除失败：' + (e.message || e)); }
       } });
 
+      // 查看：向本机接口取一次明文填进输入框，之后就能直接复制。
+      // 打码值本身不可复制（会把省略号抄走），所以必须走这一步。
+      const reveal = async () => {
+        try {
+          const r = await api.get('settings/gateway-key/reveal');
+          if (!r || !r.api_key) { toast('还没有设置网关密钥'); return; }
+          fresh = r.api_key;
+          inp.value = fresh;
+          copyBtn.hidden = false;
+          toast('已显示完整密钥（仅本机可见）');
+        } catch (e) {
+          toast('无法查看：' + (e.message || e));
+        }
+      };
+
       return h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' },
         inp,
         btn('生成', { primary: true, onClick: gen }),
+        btn('查看', { ghost: true, onClick: reveal }),
         btn('保存', { ghost: true, onClick: save }),
         copyBtn,
         clear);

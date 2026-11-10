@@ -336,7 +336,57 @@ export function isMaskedSecret(v) {
 export function secretRow(secret, opts = {}) {
   const val = h('span', { class: 'key-val mono' });
   // 打码值：不提供"显示/复制"，只提示去设置页重新生成或轮换。
-  const maskedOnly = opts.maskedOnly != null ? !!opts.maskedOnly : isMaskedSecret(secret);
+  const looksMasked = isMaskedSecret(secret);
+  const maskedOnly = opts.maskedOnly != null ? !!opts.maskedOnly : looksMasked;
+  // onReveal：打码值 + "点眼睛时再去取明文"的懒加载模式。
+  // 打码串本身不能复制（会把省略号抄走），所以复制也必须走一次取明文。
+  //
+  // 判据用 looksMasked 而不是 maskedOnly：调用方显式传 maskedOnly:false
+  // 想表达的是"不要退化成只读"，而不是"把它当明文直接显示"。
+  if ((looksMasked || maskedOnly) && typeof opts.onReveal === 'function') {
+    val.textContent = String(secret || '');
+    val.title = '点击眼睛查看并复制完整密钥';
+    const plain = { v: '', busy: false };
+    const row = h('div', { class: 'key-row' }, val);
+    const hint = h('span', { class: 'meta' }, '已设置（点击查看完整密钥）');
+    const eye = iconBtn('eye', '显示完整密钥', async () => {
+      if (plain.busy) return;
+      if (plain.v) { plain.v = ''; paint(); return; }  // 已显示：再点一次收起
+      plain.busy = true;
+      const got = await opts.onReveal();
+      plain.busy = false;
+      if (!got) return;
+      plain.v = got;
+      paint();
+    });
+    const copyBtn = iconBtn('copy', '复制密钥', async () => {
+      if (plain.busy) return;
+      let v = plain.v;
+      if (!v) {
+        plain.busy = true;
+        v = (await opts.onReveal()) || '';
+        plain.busy = false;
+      }
+      if (!v) return;
+      copyText(v);
+    });
+    const paint = () => {
+      val.textContent = plain.v || String(secret || '');
+      val.classList.toggle('shown', !!plain.v);
+      const on = !!plain.v;
+      eye.replaceChildren(icon(on ? 'eye-off' : 'eye'));
+      eye.setAttribute('aria-label', on ? '隐藏密钥' : '显示完整密钥');
+      eye.setAttribute('aria-pressed', on ? 'true' : 'false');
+      eye.setAttribute('title', on ? '隐藏密钥' : '显示完整密钥');
+      copyBtn.setAttribute('title', '复制密钥');
+      hint.textContent = on ? '已显示完整密钥' : '已设置（点击查看完整密钥）';
+    };
+    row.append(eye, copyBtn);
+    if (opts.onRotate) row.append(btn(opts.rotateLabel || '轮换', { class: 'sm', onClick: opts.onRotate }));
+    row.append(hint);
+    paint();
+    return row;
+  }
   if (maskedOnly) {
     val.textContent = String(secret || '');
     val.title = '只回显打码值；完整密钥不会再次展示';

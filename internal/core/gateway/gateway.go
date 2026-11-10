@@ -1031,6 +1031,8 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/proxy/check", g.handleProxyCheck)
 	m.HandleFunc("POST /api/settings/lan", g.handleLANSettings)
 	m.HandleFunc("POST /api/settings/gateway-key", g.handleGatewayKeyGenerate)
+	// 明文回显只限本机：方便"看一眼再复制"，局域网访问一律禁止。
+	m.HandleFunc("GET /api/settings/gateway-key/reveal", g.handleGatewayKeyReveal)
 	m.HandleFunc("POST /api/settings/autostart", g.handleAutoStartSetting)
 	m.HandleFunc("POST /api/settings/cors", g.handleCORSSettings)
 	m.HandleFunc("POST /api/settings/search-quota", g.handleSearchQuota)
