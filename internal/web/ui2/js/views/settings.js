@@ -251,11 +251,23 @@ export default {
       if (!urls.length) {
         return h('span', { class: 'meta' }, '已开启，但没拿到网卡地址（检查网络或防火墙）');
       }
-      const first = urls[0];
-      const more = urls.length > 1 ? ' 等 ' + urls.length + ' 个地址' : '';
+      // 多网卡时让用户自己挑：排序已经把最可能可用的排在前面，
+      // 但"哪块网卡和手机在同一网段"只有用户知道。
+      let picked = urls[0];
+      const copyBtn = iconBtn('copy', '复制局域网地址', () => copyText(picked));
+      if (urls.length === 1) {
+        return h('div', { class: 'inline', style: 'gap:8px;justify-content:flex-end;flex-wrap:wrap' },
+          h('span', { class: 'mono', style: 'font-size:12px' }, urls[0]),
+          copyBtn);
+      }
+      const sel = select(
+        urls.map((u) => ({ value: u, label: u })),
+        picked,
+        (v) => { picked = v; copyBtn.setAttribute('title', '复制 ' + v); },
+      );
       return h('div', { class: 'inline', style: 'gap:8px;justify-content:flex-end;flex-wrap:wrap' },
-        h('span', { class: 'mono', style: 'font-size:12px', title: urls.join('\n') }, first + more),
-        iconBtn('copy', '复制局域网地址', () => copyText(first)));
+        sel, copyBtn,
+        h('span', { class: 'meta', style: 'font-size:12px' }, '共 ' + urls.length + ' 个网卡地址'));
     }
 
     // gatewayKeyControl 设置/清除网关密钥。

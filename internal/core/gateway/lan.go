@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,6 +89,8 @@ func lanURLsFor(listenAddr string) []string {
 		return nil
 	}
 	out := make([]string, 0, 4)
+	// names 记住每个 URL 来自哪块网卡，供排序判断虚实。
+	names := make(map[string]string, 4)
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
@@ -111,9 +114,48 @@ func lanURLsFor(listenAddr string) []string {
 				continue
 			}
 			out = append(out, "http://"+net.JoinHostPort(ip.String(), strconv.Itoa(port)))
+			names["http://"+net.JoinHostPort(ip.String(), strconv.Itoa(port))] = iface.Name
 		}
 	}
+	// 排序：真实网卡优先，虚拟网卡（VMware / VirtualBox / WSL / Docker…）沉底。
+	//
+	// 为什么必须排：界面默认展示并复制**第一个**地址。虚拟网卡的地址
+	// （如 VMware 的 192.168.146.1）只在本机内部可达，手机/别的电脑连它
+	// 必然超时——用户看到"局域网开了但连不上"，却不知道是地址选错了。
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, rj := lanAddrRank(names[out[i]]), lanAddrRank(names[out[j]])
+		if ri != rj {
+			return ri < rj
+		}
+		return out[i] < out[j]
+	})
 	return out
+}
+
+// lanAddrRank 给网卡地址排优先级：数字越小越可能"真的能被别的设备连上"。
+//
+//	0 无线 / 有线物理网卡（最常见的正确选择）
+//	1 其它非虚拟网卡
+//	2 虚拟网卡（VMware / VirtualBox / WSL / Hyper-V / Docker / VPN …）
+func lanAddrRank(ifaceName string) int {
+	n := strings.ToLower(ifaceName)
+	// 虚拟网卡先判：它们的名字里常常带 "ethernet"
+	// （如 "vEthernet (WSL (Hyper-V firewall))"），
+	// 如果先匹配物理网卡关键词，WSL 会被误判成有线网卡排在第一位。
+	for _, kw := range []string{
+		"vmware", "vmnet", "virtualbox", "vbox", "hyper-v", "vethernet", "wsl",
+		"docker", "loopback", "tap", "tun", "vpn", "zerotier", "tailscale", "npcap",
+	} {
+		if strings.Contains(n, kw) {
+			return 2
+		}
+	}
+	for _, kw := range []string{"wlan", "wi-fi", "wifi", "无线", "以太网", "ethernet"} {
+		if strings.Contains(n, kw) {
+			return 0
+		}
+	}
+	return 1
 }
 
 // SetLAN 打开/关闭局域网共享。
