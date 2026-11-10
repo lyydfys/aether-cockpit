@@ -22,6 +22,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -31,6 +32,7 @@ import (
 	"time"
 
 	"aether-cockpit/internal/core/eventbus"
+	"aether-cockpit/internal/core/ir"
 	"aether-cockpit/internal/provider"
 )
 
@@ -716,4 +718,108 @@ func hostOfBaseURL(raw string) string {
 		return ""
 	}
 	return strings.ToLower(u.Hostname())
+}
+
+// isEdgeFailure 判断错误是否是"边缘/线路"故障，而不是账号问题。
+//
+// Cloudflare 5xx 的语义（公开文档）：
+//
+//	520 = 源站返回了未知错误（通常是回源失败）
+//	521 = 源站拒绝连接
+//	522 = 连接源站超时
+//	523 = 源站不可达
+//	524 = 源站响应超时
+//
+// 这五种换账号打同一个域名结果一样，属于线路问题；
+// 按账号惩罚只会把好账号逐个熔断，最后无号可换、请求直接失败。
+func isEdgeFailure(err *ir.APIError) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Message)
+	for _, code := range []string{"520", "521", "522", "523", "524", "525", "526"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	// 也认 Cloudflare 的典型文案（错误体被总结进 message 时）。
+	for _, kw := range []string{"cloudflare", "origin is unreachable", "web server is down",
+		"origin dns error", "ssl handshake failed"} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// noteEdgeFailure 记录一次线路层失败，并尽量立刻触发换线。
+//
+// 目的不是"统计"，而是让下一次重试走别的边缘 IP——用户体感上就是
+// "这条线抽风了，网关自己绕过去，任务没断"。
+func (g *Gateway) noteEdgeFailure(providerID string, err *ir.APIError) {
+	p, ok := provider.Get(providerID)
+	if !ok {
+		return
+	}
+	host := hostOfBaseURL(p.Manifest().BaseURL)
+	if host == "" {
+		return
+	}
+	t := healthTrackFor(host)
+	t.mu.Lock()
+	t.liveSamples = t.liveSamples[:0] // 线路已经不可用：清掉旧样本，别拿它们算基线
+	t.mu.Unlock()
+	log.Printf("[EDGE] %s 线路故障，放弃当前边缘并准备换线：%s", host, err.Message)
+	// 立即触发一次线路重扫（异步，不阻塞当前请求的重试）。
+	g.kickEdgeRescan(host)
+}
+
+// kickEdgeRescan 在后台立即跑一轮线路扫描与切换。
+//
+// 只在真正撞到线路故障时调用：等定时器（默认 300 秒）太慢，
+// 用户这轮任务已经等着了。用 singleflight 语义（rescanInflight）避免
+// 一批并发请求同时触发 N 次全量扫描。
+func (g *Gateway) kickEdgeRescan(host string) {
+	if host == "" {
+		return
+	}
+	cfg := g.edgeAutoConfig(host)
+	if !cfg.Enabled {
+		return
+	}
+	if !edgeRescanInflight.compareAndSet(host) {
+		return // 已经有一轮在跑，等它结果就行
+	}
+	go func() {
+		defer edgeRescanInflight.clear(host)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		g.runEdgeAutoOnce(ctx, host, cfg)
+	}()
+}
+
+// edgeRescanGuard 是一个极简的"按 key 去重"集合，给 kickEdgeRescan 用。
+// 只关心"这个 host 是否已有一轮扫描在跑"，不需要完整 singleflight 语义。
+type edgeRescanGuard struct {
+	mu    sync.Mutex
+	keyed map[string]bool
+}
+
+var edgeRescanInflight = &edgeRescanGuard{keyed: map[string]bool{}}
+
+// compareAndSet 抢占一个 key：返回 true 表示由本次调用负责跑那一轮。
+func (g *edgeRescanGuard) compareAndSet(key string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.keyed[key] {
+		return false
+	}
+	g.keyed[key] = true
+	return true
+}
+
+func (g *edgeRescanGuard) clear(key string) {
+	g.mu.Lock()
+	delete(g.keyed, key)
+	g.mu.Unlock()
 }

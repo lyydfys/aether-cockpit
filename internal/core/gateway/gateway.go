@@ -1846,6 +1846,8 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 	// 未设置时用全局预算（默认 5 秒，负数=不排队），客户端断开即放弃。
 	waitSince := map[string]time.Time{}
 	blocked := map[string]bool{}
+	// 因"线路故障"被排除的账号：这类失败换账号没用，下一轮要把它们放回来。
+	edgeFailedAccounts := map[string]bool{}
 	for {
 		fullThisPass := map[string]bool{}
 		fullProviders := map[string]bool{}
@@ -2007,6 +2009,11 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 					return nil, lastErr
 				}
 				g.penalizeModel(env, ae, b.UpstreamModel)
+				// 线路层故障：记下这个账号，下一轮把它放回候选池重试。
+				// 否则 exclude 会把它永久挡掉，单账号渠道就直接返回错误了。
+				if isEdgeFailure(ae) {
+					edgeFailedAccounts[env.AccountID] = true
+				}
 				if trace != nil {
 					status, fail := traceFailCode(ae)
 					trace.addTry(env, b.UpstreamModel, tryStart, status, fail, false)
@@ -2048,6 +2055,19 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 						"重试预算已用尽（%s）", g.cfg.RequestBudget)
 				}
 				break
+			}
+			// 线路层故障（Cloudflare 520/521/522/523/524）换账号没有意义：
+			// 同一个账号换条边缘线路就能过。
+			//
+			// 这里把曾经因线路故障被排除的账号放回候选池，并短暂退避，
+			// 让下一次尝试真的换一条线路，而不是因为"只有一个账号"就直接失败。
+			if isEdgeFailure(lastErr) {
+				for id := range edgeFailedAccounts {
+					delete(exclude, id)
+				}
+				edgeFailedAccounts = map[string]bool{}
+				// 给换线留一点时间：线路重扫是异步的，立刻重试常打回原边缘。
+				time.Sleep(edgeRetryBackoff)
 			}
 			continue
 		}
@@ -2352,6 +2372,12 @@ func (g *Gateway) openStream(ctx context.Context, h pipeline.StreamHandler, env 
 		return prepend(upCtx, ev, ch), nil
 	}
 }
+
+// edgeRetryBackoff 是线路故障重试前的短暂退避。
+//
+// 不能立刻重试：线路重扫是异步的，马上再打往往还是同一条坏边缘。
+// 500ms 足够让 kickEdgeRescan 完成一轮扫描并写入新 pin。
+const edgeRetryBackoff = 500 * time.Millisecond
 
 // clientFingerprint 由来源信息派生一个稳定短哈希（IP + UA + 凭证）。
 // 只用于会话粘性，不落盘、不参与鉴权。
@@ -2685,6 +2711,15 @@ func (g *Gateway) penalizeModel(env *provider.AccountEnv, err *ir.APIError, mode
 		eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())
 		return
 	default:
+		// 边缘/线路故障（Cloudflare 520/521/522/523/524）不是账号的问题：
+		// 源站没响应或回源超时，换个账号打同一个域名一样会挂。
+		// 这类错误应当**换线路**并立即重试，而不是把账号推进熔断——
+		// 否则连续几次 520 会把完好账号逐个打成不可用，最后无号可换、
+		// 请求就直接断了（正是"任务被 520 打断"的成因）。
+		if isEdgeFailure(err) {
+			g.noteEdgeFailure(env.ProviderID, err)
+			return
+		}
 		env.MarkFailure(5)
 	}
 	// 状态变化推给前端，避免"账号已经冷却但界面还是绿的"。
