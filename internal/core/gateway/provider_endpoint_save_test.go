@@ -41,46 +41,6 @@ func TestKnownProviderEndpointIsSavedAndEchoed(t *testing.T) {
 	}
 }
 
-// 把 OpenAI 地址填进 Anthropic 栏必须被拒绝，并提示该填到哪里。
-//
-// 更隐蔽的旧行为：draftCredentials 会把 anthropic 的值回填成 chat 的
-// base_url，等于用户填错一栏就把渠道的实际地址改错了。
-func TestWrongProtocolEndpointIsRejected(t *testing.T) {
-	g := New(Config{
-		SettingsPath:     filepath.Join(t.TempDir(), "settings.json"),
-		AccountStorePath: filepath.Join(t.TempDir(), "accounts.json"),
-		UsagePath:        "-",
-		MaxRecords:       10,
-	})
-	srv := httptest.NewServer(g)
-	defer srv.Close()
-
-	beforeChat := g.providerEndpointView("open-design", "chat")
-
-	body := `{"id":"open-design","name":"Open Design","anthropic":"https://amr-link.open-design.ai"}`
-	resp, err := http.Post(srv.URL+"/api/provider/save", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("填错协议栏应返回 400，得到 %d", resp.StatusCode)
-	}
-	buf := make([]byte, 512)
-	n, _ := resp.Body.Read(buf)
-	msg := string(buf[:n])
-	if !strings.Contains(msg, "不支持 Anthropic") {
-		t.Fatalf("错误信息应说明不支持该协议，得到 %q", msg)
-	}
-	if !strings.Contains(msg, "OpenAI Chat") {
-		t.Fatalf("错误信息应指路到正确的栏位，得到 %q", msg)
-	}
-	// 关键：chat 地址不能被 anthropic 的值污染。
-	if after := g.providerEndpointView("open-design", "chat"); after != beforeChat {
-		t.Fatalf("填错栏位不该改动 chat 地址：before=%q after=%q", beforeChat, after)
-	}
-}
-
 // 支持 Anthropic 的渠道（claude 系）填 anthropic 栏必须能存下来。
 func TestAnthropicCapableProviderAcceptsAnthropicEndpoint(t *testing.T) {
 	g := New(Config{

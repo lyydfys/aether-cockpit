@@ -55,6 +55,16 @@ func init() {
 				cfg.AllowResponsesUpstream = true
 			}
 		}
+		// Open Design 是中转聚合：同一个 Key 同时提供 OpenAI Chat、
+		// Anthropic Messages 与 OpenAI Responses 三种端点。
+		// 三个协议要各自记住自己的 Base URL，否则只能配其中一个，
+		// 另外两个协议就会打到错误端点（用户在编辑器里填了却"不生效"）。
+		if v.ID == "open-design" {
+			cfg.AllowAnthropicUpstream = true
+			cfg.AllowResponsesUpstream = true
+			cfg.AnthropicBaseURL = "https://amr-link.open-design.ai"
+			cfg.ResponsesBaseURL = "https://amr-link.open-design.ai/v1"
+		}
 		// Command Code 的 Claude 模型只提供 /messages 端点。
 		if v.ID == "commandcode" {
 			cfg.AllowAnthropicUpstream = true

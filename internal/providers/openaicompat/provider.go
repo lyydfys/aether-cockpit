@@ -74,6 +74,10 @@ type Config struct {
 	// AllowResponsesUpstream 表示该厂商除 Chat Completions 外还有
 	// OpenAI Responses 端点；账号可选 api_protocol=responses。
 	AllowResponsesUpstream bool
+	// ResponsesBaseURL 是该厂商 Responses 端点的推荐地址。
+	// 与 AnthropicBaseURL 同理：只用于表单提示与报错文案，
+	// 实际地址仍以账号/渠道配置为准。
+	ResponsesBaseURL string
 }
 
 // Provider 是 OpenAI 兼容渠道实现。
@@ -225,8 +229,17 @@ func (p *Provider) ChatStream(ctx context.Context, env *provider.AccountEnv, req
 		sp = genericSpecForVendor(spec.Load("openai-compat"))
 	}
 
+	// 渠道可以按协议各配一个地址（渠道编辑器里的四个 Base URL）。
+	// 账号上的 base_url 仍是"默认地址"；若该协议另有地址，优先用它——
+	// 否则 Open Design 这类"一个 Key 覆盖三种协议、三个不同端点"的渠道，
+	// 只能记住其中一个，另外两个协议就会打到错误端点。
 	accountBase := strings.TrimRight(strings.TrimSpace(env.GetCredential("base_url")), "/")
 	protocol := strings.ToLower(strings.TrimSpace(env.GetCredential("api_protocol")))
+	if protocol != "" {
+		if per := protocolEndpoint(env, protocol); per != "" {
+			accountBase = per
+		}
+	}
 	if p.cfg.AllowResponsesUpstream && protocol == "responses" {
 		return p.chatResponses(ctx, env, req, sp)
 	}
@@ -1073,3 +1086,25 @@ func truncateStr(s string, n int) string {
 
 // 编译期确认实现了对话能力。
 var _ provider.ChatCapability = (*Provider)(nil)
+
+// protocolEndpoint 取该账号所属协议对应的端点地址。
+//
+// 渠道编辑器允许为 chat / responses / anthropic / gemini 各填一个地址，
+// 保存在凭证的 <protocol>_base_url 上。这里只在"确实配了"时返回，
+// 没配就沿用账号默认 base_url，保持旧配置完全兼容。
+func protocolEndpoint(env *provider.AccountEnv, protocol string) string {
+	if env == nil {
+		return ""
+	}
+	switch protocol {
+	case "openai", "chat":
+		return strings.TrimRight(strings.TrimSpace(env.GetCredential("chat_base_url")), "/")
+	case "anthropic", "messages":
+		return strings.TrimRight(strings.TrimSpace(env.GetCredential("anthropic_base_url")), "/")
+	case "responses":
+		return strings.TrimRight(strings.TrimSpace(env.GetCredential("responses_base_url")), "/")
+	case "gemini":
+		return strings.TrimRight(strings.TrimSpace(env.GetCredential("gemini_base_url")), "/")
+	}
+	return ""
+}

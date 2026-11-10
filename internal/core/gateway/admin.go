@@ -728,9 +728,20 @@ func (g *Gateway) providerEndpointView(id, kind string) string {
 	}
 	g.settingsMu.Unlock()
 
-	// 账号级覆盖（用户在接入时填过的地址）。只对 chat 生效：
-	// 账号上的 base_url 是 OpenAI 兼容地址，填进 Anthropic/Gemini 框会把
-	// 用户真实配置覆盖掉（Open Design 这类"一个 Key 多协议"尤其明显）。
+	// 账号凭证里按协议存的地址（用户在渠道编辑器里填过就会写进来）。
+	// 先查 <kind>_base_url，再对 chat 回退到 base_url——旧账号只存过 base_url。
+	{
+		credKey := kind + "_base_url"
+		if kind == "chat" {
+			credKey = "chat_base_url"
+		}
+		for _, env := range g.pool.ListByProvider(id) {
+			if u := strings.TrimSpace(env.GetCredential(credKey)); u != "" {
+				return u
+			}
+		}
+	}
+	// 旧账号只存过 base_url：它只代表 OpenAI 兼容地址，只对 chat 回显。
 	if kind == "chat" {
 		for _, env := range g.pool.ListByProvider(id) {
 			if u := strings.TrimSpace(env.GetCredential("base_url")); u != "" {

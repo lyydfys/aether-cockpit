@@ -202,14 +202,23 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	creds := draftCredentials(d)
-	// 已知渠道：只在用户真的提交了对应协议时才动账号 base_url，且用对的那一项。
-	// 自定义渠道有自己的地址存储（CustomChannel.BaseURL），不走这里。
+	// 已知渠道：把用户填的每个协议地址挂到对应凭证上。
+	//
+	// chat 仍写 base_url（旧配置与选号逻辑都认它）；其它协议写
+	// <protocol>_base_url，由 provider 按 api_protocol 取用。
+	// 这样一个渠道可以同时服务 OpenAI Chat / Anthropic / Responses 三种协议，
+	// 而不是只能记住其中一个地址。
 	if _, isCustom := g.customChannelForProvider(d.ID); !isCustom {
+		delete(creds, "base_url")
 		if ep, ok := knownEndpoints["chat"]; ok {
 			creds["base_url"] = ep
-		} else {
-			// 用户没提交 chat 端点：不要用 anthropic/responses 的值冒充。
-			delete(creds, "base_url")
+			creds["chat_base_url"] = ep
+		}
+		for kind, v := range knownEndpoints {
+			if kind == "chat" {
+				continue
+			}
+			creds[kind+"_base_url"] = v
 		}
 	}
 	isVertex := d.ID == "vertex"
@@ -810,10 +819,6 @@ func (g *Gateway) saveProviderEndpoints(d *providerDraft) (map[string]string, st
 		// 自定义渠道走 CustomChannel.BaseURL，不在这里落端点。
 		return nil, ""
 	}
-	// 该渠道实际支持哪些协议：不支持的直接拒绝，而不是"存下来但永远不生效"。
-	if problem := g.checkEndpointSupport(d.ID, submitted); problem != "" {
-		return nil, problem
-	}
 	g.settingsMu.Lock()
 	if g.settings.ProviderEndpoints == nil {
 		g.settings.ProviderEndpoints = map[string]map[string]string{}
@@ -829,58 +834,4 @@ func (g *Gateway) saveProviderEndpoints(d *providerDraft) (map[string]string, st
 	_ = g.saveSettings()
 	g.settingsMu.Unlock()
 	return submitted, ""
-}
-
-// checkEndpointSupport 校验提交的协议是否被该渠道支持。
-//
-// 不支持的协议宁可明确报错，也不要静默存下来：用户会以为配好了，
-// 实际请求仍然走默认地址或根本不走这条协议。
-func (g *Gateway) checkEndpointSupport(providerID string, submitted map[string]string) string {
-	p, ok := provider.Get(providerID)
-	if !ok {
-		return ""
-	}
-	m := p.Manifest()
-	label := m.DisplayName
-	if label == "" {
-		label = providerID
-	}
-	for kind := range submitted {
-		switch kind {
-		case "chat":
-			// 几乎所有渠道都支持 chat（Capabilities.Chat）。
-			if !m.Capabilities.Chat {
-				return label + " 不支持 OpenAI Chat 协议，请填到对应的协议栏"
-			}
-		case "responses":
-			if !m.NativeResponses {
-				return label + " 不支持 Responses 协议（该渠道不是原生 Responses 上游），这一栏不用填"
-			}
-		case "anthropic":
-			if !strings.HasPrefix(providerID, "claude") && !isAnthropicProtocolProvider(m) {
-				return label + " 不支持 Anthropic 协议，请把地址填到 OpenAI Chat Base URL"
-			}
-		case "gemini":
-			if !isGeminiProtocolProvider(providerID) {
-				return label + " 不支持 Gemini 协议，请把地址填到对应的协议栏"
-			}
-		}
-	}
-	return ""
-}
-
-// isAnthropicProtocolProvider 判断渠道上游是否走 Anthropic Messages 协议。
-func isAnthropicProtocolProvider(m provider.ProviderManifest) bool {
-	if strings.Contains(strings.ToLower(m.ID), "claude") {
-		return true
-	}
-	if strings.Contains(strings.ToLower(m.ID), "anthropic") {
-		return true
-	}
-	return false
-}
-
-// isGeminiProtocolProvider 判断渠道上游是否走 Gemini 协议。
-func isGeminiProtocolProvider(id string) bool {
-	return strings.Contains(strings.ToLower(id), "gemini")
 }
