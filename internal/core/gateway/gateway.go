@@ -454,8 +454,10 @@ func New(cfg Config) *Gateway {
 		cfg.FirstByteTimeout = 60 * time.Second
 	}
 	if cfg.RequestBudget == 0 {
-		// 默认 120 秒：够 2~3 次有意义的尝试，又不会让用户干等到分钟级。
-		cfg.RequestBudget = 120 * time.Second
+		// 默认 180 秒。要覆盖"撞几次线路故障 + 递增退避"的完整过程：
+		// 6 次额外重试的退避合计 31 秒，加上每次尝试本身的超时，
+		// 120 秒会在最后一次重试前就把预算耗光（等于白配额度）。
+		cfg.RequestBudget = 180 * time.Second
 	}
 	st := state.New(state.Options{
 		MaxRecords:   cfg.MaxRecords,
@@ -1848,6 +1850,8 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 	blocked := map[string]bool{}
 	// 因"线路故障"被排除的账号：这类失败换账号没用，下一轮要把它们放回来。
 	edgeFailedAccounts := map[string]bool{}
+	// edgeRetryCount 记录本次请求已经因为线路故障重试过几轮（用于递增退避）。
+	edgeRetryCount := 0
 	for {
 		fullThisPass := map[string]bool{}
 		fullProviders := map[string]bool{}
@@ -1861,7 +1865,10 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			if !riskPauseUntil(b.ProviderID).IsZero() {
 				continue
 			}
-			if attempts >= g.cfg.MaxAttempts {
+			// 线路故障尝试单独计数、单独额度：撞 520 不该吃掉"换账号"的额度，
+			// 否则 MaxAttempts=5 时两三次线路抖动就把额度耗光，
+			// 用户看到的就是"多试几次仍然失败"。
+			if attempts >= g.cfg.MaxAttempts+edgeRetryBudget {
 				break
 			}
 
@@ -2045,7 +2052,7 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 		// 这一轮真正发过请求且失败：只要还有尝试额度，就换下一个账号再来一轮
 		// （账号级故障转移；exclude 已把失败的账号排掉）。
 		if attemptedThisPass {
-			if attempts >= g.cfg.MaxAttempts {
+			if attempts >= g.cfg.MaxAttempts+edgeRetryBudget {
 				break
 			}
 			// 总预算耗尽：不再换账号空等，直接带着已有错误返回。
@@ -2066,8 +2073,31 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 					delete(exclude, id)
 				}
 				edgeFailedAccounts = map[string]bool{}
-				// 给换线留一点时间：线路重扫是异步的，立刻重试常打回原边缘。
-				time.Sleep(edgeRetryBackoff)
+				// 递增退避：线路重扫要扫几十个候选，固定短退避会打回同一条坏边缘。
+				// 1s → 2s → 4s → 8s（封顶），给重扫足够时间，也避免把客户端拖死。
+				// 退避时长受总预算约束：临近 deadline 时不再等待，直接如实报错。
+				backoff := edgeRetryBackoff
+				for i := 1; i < edgeRetryCount; i++ {
+					backoff *= 2
+					if backoff > maxEdgeRetryBackoff {
+						backoff = maxEdgeRetryBackoff
+						break
+					}
+				}
+				edgeRetryCount++
+				if deadline, ok := ctx.Deadline(); ok {
+					if remain := time.Until(deadline); remain < backoff {
+						// 预算不够再等一轮：别再睡了，交给上层报错。
+						backoff = remain
+						if backoff <= 0 {
+							backoff = 0
+						}
+					}
+				}
+				if backoff > 0 {
+					log.Printf("[EDGE] 线路故障，%s 后重试（第 %d 次）", backoff.Round(time.Millisecond), edgeRetryCount)
+					time.Sleep(backoff)
+				}
 			}
 			continue
 		}
@@ -2377,7 +2407,21 @@ func (g *Gateway) openStream(ctx context.Context, h pipeline.StreamHandler, env 
 //
 // 不能立刻重试：线路重扫是异步的，马上再打往往还是同一条坏边缘。
 // 500ms 足够让 kickEdgeRescan 完成一轮扫描并写入新 pin。
-const edgeRetryBackoff = 500 * time.Millisecond
+// edgeRetryBackoff 是线路故障首次重试前的退避，之后按 2x 递增到 maxEdgeRetryBackoff。
+//
+// 为什么要递增而不是固定：线路重扫要扫几十个候选（默认 96 个、并发 16、
+// 每个 4 秒超时），固定 500ms 往往还在扫，重试就打回同一条坏边缘，
+// 白白消耗一次尝试额度——用户看到的就是"多试几次还是 520"。
+const (
+	edgeRetryBackoff    = 1 * time.Second
+	maxEdgeRetryBackoff = 8 * time.Second
+	// edgeRetryBudget 是线路故障额外允许的尝试次数（不含账号轮换额度）。
+	//
+	// 撞 520 换账号没用、换线路才有用，所以这类重试必须独立记账：
+	// 6 次额外机会 ≈ 1s+2s+4s+8s+8s+8s 的递增退避，足够跨过几分钟的
+	// 边缘抖动，又不会被一次持续故障把客户端挂死（总预算仍然生效）。
+	edgeRetryBudget = 6
+)
 
 // clientFingerprint 由来源信息派生一个稳定短哈希（IP + UA + 凭证）。
 // 只用于会话粘性，不落盘、不参与鉴权。

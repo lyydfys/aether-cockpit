@@ -108,12 +108,13 @@ func TestPersistent520EventuallyFails(t *testing.T) {
 	if resp.StatusCode == http.StatusOK {
 		t.Fatal("持续 520 不该返回成功")
 	}
-	// 有重试但有限度：至少打了 2 次，且不会打爆。
+	// 有重试但有限度：线路额度（edgeRetryBudget）用上几次，且不会打爆。
 	n := atomic.LoadInt32(&hits)
 	if n < 2 {
 		t.Fatalf("应至少重试一次，实际只打了 %d 次", n)
 	}
-	if n > 6 {
-		t.Fatalf("重试次数失控：%d 次", n)
+	// MaxAttempts(3) + edgeRetryBudget(6) 是上限；留一点余量避免边界脆弱。
+	if limit := int32(3 + edgeRetryBudget + 2); n > limit {
+		t.Fatalf("重试次数失控：%d 次（上限约 %d）", n, limit)
 	}
 }
