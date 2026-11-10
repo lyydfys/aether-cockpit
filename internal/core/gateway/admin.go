@@ -276,10 +276,10 @@ func (g *Gateway) handleProviders(w http.ResponseWriter, r *http.Request) {
 			// 这里手工拼装响应，漏掉它会让能力按钮永远不出现。
 			// capabilities 是内核能力集合；chat 单独再给一个布尔，
 			// 前端（渠道卡/接入弹窗）不必解析 capabilities 就能判断能否反代。
-			"capabilities":     v.Capabilities,
+			"capabilities": v.Capabilities,
 			// chat 是"这个渠道能不能对话"的**能力布尔**（Android 端按 Boolean 解析，
 			// 桌面端组件也用它决定是否显示唤醒按钮），语义不能改。
-			"chat":             v.Capabilities.Chat,
+			"chat": v.Capabilities.Chat,
 			// endpoints 是渠道编辑器要回显的**端点地址**（另一个维度的数据）。
 			// 过去编辑器错读 `chat`（布尔当 URL），回显空白、保存时把 true 发回去，
 			// 被后端判定 Base URL 非法 → 用户看到"保存失败"。这里用独立字段解耦。
@@ -714,6 +714,20 @@ func (g *Gateway) providerEndpointView(id, kind string) string {
 		}
 		return ""
 	}
+	// 用户在渠道编辑器里显式保存过的端点地址优先。
+	//
+	// 这条必须排在最前面：否则用户改完、保存成功、刷新回来还是旧值，
+	// 会以为"保存不了这个协议"。对已知渠道尤其重要——它们过去根本没有
+	// 可落盘的端点存储。
+	g.settingsMu.Lock()
+	if eps, ok := g.settings.ProviderEndpoints[id]; ok {
+		if u := strings.TrimSpace(eps[kind]); u != "" {
+			g.settingsMu.Unlock()
+			return u
+		}
+	}
+	g.settingsMu.Unlock()
+
 	// 账号级覆盖（用户在接入时填过的地址）。只对 chat 生效：
 	// 账号上的 base_url 是 OpenAI 兼容地址，填进 Anthropic/Gemini 框会把
 	// 用户真实配置覆盖掉（Open Design 这类"一个 Key 多协议"尤其明显）。

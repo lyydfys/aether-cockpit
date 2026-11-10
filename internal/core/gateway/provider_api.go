@@ -192,7 +192,26 @@ func (g *Gateway) handleProviderSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体解析失败: " + err.Error()})
 		return
 	}
+	// 已知渠道的端点覆盖：必须在 draftCredentials 之前处理，否则用户在
+	// "Anthropic Base URL"里填的地址会被草稿的 base 回填逻辑当成 chat 的
+	// base_url 写进账号——填错框就等于把渠道地址改错了。
+	knownEndpoints, epProblem := g.saveProviderEndpoints(d)
+	if epProblem != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": epProblem})
+		return
+	}
+
 	creds := draftCredentials(d)
+	// 已知渠道：只在用户真的提交了对应协议时才动账号 base_url，且用对的那一项。
+	// 自定义渠道有自己的地址存储（CustomChannel.BaseURL），不走这里。
+	if _, isCustom := g.customChannelForProvider(d.ID); !isCustom {
+		if ep, ok := knownEndpoints["chat"]; ok {
+			creds["base_url"] = ep
+		} else {
+			// 用户没提交 chat 端点：不要用 anthropic/responses 的值冒充。
+			delete(creds, "base_url")
+		}
+	}
 	isVertex := d.ID == "vertex"
 	if isVertex {
 		vc, problem := vertexCredentials(d)
@@ -765,4 +784,103 @@ func (g *Gateway) handleProviderAccountModels(w http.ResponseWriter, r *http.Req
 		}
 	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"error": "账号不存在: " + body.Account})
+}
+
+// saveProviderEndpoints 保存用户为**已知渠道**填写的协议端点地址。
+//
+// 返回本次实际被接受的端点（协议 → 地址），供调用方决定账号 base_url。
+// 已知渠道过去完全没有端点存储：编辑器里改了、保存返回成功、刷新回来还是旧值，
+// 用户会以为"这个协议保存不了"。这里补上落盘与回显（回显见 providerEndpointView）。
+func (g *Gateway) saveProviderEndpoints(d *providerDraft) (map[string]string, string) {
+	submitted := map[string]string{}
+	for kind, raw := range map[string]string{
+		"chat":      d.Chat,
+		"responses": d.Responses,
+		"anthropic": d.Anthropic,
+		"gemini":    d.Gemini,
+	} {
+		if v := trimEndpoint(raw); v != "" {
+			submitted[kind] = v
+		}
+	}
+	if len(submitted) == 0 {
+		return nil, ""
+	}
+	if _, ok := provider.Get(d.ID); !ok {
+		// 自定义渠道走 CustomChannel.BaseURL，不在这里落端点。
+		return nil, ""
+	}
+	// 该渠道实际支持哪些协议：不支持的直接拒绝，而不是"存下来但永远不生效"。
+	if problem := g.checkEndpointSupport(d.ID, submitted); problem != "" {
+		return nil, problem
+	}
+	g.settingsMu.Lock()
+	if g.settings.ProviderEndpoints == nil {
+		g.settings.ProviderEndpoints = map[string]map[string]string{}
+	}
+	cur := g.settings.ProviderEndpoints[d.ID]
+	if cur == nil {
+		cur = map[string]string{}
+	}
+	for kind, v := range submitted {
+		cur[kind] = v
+	}
+	g.settings.ProviderEndpoints[d.ID] = cur
+	_ = g.saveSettings()
+	g.settingsMu.Unlock()
+	return submitted, ""
+}
+
+// checkEndpointSupport 校验提交的协议是否被该渠道支持。
+//
+// 不支持的协议宁可明确报错，也不要静默存下来：用户会以为配好了，
+// 实际请求仍然走默认地址或根本不走这条协议。
+func (g *Gateway) checkEndpointSupport(providerID string, submitted map[string]string) string {
+	p, ok := provider.Get(providerID)
+	if !ok {
+		return ""
+	}
+	m := p.Manifest()
+	label := m.DisplayName
+	if label == "" {
+		label = providerID
+	}
+	for kind := range submitted {
+		switch kind {
+		case "chat":
+			// 几乎所有渠道都支持 chat（Capabilities.Chat）。
+			if !m.Capabilities.Chat {
+				return label + " 不支持 OpenAI Chat 协议，请填到对应的协议栏"
+			}
+		case "responses":
+			if !m.NativeResponses {
+				return label + " 不支持 Responses 协议（该渠道不是原生 Responses 上游），这一栏不用填"
+			}
+		case "anthropic":
+			if !strings.HasPrefix(providerID, "claude") && !isAnthropicProtocolProvider(m) {
+				return label + " 不支持 Anthropic 协议，请把地址填到 OpenAI Chat Base URL"
+			}
+		case "gemini":
+			if !isGeminiProtocolProvider(providerID) {
+				return label + " 不支持 Gemini 协议，请把地址填到对应的协议栏"
+			}
+		}
+	}
+	return ""
+}
+
+// isAnthropicProtocolProvider 判断渠道上游是否走 Anthropic Messages 协议。
+func isAnthropicProtocolProvider(m provider.ProviderManifest) bool {
+	if strings.Contains(strings.ToLower(m.ID), "claude") {
+		return true
+	}
+	if strings.Contains(strings.ToLower(m.ID), "anthropic") {
+		return true
+	}
+	return false
+}
+
+// isGeminiProtocolProvider 判断渠道上游是否走 Gemini 协议。
+func isGeminiProtocolProvider(id string) bool {
+	return strings.Contains(strings.ToLower(id), "gemini")
 }

@@ -185,6 +185,13 @@ type runtimeSettings struct {
 	// QuotaAlerts 是额度提醒的去重状态（每个告警键记录上次的类型与时间）。
 	// 落盘是为了重启后不把已经报过的提醒再刷一遍。
 	QuotaAlerts map[string]quotaAlertState `json:"quota_alerts,omitempty"`
+	// ProviderEndpoints 是用户为**已知渠道**覆盖的协议端点地址。
+	//
+	// 为什么需要：渠道编辑器里那四个 Base URL 输入框过去只对"自定义渠道"
+	// 生效，对 open-design 这类内置渠道改了也存不下来——点了保存返回成功，
+	// 实际什么都没变（改了等于没改，还以为是保存坏了）。
+	// 键是 provider id，值是协议名 → Base URL。
+	ProviderEndpoints map[string]map[string]string `json:"provider_endpoints,omitempty"`
 	// ChannelNet 是按渠道的慢链路优化档位（连接预热 / 在途上限）。
 	// 未配置的渠道走内置默认（目前只有跨境/中转渠道默认开）。
 	ChannelNet map[string]ChannelNetProfile `json:"channel_net,omitempty"`
