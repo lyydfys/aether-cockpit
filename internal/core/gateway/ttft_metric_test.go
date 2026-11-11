@@ -110,7 +110,7 @@ func TestOpenStreamMarksHeaderNotFirstByte(t *testing.T) {
 		return ch, nil
 	}
 	tm := newRequestTimer()
-	ch, err := g.openStream(context.Background(), h, env,
+	ch, err := g.openStream(context.Background(), context.Background(), h, env,
 		&ir.UnifiedChatRequest{Model: "m", Stream: true}, tm)
 	if err != nil {
 		t.Fatalf("openStream: %v", err)

@@ -1787,6 +1787,10 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 	// 传 req.ReasoningEffort 进去是为了让组规则能按"请求要求的推理档"出规则
 	// （例如高强度推理只走贵模型）。RouteOutcome.EffortOut 是规则强制指定的
 	// 档位，非空时覆盖请求——只在客户端没有显式指定时生效，用户意图优先。
+	// clientCtx 是进入 dispatch 时的原始上下文（== 客户端请求上下文）。
+	// 预算包装后的 ctx 会在 dispatch 返回时被 cancel，不能用来判断"客户端是否断开"。
+	clientCtx := ctx
+
 	// 总重试预算：从本次请求开始计时，跨所有尝试共享。
 	//
 	// 没有它时，MaxAttempts(5) × FirstByteTimeout(60s) 的最坏等待是分钟级，
@@ -1998,7 +2002,7 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			attempts++
 			attemptedThisPass = true
 			tryStart := time.Now()
-			ch, err := g.openStream(ctx, h, env, work, tm)
+			ch, err := g.openStream(ctx, clientCtx, h, env, work, tm)
 
 			// 上下文超限自动续接：同一账号裁掉较早的对话后重试一次。
 			// Fast-Path 有同样逻辑（context_continue.go）；这里补 IR 路径，
@@ -2008,7 +2012,7 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 				if isContextOverflowAPIError(ae) {
 					if trimmed, dropped, ok := shrinkUnifiedRequest(work, contextKeepTailItems); ok {
 						trimmed.Meta["context_trimmed"] = true
-						if retryCh, retryErr := g.openStream(ctx, h, env, trimmed, tm); retryErr == nil {
+						if retryCh, retryErr := g.openStream(ctx, clientCtx, h, env, trimmed, tm); retryErr == nil {
 							log.Printf("[CONTINUE] %s 上下文超限，裁剪 %d 条较早消息后重试成功", b.ProviderID, dropped)
 							ch, err = retryCh, nil
 							work = trimmed
@@ -2268,7 +2272,7 @@ func (g *Gateway) invalidateHandlers() {
 }
 
 // openStream 调用上游并窥探首个事件，确保"首字节之前"才允许重试。
-func (g *Gateway) openStream(ctx context.Context, h pipeline.StreamHandler, env *provider.AccountEnv, req *ir.UnifiedChatRequest, tm *requestTimer) (<-chan ir.UnifiedStreamEvent, error) {
+func (g *Gateway) openStream(ctx, clientCtx context.Context, h pipeline.StreamHandler, env *provider.AccountEnv, req *ir.UnifiedChatRequest, tm *requestTimer) (<-chan ir.UnifiedStreamEvent, error) {
 	// 派生一个可取消的 ctx。
 	//
 	// 为什么必须这样做：一旦我们放弃这条流（超时 / 首事件即错误 / 换账号重试），
@@ -2409,7 +2413,18 @@ func (g *Gateway) openStream(ctx context.Context, h pipeline.StreamHandler, env 
 		// 客户端断开不等于上游该立刻停：usage 事件与收尾状态都出现在流末尾，
 		// 立刻断开等于把这些数据一起丢掉（高并发网关 / aether 同样选择读完）。
 		// 但必须有上限，否则客户端一断开上游就白跑一整轮。
-		context.AfterFunc(ctx, func() {
+		// 必须监听**客户端请求上下文**，而不是本地这个可能被预算包装过的 ctx。
+		//
+		// 踩过的坑：dispatch 里的请求预算用 defer cancelBudget()，而 dispatch 在
+		// 拿到流之后就返回（流还在传）——用 ctx 监听会立刻判定"客户端已断开"，
+		// 20 秒（streamDrainGrace）后把上游连接掐掉。表现是流在 +20s 处突然结束、
+		// 没有 finish_reason、工具调用参数断在半截，而客户端只会报
+		// "Unterminated string in JSON"。
+		watch := clientCtx
+		if watch == nil {
+			watch = ctx
+		}
+		context.AfterFunc(watch, func() {
 			time.AfterFunc(streamDrainGrace, cancelUp)
 		})
 

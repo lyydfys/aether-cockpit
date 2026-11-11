@@ -37,7 +37,7 @@ func TestStallTimeoutIsEnforced(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := g.openStream(context.Background(), h, env,
+	_, err := g.openStream(context.Background(), context.Background(), h, env,
 		&ir.UnifiedChatRequest{Model: "m", Stream: true}, nil)
 	elapsed := time.Since(start)
 
@@ -72,7 +72,7 @@ func TestNoStallTimeoutFallsBackToGlobal(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 	start := time.Now()
-	_, err := g.openStream(context.Background(), h, env,
+	_, err := g.openStream(context.Background(), context.Background(), h, env,
 		&ir.UnifiedChatRequest{Model: "m", Stream: true}, nil)
 	elapsed := time.Since(start)
 	if err == nil {

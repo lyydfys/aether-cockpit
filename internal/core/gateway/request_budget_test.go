@@ -42,7 +42,7 @@ func TestOpenStreamTimesOutDuringConnect(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := g.openStream(context.Background(), h, env,
+	_, err := g.openStream(context.Background(), context.Background(), h, env,
 		&ir.UnifiedChatRequest{Model: "m", Stream: true}, nil)
 	elapsed := time.Since(start)
 
@@ -79,7 +79,7 @@ func TestOpenStreamSucceedsWhenFirstEventArrives(t *testing.T) {
 		close(ch)
 		return ch, nil
 	}
-	ch, err := g.openStream(context.Background(), h, env,
+	ch, err := g.openStream(context.Background(), context.Background(), h, env,
 		&ir.UnifiedChatRequest{Model: "m", Stream: true}, nil)
 	if err != nil {
 		t.Fatalf("首个事件按时到达时不该报错：%v", err)
