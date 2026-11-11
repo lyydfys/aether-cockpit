@@ -512,7 +512,10 @@ func buildPayload(req *ir.UnifiedChatRequest, upstreamModel, maxTokensField stri
 	if len(req.StopSequences) > 0 {
 		payload["stop"] = req.StopSequences
 	}
-	if req.ReasoningEffort != "" {
+	// 只下发明确的推理档位。EffortAuto 是网关按内容猜的，
+	// 下发会让推理模型多吃输出预算，导致客户端 max_tokens 不够用、
+	// 工具调用 JSON 被截断（直连上游不会有这个问题）。
+	if req.ReasoningEffort != "" && !req.EffortAuto {
 		payload["reasoning_effort"] = req.ReasoningEffort
 	}
 	return payload

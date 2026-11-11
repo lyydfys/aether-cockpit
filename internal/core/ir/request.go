@@ -78,17 +78,26 @@ type UnifiedChatRequest struct {
 
 	// --- 采样与推理控制 ---
 
-	Stream            bool            `json:"stream"`
-	Temperature       *float64        `json:"temperature,omitempty"`
-	TopP              *float64        `json:"top_p,omitempty"`
+	Stream      bool     `json:"stream"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
 	// FrequencyPenalty / PresencePenalty 是 OpenAI 的重复惩罚。此前没有建模，
 	// 客户端传了也被丢掉：长输出容易滑进复读循环（同一片段刷几百遍），
 	// 而直连官方 API 时参数原样送达，所以不会复读。
-	FrequencyPenalty  *float64        `json:"frequency_penalty,omitempty"`
-	PresencePenalty   *float64        `json:"presence_penalty,omitempty"`
-	MaxOutputTokens   *int            `json:"max_output_tokens,omitempty"`
-	StopSequences     []string        `json:"stop_sequences,omitempty"`
-	ReasoningEffort   string          `json:"reasoning_effort,omitempty"` // low | medium | high
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
+	MaxOutputTokens  *int     `json:"max_output_tokens,omitempty"`
+	StopSequences    []string `json:"stop_sequences,omitempty"`
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"` // low | medium | high
+	// EffortAuto 表示 ReasoningEffort 是**网关根据请求内容猜出来的**，
+	// 而不是客户端或用户规则明确要求的。
+	//
+	// 这类"猜出来的"档位不能下发给上游：
+	//   - 它会让推理模型额外消耗输出预算（reasoning token 计入 max_tokens），
+	//     客户端按自己的 max_tokens 精打细算时，工具调用的 JSON 会被截断，
+	//     而同样的请求直连上游却是正常的；
+	//   - 客户端没要求的事，网关不该替它决定。
+	EffortAuto        bool            `json:"-"`
 	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 	ToolChoice        *ToolChoice     `json:"tool_choice,omitempty"`
 	ResponseFormat    *ResponseFormat `json:"response_format,omitempty"`

@@ -1796,7 +1796,13 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 	// 规则没指定、客户端也没指定：按请求难度自适应（短问题 low、改代码/长上下文 high）。
 	// 放在这里而不是入口处，是为了让组规则的 UseEffort 优先——两条都不能省。
 	if req.ReasoningEffort == "" {
-		req.ReasoningEffort = g.autoEffortFor(req)
+		// 猜出来的档位只用于网关内部判断，标记后不随请求下发。
+		// 否则推理模型会额外消耗输出预算，客户端设的 max_tokens 被吃掉一部分，
+		// 工具调用 JSON 写到一半就断——而同样的请求直连上游是正常的。
+		if auto := g.autoEffortFor(req); auto != "" {
+			req.ReasoningEffort = auto
+			req.EffortAuto = true
+		}
 	}
 	if len(bindings) == 0 {
 		avail := g.models.AvailableModelIDs(12)

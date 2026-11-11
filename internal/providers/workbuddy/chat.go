@@ -220,7 +220,9 @@ func buildPayload(req *ir.UnifiedChatRequest, model string, intl bool) map[strin
 		payload["stop"] = req.StopSequences
 	}
 	if req.ReasoningEffort != "" {
-		payload["reasoning_effort"] = req.ReasoningEffort
+		if !req.EffortAuto {
+			payload["reasoning_effort"] = req.ReasoningEffort
+		}
 	}
 	return payload
 }
