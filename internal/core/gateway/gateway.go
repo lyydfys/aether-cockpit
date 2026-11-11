@@ -2023,6 +2023,18 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 			tryStart := time.Now()
 			ch, err := g.openStream(ctx, clientCtx, h, env, work, tm)
 
+			// 建连类失败先怀疑代理：很多用户关掉代理软件后，系统代理与环境
+			// 变量仍指向已经失效的本地端口。此时所有账号共用同一个出口，
+			// 换账号毫无意义（表现就是"线路切换失败 / Connection error"）。
+			// 这里一旦判定代理失效，立即在同一请求内重试一次——后续尝试会走直连。
+			if err != nil && transport.NoteConnFailure(g.tr, err) {
+				log.Printf("[FAILOVER] %s 建连失败，代理疑似失效，立刻改直连重试", b.ProviderID)
+				trace.addTry(env, b.UpstreamModel, tryStart, http.StatusBadGateway, "proxy", false)
+				if directCh, directErr := g.openStream(ctx, clientCtx, h, env, work, tm); directErr == nil {
+					ch, err = directCh, nil
+				}
+			}
+
 			// 上下文超限自动续接：同一账号裁掉较早的对话后重试一次。
 			// Fast-Path 有同样逻辑（context_continue.go）；这里补 IR 路径，
 			// 覆盖 /v1/messages、Chat 与走 IR 的 Responses。

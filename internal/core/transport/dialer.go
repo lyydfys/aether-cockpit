@@ -178,6 +178,10 @@ func (f *Factory) NewClientOpts(policy provider.NetworkPolicy, proxyOverride, tl
 		if u == nil {
 			// 没配代理时退化为直连，但让调用方知道这是降级行为。
 			tr.Proxy = nil
+		} else if proxySuspectedBroken() {
+			// 显式配置的全局代理被判定失效（多半是用户关掉了代理软件）：
+			// 先直连，别让整条链路跟着一起挂。到期后会自动恢复走代理。
+			tr.Proxy = nil
 		} else {
 			tr.Proxy = http.ProxyURL(u)
 		}

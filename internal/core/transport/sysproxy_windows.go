@@ -138,6 +138,11 @@ func parseWinProxyServer(raw string) *url.URL {
 // 所以这里先探一下代理端口，探不通就当没配，退回环境变量/直连。
 func sysProxyFunc() func(*http.Request) (*url.URL, error) {
 	return func(req *http.Request) (*url.URL, error) {
+		// 代理被判定为失效（多半是用户关掉了代理软件）时，直接走直连。
+		// 否则所有账号会一起卡在同一条死路上，故障转移毫无意义。
+		if proxySuspectedBroken() {
+			return nil, nil
+		}
 		if proxy, bypass := windowsSystemProxy(); proxy != nil {
 			if shouldBypass(req.URL.Hostname(), bypass) {
 				return nil, nil
