@@ -98,10 +98,12 @@ type Store struct {
 	// 为什么不直接同步写：persistResponse 虽在内存锁之外，但仍然发生在
 	// 请求的收尾路径上——慢盘（机械盘/杀软实时扫描）会把每个请求的尾延迟
 	// 拉高几十毫秒。队列满时回退为同步写，保证任何情况下都不丢数据。
-	writeCh chan *ResponseRecord
+	writeCh chan writeJob
 	writeWg sync.WaitGroup
 	// closed 标记队列已关闭，后续写入退化为同步。
 	closed atomicBool
+	// dbPath 是 SQLite 文件路径，用于统计磁盘占用与 VACUUM。
+	dbPath string
 }
 
 type sigEntry struct {
@@ -148,11 +150,15 @@ func New(opts Options) *Store {
 
 	// 优先 SQLite：它能做增量写入，不像 JSON 快照需要全量序列化。
 	if opts.SQLitePath != "" {
+		s.dbPath = opts.SQLitePath
 		if err := s.attachSQLite(opts.SQLitePath); err != nil {
 			// 打不开就降级到 JSON/内存，不能让网关因为一个持久化问题起不来。
 			log.Printf("[WARN] SQLite 初始化失败，降级为 %s: %v", fallbackName(opts.SnapshotPath), err)
 			s.load()
 		}
+		// 必须在这里启动写后置队列：之前提前 return 导致 SQLite 模式
+		// 永远走同步写盘，请求收尾被磁盘 IO 阻塞。
+		s.startWriter()
 		return s
 	}
 
@@ -246,7 +252,16 @@ func (s *Store) DeleteResponse(id string) bool {
 	s.dirty = true
 	s.mu.Unlock()
 
-	s.deletePersistedResponse(id)
+	// 走同一条写队列：保证"先写后删"的顺序，避免删除被排队中的写入复活。
+	if s.closed.Load() || s.writeCh == nil {
+		s.deletePersistedResponse(id)
+		return true
+	}
+	select {
+	case s.writeCh <- writeJob{delID: id}:
+	default:
+		s.deletePersistedResponse(id)
+	}
 	return true
 }
 
@@ -505,9 +520,35 @@ func (s *Store) enqueuePersist(rec *ResponseRecord) {
 		return
 	}
 	select {
-	case s.writeCh <- rec:
+	case s.writeCh <- writeJob{rec: rec}:
 	default:
 		s.persistResponse(rec)
+	}
+}
+
+// Flush 等待写后置队列排空，返回时所有已入队的记录都已落盘。
+//
+// Compact 之前必须先 Flush：否则清理看到的是"写入还没落库"的旧状态，
+// 会报告"保留 0 条"，而队列里的记录随后照写不误——用户点了清理却发现
+// 库一点没小。
+func (s *Store) Flush() {
+	s.mu.Lock()
+	ch := s.writeCh
+	s.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	// 塞一个屏障任务并等它被处理：队列 FIFO，轮到它时之前的都已写盘。
+	done := make(chan struct{})
+	select {
+	case ch <- writeJob{ack: done}:
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			// 写入极慢（慢盘）：最多等 5 秒，不让调用方无限阻塞。
+		}
+	case <-time.After(2 * time.Second):
+		// 队列满：说明积压严重，退化为"尽量等"。
 	}
 }
 
@@ -516,12 +557,25 @@ func (s *Store) startWriter() {
 	if s.db == nil {
 		return
 	}
-	s.writeCh = make(chan *ResponseRecord, 256)
+	s.writeCh = make(chan writeJob, 256)
+	// 必须在启动时把 channel 抓成局部变量：range 一个**字段**会在每轮迭代
+	// 重新读取它，而 drainWriter 关闭后会把字段置 nil —— 协程下次迭代就
+	// 阻塞在 nil channel 上，Close 里的 Wait 永远不返回（关闭应用直接卡死）。
+	ch := s.writeCh
 	s.writeWg.Add(1)
 	go func() {
 		defer s.writeWg.Done()
-		for rec := range s.writeCh {
-			s.persistResponse(rec)
+		for job := range ch {
+			if job.delID != "" {
+				s.deletePersistedResponse(job.delID)
+			}
+			if job.rec != nil {
+				s.persistResponse(job.rec)
+			}
+			// 屏障任务：此前的记录都已写盘，通知等待方。
+			if job.ack != nil {
+				close(job.ack)
+			}
 		}
 	}()
 }
@@ -682,4 +736,15 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// writeJob 是写后置队列的一项：持久化一条记录，可选地在完成后通知等待方。
+type writeJob struct {
+	rec *ResponseRecord
+	// delID 非空表示这是一个删除任务。
+	//
+	// 删除必须和写入走同一条 FIFO 队列：否则"删除先执行、排队中的 PUT
+	// 随后又把行写回去"，被删的快照会复活。
+	delID string
+	ack   chan struct{}
 }

@@ -771,6 +771,14 @@ func (g *Gateway) Transport() *transport.Factory { return g.tr }
 // StartAutoSave 启动状态快照。
 func (g *Gateway) StartAutoSave(d time.Duration) func() { return g.store.StartAutoSave(d) }
 
+// StartStateAutoCompact 定期清理响应快照库（删过期行 + 超限裁剪 + 按需 VACUUM）。
+//
+// 没有它的时候，落盘的快照只增不减：pruneSQLite 定义了却没人调用，
+// 长期使用的实例库文件会涨到几百 MB（实测 650 MB）。
+func (g *Gateway) StartStateAutoCompact(d time.Duration, softLimitBytes int64) func() {
+	return g.store.StartAutoCompact(d, softLimitBytes)
+}
+
 // StartUsageAutoSave 启动用量聚合的周期落盘，返回停止函数（nil 安全）。
 func (g *Gateway) StartUsageAutoSave(d time.Duration) func() {
 	if g.usage == nil {
@@ -1033,6 +1041,9 @@ func (g *Gateway) routes() {
 	m.HandleFunc("POST /api/settings/gateway-key", g.handleGatewayKeyGenerate)
 	// 明文回显只限本机：方便"看一眼再复制"，局域网访问一律禁止。
 	m.HandleFunc("GET /api/settings/gateway-key/reveal", g.handleGatewayKeyReveal)
+	// 响应快照库（state.db）的容量查看与清理。
+	m.HandleFunc("GET /api/system/state", g.handleStateStoreStats)
+	m.HandleFunc("POST /api/system/state/compact", g.handleStateStoreCompact)
 	m.HandleFunc("POST /api/settings/autostart", g.handleAutoStartSetting)
 	m.HandleFunc("POST /api/settings/cors", g.handleCORSSettings)
 	m.HandleFunc("POST /api/settings/search-quota", g.handleSearchQuota)

@@ -173,6 +173,10 @@ func Run() {
 	stopSpec := gw.StartSpecAutoUpdate(rootCtx, 10*time.Minute)
 	defer stopSpec()
 	stopSave := gw.StartAutoSave(20 * time.Second)
+	// 响应快照库自动清理：过期行 + 超限裁剪 + 按需 VACUUM。
+	// 没有它时 state.db 只增不减（实测长期使用会涨到几百 MB）。
+	stopStateCompact := gw.StartStateAutoCompact(6*time.Hour, 128<<20)
+	defer stopStateCompact()
 	defer stopSave()
 	stopAccSave := gw.Pool().StartAutoSave(10 * time.Second)
 	stopUsage := gw.StartUsageAutoSave(15 * time.Second)

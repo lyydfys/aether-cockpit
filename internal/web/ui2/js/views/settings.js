@@ -209,6 +209,64 @@ export default {
       return select([[0, '关闭'], [5, '每 5 分钟'], [15, '每 15 分钟'], [30, '每 30 分钟'], [60, '每 60 分钟']].map(([value, label]) => ({ value, label })), v, (val) => save({ monitor_minutes: Number(val) }, '自动探测'));
     }
 
+    // stateStoreControl 展示会话快照库（state.db）占用，并提供清理入口。
+    //
+    // 这个库原先只增不减：pruneSQLite 定义了但从没被调用，长期使用能涨到几百 MB，
+    // 而界面上完全看不到它的存在。
+    function stateStoreControl() {
+      const info = h('span', { class: 'mono meta' }, '读取中…');
+      const btnEl = btn('清理', { ghost: true, class: 'sm', onClick: () => void doCompact() });
+      const wrap = h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' }, info, btnEl);
+
+      const fmtBytes = (n) => {
+        const v = Number(n) || 0;
+        if (v >= 1 << 30) return (v / (1 << 30)).toFixed(2) + ' GB';
+        if (v >= 1 << 20) return (v / (1 << 20)).toFixed(1) + ' MB';
+        if (v >= 1024) return (v / 1024).toFixed(0) + ' KB';
+        return v + ' B';
+      };
+
+      const paint = (st) => {
+        info.textContent = fmtBytes(st.size_bytes) + ' · ' + (st.records || 0) + ' 条';
+        info.title = '后端: ' + (st.backend || '—')
+          + (st.path ? '\n路径: ' + st.path : '')
+          + (st.reclaimable_bytes ? '\n可回收: ' + fmtBytes(st.reclaimable_bytes) : '');
+      };
+
+      const load = async () => {
+        try { paint(await api.get('system/state')); }
+        catch { info.textContent = '读取失败'; }
+      };
+
+      const doCompact = async () => {
+        const ok = await confirmDialog(
+          '清理会话快照库？',
+          '会删除已过期的快照，并回收磁盘空间。正在进行的会话不受影响（它们仍在有效期内）。',
+          { confirmText: '清理' },
+        );
+        if (!ok) return;
+        btnEl.disabled = true;
+        info.textContent = '清理中…';
+        try {
+          const r = await api.post('system/state/compact', {});
+          const res = r.result || {};
+          const st = r.stats || {};
+          paint(st);
+          const freed = Math.max(0, (res.size_before || 0) - (res.size_after || 0));
+          const del = (res.deleted_expired || 0) + (res.deleted_over_cap || 0);
+          toast('已删除 ' + del + ' 条快照，回收 ' + fmtBytes(freed));
+        } catch (e) {
+          toast('清理失败：' + (e.message || e));
+          await load();
+        } finally {
+          btnEl.disabled = false;
+        }
+      };
+
+      void load();
+      return wrap;
+    }
+
     function network(s) {
       return [
         section('监听', [
@@ -220,6 +278,7 @@ export default {
           line('局域网地址', '开启后其它设备填这里；端口是主端口+1', lanAddrControl(s)),
           line('网关密钥', '调用 /v1 与远程管理时携带；留空 = 仅本机免鉴权', gatewayKeyControl(s)),
           line('数据目录', '账号、设置与账本都在这里', h('span', { class: 'mono meta' }, s.dir || '—')),
+          line('会话快照库', '用于 previous_response_id 续接；只增不减会占满磁盘', stateStoreControl()),
         ]),
         section('网络', [
           line('全局代理', '如 socks5://127.0.0.1:7890；留空直连', proxyControl(s)),

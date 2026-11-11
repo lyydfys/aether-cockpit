@@ -124,6 +124,7 @@ func TestSQLitePrune(t *testing.T) {
 		ExpiresAt:  time.Now().Add(time.Hour).Unix(),
 	})
 
+	s.Flush() // 写后置队列：先让记录落盘，否则清理看不到它们
 	s.pruneSQLite()
 
 	var n int
