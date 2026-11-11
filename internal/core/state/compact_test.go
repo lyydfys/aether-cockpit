@@ -156,3 +156,34 @@ func TestSQLiteModeStartsWriteBehindQueue(t *testing.T) {
 		t.Fatal("SQLite 模式下 writeCh 不应为 nil（写后置队列未启动）")
 	}
 }
+
+// SQLite 已是生效后端时，不能再周期性写 JSON 快照。
+//
+// 两个路径是同时配置的（state.json 是 SQLite 不可用时的降级方案）。
+// 旧逻辑只判断 snapshot 非空，于是 SQLite 模式下仍每 20 秒把全量快照
+// 序列化写一遍——实测 state.json 涨到 226MB，与 state.db 完全重复。
+func TestSQLiteModeSkipsJSONSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	snapPath := filepath.Join(dir, "state.json")
+
+	s := New(Options{SQLitePath: dbPath, SnapshotPath: snapPath, TTL: time.Hour})
+	defer s.Close()
+
+	s.PutResponse(&ResponseRecord{
+		ResponseID:       "r1",
+		CreatedAt:        time.Now().Unix(),
+		ExpiresAt:        time.Now().Add(time.Hour).Unix(),
+		AccumulatedItems: []ir.UnifiedItem{{Type: ir.ItemTypeMessage, Role: "user", Text: "hi"}},
+	})
+	s.Flush()
+
+	// StartAutoSave 在 SQLite 模式下应立即返回空停止函数，且不产生 JSON。
+	stop := s.StartAutoSave(10 * time.Millisecond)
+	time.Sleep(80 * time.Millisecond)
+	stop()
+
+	if _, err := os.Stat(snapPath); err == nil {
+		t.Fatal("SQLite 模式下不应写出 state.json 快照（与 state.db 重复）")
+	}
+}

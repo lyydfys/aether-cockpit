@@ -469,6 +469,18 @@ func (s *Store) StartAutoSave(interval time.Duration) func() {
 	if s.snapshot == "" || interval <= 0 {
 		return func() {}
 	}
+	// SQLite 已是生效后端时不要再写 JSON 快照。
+	//
+	// 两个路径是同时配置的（state.json 只是 SQLite 不可用时的降级方案），
+	// 旧逻辑只判断了 snapshot 非空，于是即便走 SQLite，也会每 20 秒把
+	// 全部快照序列化成一个几百 MB 的 JSON 写下去——实测 state.json 长到
+	// 226MB，和 state.db 完全重复，白白占双倍磁盘、每次落盘还烧 CPU。
+	s.mu.Lock()
+	hasSQLite := s.db != nil
+	s.mu.Unlock()
+	if hasSQLite {
+		return func() {}
+	}
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	var once sync.Once
