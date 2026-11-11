@@ -1742,7 +1742,7 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, proto ir.Protoco
 	res.ch = g.withEventHooks(ctx, res.ch)
 	// 流内错误（例如 Trae 在 SSE 里报额度耗尽）也要惩罚账号：
 	// 首事件之后的错误由转接器/聚合器写回，不经过 dispatch 的错误分支。
-	res.ch = g.watchStreamErrors(res.ch, res.env, tm)
+	res.ch = g.watchStreamErrors(res.ch, res.env, tm, entry)
 	if g.usage != nil || res.env != nil {
 		res.ch = g.withUsageRecorder(ctx, res.ch, usageCell{
 			Date: usageDate(time.Now()), ProviderID: res.providerID,
@@ -2858,7 +2858,7 @@ func (g *Gateway) streamOut(w http.ResponseWriter, proto ir.Protocol, res *dispa
 
 // watchStreamErrors 旁路观察流内错误事件：交给 penalize 后原样转发，
 // 不改变事件顺序，也不吞掉事件。
-func (g *Gateway) watchStreamErrors(ch <-chan ir.UnifiedStreamEvent, env *provider.AccountEnv, tm *requestTimer) <-chan ir.UnifiedStreamEvent {
+func (g *Gateway) watchStreamErrors(ch <-chan ir.UnifiedStreamEvent, env *provider.AccountEnv, tm *requestTimer, entry *RequestLog) <-chan ir.UnifiedStreamEvent {
 	if env == nil && tm == nil {
 		return ch
 	}
@@ -2879,6 +2879,12 @@ func (g *Gateway) watchStreamErrors(ch <-chan ir.UnifiedStreamEvent, env *provid
 			// "Unterminated string in JSON" 之类的错——用户看到的却是
 			// "工具调用失败"，很难联想到是 max_tokens 太小。
 			// 这里显式留一条日志，把真正的原因摆出来。
+			if entry != nil && ev.FinishReason != "" {
+				entry.FinishReason = ev.FinishReason
+				if ev.FinishReason == "length" || ev.FinishReason == "max_tokens" {
+					entry.Truncated = true
+				}
+			}
 			if ev.FinishReason == "length" || ev.FinishReason == "max_tokens" {
 				log.Printf("[TRUNC] 上游输出达到长度上限被截断（finish_reason=%s）；"+
 					"若响应含工具调用，其参数 JSON 会残缺导致客户端解析失败。"+

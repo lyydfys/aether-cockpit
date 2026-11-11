@@ -318,7 +318,7 @@ func TestStreamErrorPenalizesAccount(t *testing.T) {
 	close(src)
 
 	var got []ir.StreamEventType
-	for ev := range g.watchStreamErrors(src, env, nil) {
+	for ev := range g.watchStreamErrors(src, env, nil, nil) {
 		got = append(got, ev.Type)
 	}
 	if len(got) != 2 || got[0] != ir.EventTextDelta || got[1] != ir.EventError {

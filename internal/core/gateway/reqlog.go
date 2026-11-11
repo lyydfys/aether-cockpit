@@ -29,6 +29,15 @@ type RequestLog struct {
 	DurationMS int64 `json:"duration_ms"`
 	// FirstByteMS 首字节耗时，流式体验的关键指标。
 	FirstByteMS int64 `json:"first_byte_ms,omitempty"`
+	// FinishReason 是上游给出的结束原因（stop / length / tool_calls …）。
+	// 排查"响应被截断"时最关键的一个字段：length 表示撞上了输出上限。
+	FinishReason string `json:"finish_reason,omitempty"`
+	// Truncated 表示上游因输出长度上限被截断（FinishReason == length）。
+	//
+	// 这类响应如果含工具调用，参数 JSON 一定是残缺的，客户端会报
+	// "Unterminated string in JSON"。标出来才知道问题在上游额度，
+	// 而不是网关把内容弄丢了。
+	Truncated bool `json:"truncated,omitempty"`
 	// HeaderMS 是"到上游开始响应"的耗时（响应头/首个上游事件）。
 	// 与 FirstByteMS（首个内容增量）分开：HeaderMS 约等于网络+排队，
 	// FirstByteMS-HeaderMS 约等于模型思考，排查时一眼能分清楚。

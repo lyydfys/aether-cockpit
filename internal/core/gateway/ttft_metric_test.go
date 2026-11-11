@@ -127,7 +127,7 @@ func TestOpenStreamMarksHeaderNotFirstByte(t *testing.T) {
 		t.Fatalf("openStream 不该标记首字节（握手事件不算内容），得到 %d", tm.firstByteMS())
 	}
 	// 把流读完：watchStreamErrors 遇到正文事件时才标首字节。
-	wrapped := g.watchStreamErrors(ch, env, tm)
+	wrapped := g.watchStreamErrors(ch, env, tm, nil)
 	for range wrapped {
 	}
 	if !tm.hasFirstByte() {
