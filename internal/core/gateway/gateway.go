@@ -2868,6 +2868,16 @@ func (g *Gateway) watchStreamErrors(ch <-chan ir.UnifiedStreamEvent, env *provid
 			if tm != nil && isContentEvent(ev.Type) {
 				tm.markFirstByte()
 			}
+			// 输出长度截断：上游写到一半没额度了，finish_reason 会是 length。
+			// 这类响应如果是工具调用，参数 JSON 必然残缺，客户端会报
+			// "Unterminated string in JSON" 之类的错——用户看到的却是
+			// "工具调用失败"，很难联想到是 max_tokens 太小。
+			// 这里显式留一条日志，把真正的原因摆出来。
+			if ev.FinishReason == "length" || ev.FinishReason == "max_tokens" {
+				log.Printf("[TRUNC] 上游输出达到长度上限被截断（finish_reason=%s）；"+
+					"若响应含工具调用，其参数 JSON 会残缺导致客户端解析失败。"+
+					"可在客户端提高 max_tokens，或换输出上限更高的渠道。", ev.FinishReason)
+			}
 			out <- ev
 		}
 	}()
