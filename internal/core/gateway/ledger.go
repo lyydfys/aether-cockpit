@@ -72,14 +72,21 @@ type ledgerRecord struct {
 	// EstTokens 是请求发出前对输入 token 的粗估；UpstreamTruncated 表示
 	// 上游实际处理的量远小于它（上游静默截断上下文）。两者配合能把"模型突然
 	// 失忆、开始复读"直接归因到上游截断，而不是让人对着输出猜。
-	EstTokens         int64  `json:"est_tokens,omitempty"`
-	UpstreamTruncated bool   `json:"upstream_truncated,omitempty"`
-	Source            string `json:"source,omitempty"`
-	RouteID           int64  `json:"route_id,omitempty"`
-	Purpose           string `json:"purpose,omitempty"`
-	FastPath          bool   `json:"fast_path,omitempty"`
-	CallerKey         string `json:"callerKey,omitempty"`
-	CallerKeyName     string `json:"callerKeyName,omitempty"`
+	EstTokens         int64 `json:"est_tokens,omitempty"`
+	UpstreamTruncated bool  `json:"upstream_truncated,omitempty"`
+	// InEstimated 表示 In 不是上游报的，而是本地按请求体估算后的回填。
+	//
+	// 很多中转（open-design 等）流式响应的 usage 恒为 prompt_tokens:0，
+	// 照抄会让用量统计、成本核算、缓存命中率全部失真（实测 200 条全是 0）。
+	// 主流网关的通行做法是"上游不给就自己数"，这里对齐同一行为，
+	// 并用这个标记让界面能区分"统计值"与"估算值"。
+	InEstimated   bool   `json:"in_estimated,omitempty"`
+	Source        string `json:"source,omitempty"`
+	RouteID       int64  `json:"route_id,omitempty"`
+	Purpose       string `json:"purpose,omitempty"`
+	FastPath      bool   `json:"fast_path,omitempty"`
+	CallerKey     string `json:"callerKey,omitempty"`
+	CallerKeyName string `json:"callerKeyName,omitempty"`
 }
 
 type ledgerStore struct {
@@ -853,8 +860,22 @@ func (p *ledgerPending) noteUsage(u *ir.Usage, ttftMS, ms int64) {
 		p.rec.CacheWrite = int64(u.CacheCreationTokens)
 		// 上游静默截断：估算 36 万 token，上游只认 1381，模型其实只看到
 		// 最后几条碎片。差一倍以上就标记，供请求明细一眼看出来。
-		if actual := p.rec.In + p.rec.CacheRead; p.rec.EstTokens > 5000 && actual*2 < p.rec.EstTokens {
-			p.rec.UpstreamTruncated = true
+		// 上游没报输入 token（常见于中转站的流式响应）：用本地估算回填，
+		// 避免用量与成本全变成 0。只回填展示值，不参与截断判定。
+		if p.rec.In == 0 && p.rec.EstTokens > 0 {
+			p.rec.In = p.rec.EstTokens
+			p.rec.InEstimated = true
+		}
+		// 上游静默截断：本地估算远大于上游实际计入的输入量。
+		//
+		// 必须要求 actual > 0：很多中转站（如 open-design）在流式响应里返回
+		// "prompt_tokens": 0，表示"没统计"，而不是"真的只收到 0 个 token"。
+		// 旧逻辑把 0 当成实际值，于是任何估算超过 5000 的请求都会被标成
+		// "上游截断"——实测 200 条里有 184 条是这种误报。
+		if !p.rec.InEstimated {
+			if actual := p.rec.In + p.rec.CacheRead; actual > 0 && p.rec.EstTokens > 5000 && actual*2 < p.rec.EstTokens {
+				p.rec.UpstreamTruncated = true
+			}
 		}
 	}
 	p.rec.TTFT = ttftMS
