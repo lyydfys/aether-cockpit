@@ -55,6 +55,8 @@ type runtimeSettings struct {
 	// RequestBudgetSec 是"为了拿到首字节"允许消耗的总时间（秒），跨所有重试。
 	// 0 = 默认 120 秒。它防止"5 次 × 60 秒"这种最坏情况把客户端挂住几分钟。
 	RequestBudgetSec int `json:"request_budget_sec,omitempty"`
+	// TPMPerAccount 每账号每分钟输入 token 上限；0 = 不限。
+	TPMPerAccount int `json:"tpm_per_account,omitempty"`
 	// APIKey 是网关鉴权密钥的持久副本。
 	//
 	// 之所以要存：密钥原本只能由启动参数给定，设置页写入的密钥没有落点，
@@ -485,6 +487,9 @@ func (g *Gateway) applyFailoverSettings() {
 	if sec := g.settings.RequestBudgetSec; sec >= 10 && sec <= 900 {
 		g.cfg.RequestBudget = time.Duration(sec) * time.Second
 	}
+	if tpm := g.settings.TPMPerAccount; tpm > 0 {
+		g.cfg.TPMPerAccount = tpm
+	}
 }
 
 // applyWorkBuddyIdentity 把 settings.json 的 workbuddy_identity 应用到
@@ -610,6 +615,8 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		FirstByteTimeoutSec *int `json:"first_byte_timeout_sec"`
 		MaxAttempts         *int `json:"max_attempts"`
 		RequestBudgetSec    *int `json:"request_budget_sec"`
+		// TPMPerAccount 每账号每分钟输入 token 上限（0 = 不限）。
+		TPMPerAccount *int `json:"tpm_per_account"`
 		// APIKey 是网关鉴权密钥。过去这个字段没有对应分支，前端提交的密钥
 		// 只会落进 settings.ui（永不生效的副本），于是"填了密钥仍然被拒"。
 		APIKey *string `json:"api_key"`
@@ -707,6 +714,16 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		g.settings.RequestBudgetSec = *body.RequestBudgetSec
+	}
+	if body.TPMPerAccount != nil {
+		// 0 = 不限；上限给到千万级，够覆盖最严格的付费档。
+		if v := *body.TPMPerAccount; v < 0 || v > 20_000_000 {
+			g.settingsMu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "每分钟 token 上限应在 0~20000000 之间（0 = 不限）"})
+			return
+		}
+		g.settings.TPMPerAccount = *body.TPMPerAccount
+		g.cfg.TPMPerAccount = *body.TPMPerAccount
 	}
 	if body.APIKey != nil {
 		// 空串 = 关闭鉴权（仅本机监听时的合理默认）；否则立即生效，不用重启。

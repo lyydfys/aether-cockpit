@@ -90,6 +90,7 @@ function fromLedger(r) {
     priced: !!r.priced,
     pricing_model: r.pricing_model || '',
     tries: Number(r.tries) || 0,
+    attempts: r.attempts || '',
     handed_on: !!r.handed_on,
     retried: !!r.retried,
     route_id: Number(r.route_id) || 0,
@@ -107,7 +108,7 @@ export default {
   subtitle: '持久化账本 · 错误解释与耗时、Token 明细',
 
   mount(host) {
-    const state = { range: '7d', rows: [], view: null, q: '', only: 'all', page: 0, timer: 0, live: false, pricing: { currency: 'USD', usd_cny: 7.2 } };
+    const state = { range: '7d', rows: [], view: null, q: '', only: 'all', page: 0, timer: 0, live: false, repaint: null, pricing: { currency: 'USD', usd_cny: 7.2 } };
     host.append(skeleton(8));
     load();
 
@@ -126,7 +127,9 @@ export default {
         // 自动轮询（silent）只刷新列表，不重建页面：
         // 重建会把搜索框整个换掉，用户正在输入的词、焦点和滚动位置全丢
         // （报告指出的"日志自动刷新重建搜索控件"）。
-        if (silent) paintList();
+        // 静默刷新只重画列表：paintList 定义在 render() 内部（作用域不同），
+        // 直接调用会 ReferenceError，必须由 render 登记的引用转调。
+        if (silent && state.repaint) state.repaint();
         else render();
       } catch (e) {
         clear(host);
@@ -204,6 +207,9 @@ export default {
       c.el.append(box);
       host.append(c.el);
       host.append(h('div', { class: 'api-note' }, '日志来自本机账本 data/ledger（按天 JSONL）；不保存请求/回复正文，但错误信息可能含上游返回内容，分享前请先检查并脱敏。'));
+      // 登记给静默刷新用：paintList 是 render 的局部函数，
+      // 外部（定时器/刷新按钮）只能通过这里拿到它。
+      state.repaint = paintList;
       paintList();
       function paintList() {
         clear(box);
@@ -334,6 +340,8 @@ export default {
             row('账号', [e.account_name, e.account_id].filter(Boolean).join(' · ') || '—'),
             row('路由 ID', e.route_id ? '#' + e.route_id : '—'),
             row('尝试次数', (e.tries || 0) + ' 次' + (e.handed_on ? ' · 曾失败转移' : e.retried ? ' · 重试成功' : '')),
+        // 轨迹：哪个账号、什么结果。只报次数看不出该修哪里。
+        e.attempts ? row('尝试轨迹', h('span', { class: 'mono', style: 'font-size:12px' }, e.attempts)) : null,
             row('上下文', '条目 ' + (e.items || 0) + (e.previous_id ? ' · 续接上一轮' : '') + (e.auto_continued ? ' · 自动续接（裁剪 ' + (e.trimmed_items || 0) + '）' : '')),
             row('路径', e.fast_path ? 'Fast-Path 零损直通' : 'IR 转换'),
           ]),

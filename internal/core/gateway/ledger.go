@@ -32,43 +32,49 @@ const (
 
 // ledgerRecord 是一行请求。JSON 字段名对齐 aether 用量页。
 type ledgerRecord struct {
-	ID            string  `json:"id"`
-	T             int64   `json:"t"`
-	Day           string  `json:"day"`
-	Agent         string  `json:"agent"`
-	AgentName     string  `json:"agentName,omitempty"`
-	Icon          string  `json:"icon,omitempty"`
-	Kind          string  `json:"kind,omitempty"`
-	Session       string  `json:"session,omitempty"`
-	Req           string  `json:"req,omitempty"`
-	Model         string  `json:"model,omitempty"`
-	ProviderID    string  `json:"providerId,omitempty"`
-	ProviderName  string  `json:"providerName,omitempty"`
-	Host          string  `json:"host,omitempty"`
-	Access        string  `json:"access,omitempty"`
-	AccountID     string  `json:"accountId,omitempty"`
-	AccountName   string  `json:"accountName,omitempty"`
-	In            int64   `json:"in"`
-	Out           int64   `json:"out"`
-	Reasoning     int64   `json:"reasoning,omitempty"`
-	CacheRead     int64   `json:"cache_read,omitempty"`
-	CacheWrite    int64   `json:"cache_write,omitempty"`
-	Cost          float64 `json:"cost"`
-	Priced        bool    `json:"priced"`
-	PricingModel  string  `json:"pricing_model,omitempty"`
-	TTFT          int64   `json:"ttft_ms,omitempty"`
-	Ms            int64   `json:"ms,omitempty"`
-	Status        int     `json:"status,omitempty"`
-	ErrType       string  `json:"err_type,omitempty"`
-	Err           string  `json:"err,omitempty"`
-	Tries         int     `json:"tries,omitempty"`
-	HandedOn      bool    `json:"handed_on,omitempty"`
-	Retried       bool    `json:"retried,omitempty"`
-	Stream        bool    `json:"stream,omitempty"`
-	Items         int     `json:"items,omitempty"`
-	PreviousID    bool    `json:"previous_id,omitempty"`
-	AutoContinued bool    `json:"auto_continued,omitempty"`
-	TrimmedItems  int     `json:"trimmed_items,omitempty"`
+	ID           string  `json:"id"`
+	T            int64   `json:"t"`
+	Day          string  `json:"day"`
+	Agent        string  `json:"agent"`
+	AgentName    string  `json:"agentName,omitempty"`
+	Icon         string  `json:"icon,omitempty"`
+	Kind         string  `json:"kind,omitempty"`
+	Session      string  `json:"session,omitempty"`
+	Req          string  `json:"req,omitempty"`
+	Model        string  `json:"model,omitempty"`
+	ProviderID   string  `json:"providerId,omitempty"`
+	ProviderName string  `json:"providerName,omitempty"`
+	Host         string  `json:"host,omitempty"`
+	Access       string  `json:"access,omitempty"`
+	AccountID    string  `json:"accountId,omitempty"`
+	AccountName  string  `json:"accountName,omitempty"`
+	In           int64   `json:"in"`
+	Out          int64   `json:"out"`
+	Reasoning    int64   `json:"reasoning,omitempty"`
+	CacheRead    int64   `json:"cache_read,omitempty"`
+	CacheWrite   int64   `json:"cache_write,omitempty"`
+	Cost         float64 `json:"cost"`
+	Priced       bool    `json:"priced"`
+	PricingModel string  `json:"pricing_model,omitempty"`
+	TTFT         int64   `json:"ttft_ms,omitempty"`
+	Ms           int64   `json:"ms,omitempty"`
+	Status       int     `json:"status,omitempty"`
+	ErrType      string  `json:"err_type,omitempty"`
+	Err          string  `json:"err,omitempty"`
+	Tries        int     `json:"tries,omitempty"`
+	// Attempts 是失败转移的轨迹：每个尝试落到哪个账号、什么结果。
+	// 形如 "c27de30a:502 → 9ab3f1:200"。
+	//
+	// 只报"尝试了 3 次"没有诊断价值——必须能看出是哪个账号、
+	// 因为什么被换掉，否则用户面对"重试成功"也不知道该修哪里。
+	Attempts      string `json:"attempts,omitempty"`
+	HandedOn      bool   `json:"handed_on,omitempty"`
+	Retried       bool   `json:"retried,omitempty"`
+	Stream        bool   `json:"stream,omitempty"`
+	Items         int    `json:"items,omitempty"`
+	PreviousID    bool   `json:"previous_id,omitempty"`
+	AutoContinued bool   `json:"auto_continued,omitempty"`
+	TrimmedItems  int    `json:"trimmed_items,omitempty"`
 	// EstTokens 是请求发出前对输入 token 的粗估；UpstreamTruncated 表示
 	// 上游实际处理的量远小于它（上游静默截断上下文）。两者配合能把"模型突然
 	// 失忆、开始复读"直接归因到上游截断，而不是让人对着输出猜。
@@ -948,6 +954,7 @@ func (p *ledgerPending) finalize(g *Gateway, entry *RequestLog, trace *traceRout
 			r.Retried = s.Status < 400
 			r.HandedOn = s.Status >= 400
 		}
+		r.Attempts = attemptTrail(s.Tries)
 	}
 	// 成本按当前价格表估算（失败请求也计 token，若上游报过）。
 	if price, ok := g.priceForUsage(r.Model, r.In+r.CacheRead+r.CacheWrite, time.UnixMilli(r.T)); ok && r.Model != "" {
@@ -1124,4 +1131,37 @@ func (s *ledgerStore) csv(f ledgerFilter, from, to string, price func(ledgerReco
 		b.WriteString("\n")
 	}
 	return []byte(b.String())
+}
+
+// attemptTrail 把尝试列表压成一行可读轨迹，供日志详情展示。
+//
+// 只保留最近 6 次：失败转移很少超过这个数，太长反而看不清。
+func attemptTrail(tries []traceTry) string {
+	if len(tries) == 0 {
+		return ""
+	}
+	start := 0
+	if len(tries) > 6 {
+		start = len(tries) - 6
+	}
+	parts := make([]string, 0, len(tries)-start)
+	for _, t := range tries[start:] {
+		id := t.ID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		mark := ""
+		switch {
+		case t.Picked:
+			mark = "ok"
+		case t.Fail != "":
+			mark = t.Fail
+		case t.Status >= 400:
+			mark = strconv.Itoa(t.Status)
+		default:
+			mark = strconv.Itoa(t.Status)
+		}
+		parts = append(parts, id+":"+mark)
+	}
+	return strings.Join(parts, " → ")
 }

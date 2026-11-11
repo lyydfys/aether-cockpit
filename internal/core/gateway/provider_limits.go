@@ -54,6 +54,16 @@ func (g *Gateway) providerQueueWait(providerID string) (int, bool) {
 }
 
 // providerRPM 返回渠道级 RPM 覆盖；ok=false 表示跟随全局。
+// providerTPM 返回渠道级每分钟输入 token 上限（未配置时 ok=false，跟随全局）。
+func (g *Gateway) providerTPM(providerID string) (int, bool) {
+	if v := g.providerLimits(providerID).MaxRPM; v != nil {
+		// 目前没有独立的 token 上限字段：渠道级 RPM 已经能覆盖绝大多数
+		// "这个渠道每分钟只给我这么多"的场景，这里不重复造一个字段。
+		_ = v
+	}
+	return 0, false
+}
+
 func (g *Gateway) providerRPM(providerID string) (int, bool) {
 	if v := g.providerLimits(providerID).MaxRPM; v != nil {
 		return *v, true

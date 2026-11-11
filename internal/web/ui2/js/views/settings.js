@@ -475,10 +475,18 @@ export default {
           .map(([value, label]) => ({ value, label })),
         rb || 0,
         (val) => save({ request_budget_sec: Number(val) }, '请求总预算'));
+      // token 级限流：按请求数限流会被大上下文请求瞬间打爆，故提供 token 口径。
+      const tpmVal = Number(s.tpm_per_account || 0);
+      const tpmCtl = select(
+        [[0, '不限'], [100000, '10 万/分'], [500000, '50 万/分'], [1000000, '100 万/分'],
+         [2000000, '200 万/分'], [5000000, '500 万/分']].map(([value, label]) => ({ value, label })),
+        tpmVal,
+        (val) => save({ tpm_per_account: Number(val) }, '每分钟 token 上限'));
       return section('请求失败自动换号', [
         line('首字节超时', '上游多久没吐第一个字就换账号；调小能更快失败转移，但慢模型容易被误判', fbCtl),
         line('最多尝试账号数', '单个请求最多试几个账号；账号越多、单号额度越小，可以调大', maCtl),
         line('请求总预算', '为了拿到首字节最多等多久（跨所有重试）；超预算立刻返回，不再换号空等', budgetCtl),
+        line('每分钟 token 上限', '每账号每分钟最多处理的输入 token；0 = 不限。比"按次限流"更贴近上游配额', tpmCtl),
         h('div', { class: 'meta', style: 'line-height:1.6;padding:2px 0 6px' },
           '额度耗尽、限流、登录失效、上游 5xx 都会自动换下一个账号；'
           + '只有请求本身非法（400 参数错误、模型不存在）才直接报错。'),

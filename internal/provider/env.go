@@ -87,6 +87,13 @@ type AccountEnv struct {
 	// rpmTokens / rpmAt 是每账号令牌桶（每分钟请求上限）。
 	rpmTokens float64
 	rpmAt     time.Time
+	// tpmTokens / tpmAt 是每账号的 **token** 令牌桶（每分钟输入 token 上限）。
+	//
+	// 只按请求数限流会严重失真：一个 200K 上下文的 agent 请求和一个
+	// "你好" 算同一次请求，前者能把额度瞬间烧光。按 token 限流才贴近
+	// 上游的实际配额语义。
+	tpmTokens float64
+	tpmAt     time.Time
 	// 时延观测：首字节与吞吐的指数滑动平均，供 fast 路由策略使用。
 	ttftEWMA float64 // 毫秒
 	tpsEWMA  float64 // token/秒
@@ -891,4 +898,57 @@ func snapCreatedAt(t time.Time) int64 {
 		return 0
 	}
 	return t.Unix()
+}
+
+// AllowTokens 按令牌桶检查并预扣输入 token 配额。
+//
+// tpm <= 0 表示不限。need 是本次请求预计消耗的输入 token；
+// 桶未满时按 elapsed 线性补充，上限就是一个完整的 tpm。
+//
+// 与 AllowRequest 分开实现：请求数与 token 数是两个独立配额，
+// 各自的桶互不影响。
+func (e *AccountEnv) AllowTokens(tpm int, need int64, now time.Time) bool {
+	if tpm <= 0 {
+		return true
+	}
+	if need < 1 {
+		need = 1
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.tpmAt.IsZero() {
+		e.tpmAt = now
+		e.tpmTokens = float64(tpm)
+	}
+	rate := float64(tpm) / 60.0
+	if elapsed := now.Sub(e.tpmAt).Seconds(); elapsed > 0 {
+		e.tpmTokens += elapsed * rate
+		if e.tpmTokens > float64(tpm) {
+			e.tpmTokens = float64(tpm)
+		}
+		e.tpmAt = now
+	}
+	if e.tpmTokens < float64(need) {
+		return false
+	}
+	e.tpmTokens -= float64(need)
+	return true
+}
+
+// TokenBudget 返回当前剩余 token 配额（仅供诊断展示；tpm<=0 时返回 -1 表示不限）。
+func (e *AccountEnv) TokenBudget(tpm int, now time.Time) int {
+	if tpm <= 0 {
+		return -1
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.tpmAt.IsZero() {
+		return tpm
+	}
+	rate := float64(tpm) / 60.0
+	v := e.tpmTokens + now.Sub(e.tpmAt).Seconds()*rate
+	if v > float64(tpm) {
+		v = float64(tpm)
+	}
+	return int(v)
 }

@@ -110,6 +110,9 @@ type Config struct {
 	MaxConcurrentPerAccount int `json:"max_concurrent_per_account"`
 	// RPMPerAccount 每账号每分钟请求上限。0（默认）表示不限。
 	RPMPerAccount int `json:"rpm_per_account"`
+	// TPMPerAccount 每账号每分钟输入 token 上限。0（默认）表示不限。
+	// 比 RPMPerAccount 更贴近上游配额语义：按 token 而非按次限流。
+	TPMPerAccount int `json:"tpm_per_account"`
 	// ModelGroups 虚拟模型聚合组：对外模型名 -> 渠道链（原始 JSON）。
 	//
 	// 兼容两种形态：
@@ -1980,6 +1983,22 @@ func (g *Gateway) dispatch(ctx context.Context, req *ir.UnifiedChatRequest, entr
 				}
 				continue
 			}
+			// 闸门一之补：每账号每分钟 **输入 token** 上限。
+			// 只看请求数会严重失真——一个 20 万上下文的 agent 请求和一个
+			// 单句问答都算"一次"，前者能瞬间烧光上游配额。
+			if tpm := g.tpmFor(env); tpm > 0 {
+				need := ir.EstimateTokens(work)
+				if !env.AllowTokens(tpm, need, time.Now()) {
+					lastErr = ir.NewAPIErrorf(ir.ErrCodeUpstreamRateLimit,
+						"账号 %s 达到每分钟 token 上限（%d，本次约需 %d），已换下一个候选",
+						env.AccountID, tpm, need)
+					fullThisPass[env.AccountID] = true
+					if trace != nil {
+						trace.addTry(env, b.UpstreamModel, time.Now(), http.StatusTooManyRequests, "tpm", false)
+					}
+					continue
+				}
+			}
 			maxConc := g.concurrencyFor(env)
 			release, ok := env.TryAcquire(maxConc)
 			if !ok {
@@ -2616,6 +2635,16 @@ func (g *Gateway) rpmFor(env *provider.AccountEnv) int {
 		}
 	}
 	return g.cfg.RPMPerAccount
+}
+
+// tpmFor 解析账号的每分钟输入 token 上限。0 表示不限。
+func (g *Gateway) tpmFor(env *provider.AccountEnv) int {
+	if env != nil {
+		if v, ok := g.providerTPM(env.ProviderID); ok {
+			return v
+		}
+	}
+	return g.cfg.TPMPerAccount
 }
 
 // maxConcurrentPerAccount 解析并发上限。0 用默认 8，负数表示不限。
