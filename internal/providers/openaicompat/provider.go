@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -814,6 +815,10 @@ func parseSSE(ctx context.Context, out chan<- ir.UnifiedStreamEvent, r io.Reader
 	heldToolSeen := false
 	finishReason := ""
 	emittedDone := false
+	// 直发路径也把参数攒一份，用于流结束时的"完整性检查"。
+	// 上游有时会在工具调用写到一半时直接断流且**不发 finish_reason**，
+	// 这时参数 JSON 是残缺的，客户端只会看到 "Unterminated string"。
+	toolArgs := make(map[int]*strings.Builder, 4)
 
 	for {
 		select {
@@ -922,6 +927,13 @@ func parseSSE(ctx context.Context, out chan<- ir.UnifiedStreamEvent, r io.Reader
 							ToolName:   "",
 						})
 					}
+					if b := toolArgs[tc.Index]; b != nil {
+						b.WriteString(tc.Function.Arguments)
+					} else {
+						var b strings.Builder
+						b.WriteString(tc.Function.Arguments)
+						toolArgs[tc.Index] = &b
+					}
 					emit(ctx, out, ir.UnifiedStreamEvent{
 						Type:       ir.EventToolCallDelta,
 						ToolCallID: id,
@@ -969,7 +981,14 @@ func parseSSE(ctx context.Context, out chan<- ir.UnifiedStreamEvent, r io.Reader
 	if !emittedDone {
 		emittedDone = true
 		if finishReason == "" {
-			if len(startedTool) > 0 || heldToolSeen {
+			// 上游没给结束原因就断流了。此时不能一律当成"正常结束"：
+			// 如果工具调用的参数是残缺 JSON，说明它是写到一半被截断的。
+			// 报成 tool_calls 会让客户端以为响应完整，最后只在解析时报
+			// "Unterminated string"，问题被推给客户端，很难定位。
+			if hasIncompleteToolArgs(toolArgs, held) {
+				finishReason = "length"
+				log.Printf("[TRUNC] 上游断流且工具参数不完整，已按 length 标记（客户端应视为截断）")
+			} else if len(startedTool) > 0 || heldToolSeen {
 				finishReason = "tool_calls"
 			} else {
 				finishReason = "stop"
@@ -1121,4 +1140,28 @@ func protocolEndpoint(env *provider.AccountEnv, protocol string) string {
 		return strings.TrimRight(strings.TrimSpace(env.GetCredential("gemini_base_url")), "/")
 	}
 	return ""
+}
+
+// hasIncompleteToolArgs 判断流结束时是否存在"参数没写完"的工具调用。
+//
+// 判据：参数非空但不是合法 JSON。空参数不算残缺——很多无参工具的
+// arguments 就是空串，那是完整的。
+func hasIncompleteToolArgs(direct map[int]*strings.Builder, held map[int]*heldToolCall) bool {
+	for _, b := range direct {
+		if b == nil {
+			continue
+		}
+		if v := b.String(); v != "" && !json.Valid([]byte(v)) {
+			return true
+		}
+	}
+	for _, h := range held {
+		if h == nil {
+			continue
+		}
+		if v := h.args.String(); v != "" && !json.Valid([]byte(v)) {
+			return true
+		}
+	}
+	return false
 }
