@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -226,7 +227,7 @@ func (g *Gateway) wakeCall(accountID, model string, maxTokens int, timeout time.
 		return false, "账号不存在（可能已被删除）", "", 0
 	}
 	if !env.Available() {
-		return false, "账号当前不可用（冷却/停用/失效）", "", 0
+		return false, unavailableReason(env), "", 0
 	}
 	p, found := provider.Get(env.ProviderID)
 	if !found {
@@ -609,4 +610,46 @@ func brief(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// unavailableReason 把"账号不可用"说清楚：具体状态、还要等多久、为什么。
+//
+// 原来只报"冷却/停用/失效"三个词，用户看到的第一反应是"我明明还有额度"——
+// 因为额度确实还在，真正的原因可能是连续失败触发的熔断，或者是凭证失效。
+// 报错必须能直接指向该做的动作。
+func unavailableReason(env *provider.AccountEnv) string {
+	state, msg, resetAt := env.StateDetail()
+	var left time.Duration
+	if !resetAt.IsZero() {
+		left = time.Until(resetAt)
+	}
+	switch state {
+	case provider.StateCoolingDown:
+		if msg != "" {
+			if left > 0 {
+				return fmt.Sprintf("账号正在冷却（%s，还剩 %s）", msg, left.Round(time.Second))
+			}
+			return "账号正在冷却：" + msg
+		}
+		if left > 0 {
+			return fmt.Sprintf("账号正在冷却，还剩 %s", left.Round(time.Second))
+		}
+		return "账号正在冷却"
+	case provider.StateDepleted:
+		if left > 0 {
+			return fmt.Sprintf("账号额度已用尽，%s 后恢复", left.Round(time.Second))
+		}
+		return "账号额度已用尽"
+	case provider.StateInvalid:
+		if msg != "" {
+			return "账号凭证已失效，需要重新登录：" + msg
+		}
+		return "账号凭证已失效，需要重新登录"
+	case provider.StateRefreshing:
+		return "账号正在刷新凭证，请稍后重试"
+	}
+	if msg != "" {
+		return "账号当前不可用：" + msg
+	}
+	return "账号当前不可用（可能已被停用）"
 }

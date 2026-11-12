@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -496,6 +497,8 @@ func New(cfg Config) *Gateway {
 		wslWarm:        cfg.wslWarm,
 		sessionsWarm:   cfg.sessionsWarm,
 	}
+	// 新建网关时清空"代理疑似失效"状态：不该把上一次运行的判定带进来。
+	transport.ClearProxySuspect()
 	if g.settingsPath == "" {
 		g.settingsPath = apppaths.Data("settings.json")
 	}
@@ -2837,6 +2840,14 @@ func (g *Gateway) penalizeModel(env *provider.AccountEnv, err *ir.APIError, mode
 		// 请求就直接断了（正是"任务被 520 打断"的成因）。
 		if isEdgeFailure(err) {
 			g.noteEdgeFailure(env.ProviderID, err)
+			return
+		}
+		// 建连失败（连不上、代理挂了、DNS 解析不了）同样不是账号的问题。
+		//
+		// 之前这类错误一律走 MarkFailure(5)：代理一断，所有账号各失败几轮，
+		// 集体进入冷却，最后表现为"明明还有额度，却提示账号不可用"。
+		// 网络层的问题应该修网络，不该把账号一个个打停。
+		if transport.IsConnFailure(errors.New(err.Message)) {
 			return
 		}
 		env.MarkFailure(5)
