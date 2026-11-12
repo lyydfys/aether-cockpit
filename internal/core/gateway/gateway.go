@@ -1458,8 +1458,16 @@ func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
+		// 远程请求没带密钥。报错要直接指向该做什么：这条链路最常见的
+		// 故障是客户端配了 apiKeyEnv，但那个环境变量是空的——用户看到的
+		// 只是"无法使用"，完全联想不到是密钥没配上。
+		msg := "远程访问需要 API Key 或网关密钥"
+		if r.URL.Path != "" {
+			msg += "（请在客户端设置 Authorization: Bearer <网关密钥>；"
+			msg += "密钥可在本机「设置 → 网关密钥」查看或生成）"
+		}
 		transducer.WriteError(w, ir.ProtocolOpenAIChat,
-			ir.NewAPIError(ir.ErrCodeUpstreamAuth, "远程访问需要 API Key 或网关密钥").WithStatus(http.StatusUnauthorized))
+			ir.NewAPIError(ir.ErrCodeUpstreamAuth, msg).WithStatus(http.StatusUnauthorized))
 	}
 }
 
