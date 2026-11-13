@@ -1034,6 +1034,18 @@ func parseWholeJSON(ctx context.Context, out chan<- ir.UnifiedStreamEvent, r io.
 
 	var outer wholeChatResponse
 	if err := json.Unmarshal(body, &outer); err != nil {
+		// 返回 HTML 几乎一定是端点路径错了：Base URL 少了 /v1 时，
+		// 中转站会把它当前端路由，回一个 HTTP 200 的单页应用。
+		// 报"无法解析"会让人以为是上游故障，必须直接指向真正的原因。
+		if looksLikeHTML(body) {
+			emit(ctx, out, ir.UnifiedStreamEvent{
+				Type: ir.EventError,
+				Err: ir.NewAPIError(ir.ErrCodeUpstreamFailed,
+					"上游返回的是网页而不是 API 响应：通常是 Base URL 少了版本前缀"+
+						"（应形如 https://host/v1），也可能该地址不是 API 端点"),
+			})
+			return
+		}
 		emit(ctx, out, ir.UnifiedStreamEvent{
 			Type: ir.EventError,
 			Err:  ir.NewAPIErrorf(ir.ErrCodeUpstreamFailed, "上游返回非 SSE 且无法解析: %s", truncateStr(string(body), 200)),
@@ -1164,4 +1176,21 @@ func hasIncompleteToolArgs(direct map[int]*strings.Builder, held map[int]*heldTo
 		}
 	}
 	return false
+}
+
+// looksLikeHTML 判断响应体是不是网页（而非 JSON/SSE）。
+//
+// 端点路径配错时，静态站点或单页应用会返回 200 + HTML，
+// 内容上永远解析不出 choices，报错却容易指向"上游故障"。
+func looksLikeHTML(body []byte) bool {
+	head := body
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	lower := strings.ToLower(string(head))
+	trimmed := strings.TrimSpace(lower)
+	if strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html") {
+		return true
+	}
+	return strings.Contains(lower, "<head") && strings.Contains(lower, "<body")
 }

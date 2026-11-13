@@ -24,6 +24,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -142,6 +143,18 @@ func normalizeCustomChannel(in CustomChannel) (CustomChannel, error) {
 		return in, fmt.Errorf("协议只能是 openai / anthropic / responses")
 	}
 	out.BaseURL = strings.TrimRight(strings.TrimSpace(out.BaseURL), "/")
+
+	// 只给了域名时补 /v1。
+	//
+	// 绝大多数中转站与官方 API 的对话端点是 /v1/chat/completions。
+	// 用户填 "https://ai.example.com" 时，网关会拼成 /chat/completions，
+	// 中转站把它当前端路由，返回单页应用的 HTML（HTTP 200），
+	// 于是唤醒/调用全部失败，且报错看起来像"上游不可达"，极难自查。
+	// 只补"路径为空"这一种情况：用户已经写了 /v1、/api/v3 之类的一律不动。
+	if u, err := url.Parse(out.BaseURL); err == nil &&
+		(u.Path == "" || u.Path == "/") && u.Host != "" {
+		out.BaseURL += "/v1"
+	}
 
 	models := make([]string, 0, len(out.Models))
 	seen := map[string]bool{}
@@ -564,6 +577,22 @@ func (g *Gateway) handleCustomChannelProbe(w http.ResponseWriter, r *http.Reques
 		})
 		return
 	}
+	// 拿到网页说明地址指向前端而不是 API：很多中转站把根路径做成了
+	// 单页应用，对任何未知路径都回 200 + HTML。不识别出来的话，
+	// 探测会显示"成功、0 个模型"，用户以为配好了，实际调用全失败。
+	head := raw
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	if lt := strings.ToLower(strings.TrimSpace(string(head))); strings.HasPrefix(lt, "<!doctype html") || strings.HasPrefix(lt, "<html") {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false,
+			"error": "该地址返回的是网页而不是 API：Base URL 可能少了版本前缀" +
+				"（应形如 https://host/v1）",
+		})
+		return
+	}
+
 	// 两种常见形状：OpenAI 的 {data:[{id}]} 与裸数组。
 	var doc struct {
 		Data []struct {
