@@ -454,7 +454,11 @@ func New(cfg Config) *Gateway {
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = 5
 	}
-	if cfg.FirstByteTimeout <= 0 {
+	// 负值 = 不限（用户显式关闭该限制）；0 = 用默认。
+	//
+	// 中继站的首字节有时就是很慢（模型排队、跨线路上游），
+	// 一到 60 秒就判死会让"慢但能用"的线路永远用不上。
+	if cfg.FirstByteTimeout == 0 {
 		cfg.FirstByteTimeout = 60 * time.Second
 	}
 	if cfg.RequestBudget == 0 {
@@ -2357,21 +2361,25 @@ func (g *Gateway) openStream(ctx, clientCtx context.Context, h pipeline.StreamHa
 	// 等满全局 60 秒毫无意义，配了 StallTimeoutMS 就按它更早判死并换线路。
 	// 之前这个字段只有配置与展示，没有任何执行逻辑。
 	if env != nil {
-		if stall := time.Duration(g.channelNet().Get(env.ProviderID).StallTimeoutMS) * time.Millisecond; stall > 0 && stall < budget {
+		if stall := time.Duration(g.channelNet().Get(env.ProviderID).StallTimeoutMS) * time.Millisecond; stall > 0 && (budget <= 0 || stall < budget) {
 			budget = stall
 		}
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		// 已经算出总预算时，单次尝试不能超过剩余时间。
-		if remain := time.Until(deadline); remain > 0 && remain < budget {
+		// budget<=0（不限）但存在总预算时，总预算说了算。
+		if remain := time.Until(deadline); remain > 0 && (budget <= 0 || remain < budget) {
 			budget = remain
 		}
 	}
-	if budget <= 0 {
-		budget = time.Second
+	// budget <= 0 表示不限：用一个永远不触发的 channel，
+	// 让 select 的"超时"分支等价于阻塞，而不是被强行压成 1 秒。
+	var timeoutC <-chan time.Time
+	if budget > 0 {
+		timer := time.NewTimer(budget)
+		defer timer.Stop()
+		timeoutC = timer.C
 	}
-	timer := time.NewTimer(budget)
-	defer timer.Stop()
 
 	type openOut struct {
 		ch  <-chan ir.UnifiedStreamEvent
@@ -2391,7 +2399,7 @@ func (g *Gateway) openStream(ctx, clientCtx context.Context, h pipeline.StreamHa
 		cancelUp()
 		return nil, ir.NewAPIError(ir.ErrCodeUpstreamFailed, "客户端已取消").WithCause(ctx.Err())
 
-	case <-timer.C:
+	case <-timeoutC:
 		// cancelUp 会中断 h() 内部在途的 HTTP 请求，goroutine 随后退出。
 		releaseNow()
 		cancelUp()

@@ -48,13 +48,16 @@ type runtimeSettings struct {
 	// 为什么需要调：默认 60 秒对慢上游等于"卡满一分钟再报错"，用户体感就是
 	// 请求断了；调小（15~25 秒）能让故障转移在用户失去耐心前发生。
 	// 0 = 保持默认（60 秒）。
-	FirstByteTimeoutSec int `json:"first_byte_timeout_sec,omitempty"`
+	// 用指针区分"没设置"与"设置成 0"：0 = 不限（不判首字节超时）。
+	// 值为 0 时 omitempty 会让 GET 丢失该字段，用户就看不到"已关闭"。
+	FirstByteTimeoutSec *int `json:"first_byte_timeout_sec,omitempty"`
 	// MaxAttempts 是单次请求最多尝试几个账号（0 = 默认 5）。
 	// 账号多、单号额度小的场景调大能显著减少"整体失败"。
 	MaxAttempts int `json:"max_attempts,omitempty"`
 	// RequestBudgetSec 是"为了拿到首字节"允许消耗的总时间（秒），跨所有重试。
 	// 0 = 默认 120 秒。它防止"5 次 × 60 秒"这种最坏情况把客户端挂住几分钟。
-	RequestBudgetSec int `json:"request_budget_sec,omitempty"`
+	// 0 = 不限（整个请求不设总时限）。
+	RequestBudgetSec *int `json:"request_budget_sec,omitempty"`
 	// TPMPerAccount 每账号每分钟输入 token 上限；0 = 不限。
 	TPMPerAccount int `json:"tpm_per_account,omitempty"`
 	// APIKey 是网关鉴权密钥的持久副本。
@@ -478,14 +481,26 @@ func (g *Gateway) loadSettings() {
 // 这两个值直接决定用户体感：首字节超时越长，"卡住"越久；重试次数越少，
 // "一个号没额度导致整体失败"的概率越高。以前它们只能编译期写死。
 func (g *Gateway) applyFailoverSettings() {
-	if sec := g.settings.FirstByteTimeoutSec; sec >= 5 && sec <= 300 {
-		g.cfg.FirstByteTimeout = time.Duration(sec) * time.Second
+	if sec := g.settings.FirstByteTimeoutSec; sec != nil {
+		switch {
+		case *sec == 0:
+			// 显式 0 = 不限，用负值哨兵表达（0 在 cfg 里表示"用默认"）。
+			g.cfg.FirstByteTimeout = -1
+		case *sec >= 5 && *sec <= 3600:
+			g.cfg.FirstByteTimeout = time.Duration(*sec) * time.Second
+			// 其它值（1~4 秒这种误配）一律忽略，保留上一次有效值。
+		}
 	}
 	if n := g.settings.MaxAttempts; n >= 1 && n <= 20 {
 		g.cfg.MaxAttempts = n
 	}
-	if sec := g.settings.RequestBudgetSec; sec >= 10 && sec <= 900 {
-		g.cfg.RequestBudget = time.Duration(sec) * time.Second
+	if sec := g.settings.RequestBudgetSec; sec != nil {
+		switch {
+		case *sec == 0:
+			g.cfg.RequestBudget = -1
+		case *sec >= 10 && *sec <= 3600:
+			g.cfg.RequestBudget = time.Duration(*sec) * time.Second
+		}
 	}
 	if tpm := g.settings.TPMPerAccount; tpm > 0 {
 		g.cfg.TPMPerAccount = tpm
@@ -692,12 +707,14 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		g.settings.Privacy = *body.Privacy
 	}
 	if body.FirstByteTimeoutSec != nil {
-		if v := *body.FirstByteTimeoutSec; v < 5 || v > 300 {
+		// 0 = 不限；其余 5~3600 秒。
+		if v := *body.FirstByteTimeoutSec; v != 0 && (v < 5 || v > 3600) {
 			g.settingsMu.Unlock()
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "首字节超时应在 5~300 秒之间"})
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "首字节超时应在 5~3600 秒之间，或填 0 表示不限"})
 			return
 		}
-		g.settings.FirstByteTimeoutSec = *body.FirstByteTimeoutSec
+		v := *body.FirstByteTimeoutSec
+		g.settings.FirstByteTimeoutSec = &v
 	}
 	if body.MaxAttempts != nil {
 		if v := *body.MaxAttempts; v < 1 || v > 20 {
@@ -708,12 +725,13 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		g.settings.MaxAttempts = *body.MaxAttempts
 	}
 	if body.RequestBudgetSec != nil {
-		if v := *body.RequestBudgetSec; v < 10 || v > 900 {
+		if v := *body.RequestBudgetSec; v != 0 && (v < 10 || v > 3600) {
 			g.settingsMu.Unlock()
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求总预算应在 10~900 秒之间"})
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求总预算应在 10~3600 秒之间，或填 0 表示不限"})
 			return
 		}
-		g.settings.RequestBudgetSec = *body.RequestBudgetSec
+		v := *body.RequestBudgetSec
+		g.settings.RequestBudgetSec = &v
 	}
 	if body.TPMPerAccount != nil {
 		// 0 = 不限；上限给到千万级，够覆盖最严格的付费档。
