@@ -12,10 +12,10 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	github.com/tc-hib/winres v0.3.1
 	github.com/tidwall/jsonc v0.3.3
-	github.com/wailsapp/wails/v2 v2.17.0
-	golang.org/x/sys v0.49.0
+	github.com/wailsapp/wails/v2 v2.17.1
+	golang.org/x/sys v0.50.0
 	google.golang.org/protobuf v1.36.12
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.62.0
 )
 
 require (
@@ -28,13 +28,13 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
-	github.com/labstack/echo/v4 v4.15.3 // indirect
+	github.com/labstack/echo/v4 v4.16.1 // indirect
 	github.com/labstack/gommon v0.5.0 // indirect
 	github.com/leaanthony/go-ansi-parser v1.6.1 // indirect
 	github.com/leaanthony/gosod v1.0.4 // indirect
 	github.com/leaanthony/slicer v1.6.0 // indirect
 	github.com/leaanthony/u v1.1.1 // indirect
-	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
@@ -51,7 +51,7 @@ require (
 	golang.org/x/image v0.47.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
-	modernc.org/libc v1.79.0 // indirect
+	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
