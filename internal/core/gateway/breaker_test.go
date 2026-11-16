@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -164,5 +165,110 @@ func TestReleaseCoolingKeepsInvalidAndDepleted(t *testing.T) {
 	}
 	if depleted.Available() {
 		t.Fatal("额度耗尽不应被熔断开关解除")
+	}
+}
+
+// 403「没有这个模型的权限」是模型级问题，不能把账号判死。
+//
+// 真实故障：中转站对某个模型回 403，账号被标成 invalid，
+// 而 invalid 不会被熔断开关放行，于是永远显示"账号不可用"，
+// 但同一把 Key 换个模型其实是能用的。
+func TestModelScopedForbiddenDoesNotInvalidateAccount(t *testing.T) {
+	g := New(Config{
+		SettingsPath:     t.TempDir() + "/settings.json",
+		AccountStorePath: t.TempDir() + "/accounts.json",
+		UsagePath:        "-",
+		MaxRecords:       10,
+	})
+	t.Cleanup(func() { _ = g.Close(t.Context()) })
+
+	env := provider.NewAccountEnv("acc-403", "custom-mca")
+	g.Pool().Add(env)
+
+	err := ir.NewAPIError(ir.ErrCodeUpstreamAuth,
+		"上游拒绝访问（403）：该 Key 没有这个模型/接口的权限")
+	g.penalizeModel(env, err, "deepseek-v4.1-flash")
+
+	if !env.Available() {
+		t.Fatal("403 缺权限不应把账号打成不可用（换个模型可能就能用）")
+	}
+	if state, _, _ := env.StateDetail(); state == provider.StateInvalid {
+		t.Fatalf("不应进入 invalid 终态，实际 %s", state)
+	}
+	// 该模型应当被按住，避免反复撞同一个 403。
+	if cooling, _ := env.ModelCoolingDown("deepseek-v4.1-flash"); !cooling {
+		t.Fatal("对应的模型应被标记为休息")
+	}
+}
+
+// 对照：真正的封禁仍然必须停用账号。
+func TestBanned403StillInvalidatesAccount(t *testing.T) {
+	g := New(Config{
+		SettingsPath:     t.TempDir() + "/settings.json",
+		AccountStorePath: t.TempDir() + "/accounts.json",
+		UsagePath:        "-",
+		MaxRecords:       10,
+	})
+	t.Cleanup(func() { _ = g.Close(t.Context()) })
+
+	env := provider.NewAccountEnv("acc-banned", "custom-mca")
+	g.Pool().Add(env)
+
+	err := ir.NewAPIError(ir.ErrCodeUpstreamAuth, "上游账号被封禁（403）：请停止使用该账号")
+	g.penalizeModel(env, err, "deepseek-v4.1-flash")
+
+	if env.Available() {
+		t.Fatal("封禁应停用账号")
+	}
+	if state, _, _ := env.StateDetail(); state != provider.StateInvalid {
+		t.Fatalf("封禁应进入 invalid，实际 %s", state)
+	}
+}
+
+// 用户点名测试一个"不可用"的账号时，必须真的发出请求。
+//
+// 否则一旦账号被误判成 invalid，界面上的「重新测试」只会回一句
+// "账号当前不可用"，形成死循环：测不了 → 无法证明可用 → 恢复不了。
+func TestExplicitProbeTestsUnavailableAccount(t *testing.T) {
+	g := New(Config{
+		SettingsPath:     t.TempDir() + "/settings.json",
+		AccountStorePath: t.TempDir() + "/accounts.json",
+		UsagePath:        "-",
+		MaxRecords:       10,
+	})
+	t.Cleanup(func() { _ = g.Close(t.Context()) })
+
+	env := provider.NewAccountEnv("acc-probe", "openai-compat")
+	env.Label = "probe"
+	// 指向一个必然连不上的地址：能连就说明真的发出去了。
+	env.SetCredential("base_url", "http://127.0.0.1:1")
+	env.SetCredential("api_key", "sk-test")
+	env.MarkInvalid("上游拒绝访问（403）：该 Key 没有这个模型/接口的权限")
+	g.Pool().Add(env)
+	g.models.Rebuild()
+
+	if env.Available() {
+		t.Fatal("前置条件错误：账号应不可用")
+	}
+
+	// 点名测试（accountID 非空）——必须绕过可用性闸门。
+	g.probeAccounts("openai-compat", "acc-probe")
+
+	g.monitorMu.Lock()
+	entry := g.monitor["openai-compat\x00acc-probe"]
+	var errText string
+	if entry != nil {
+		errText = entry.Error
+	}
+	g.monitorMu.Unlock()
+
+	if entry == nil {
+		t.Fatal("点名测试应产生一条探测记录")
+	}
+	if strings.Contains(errText, "账号当前不可用") {
+		t.Fatalf("点名测试被可用性闸门挡住了：%s", errText)
+	}
+	if errText == "" {
+		t.Fatal("应记录真实的失败原因（连接失败），而不是空")
 	}
 }

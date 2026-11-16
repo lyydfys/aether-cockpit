@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -366,10 +367,15 @@ func (g *Gateway) probeAccounts(providerID, accountID string) {
 		if accountID != "" && env.AccountID != accountID {
 			continue
 		}
-		if !env.Available() {
+		// 账号当前不可用时通常直接跳过，但**用户点名测试**必须放行：
+		// 否则一个被误判成"凭证失效"的账号永远测不了，也就永远没有恢复入口。
+		// 自动/批量探测仍遵守可用性闸门，避免白烧额度。
+		if !env.Available() && accountID == "" {
+			// 必须给出具体状态与剩余时间：只写"冷却/停用/失效"三个词，
+			// 用户无法判断该等、该改还是该重新登录。
 			g.recordProbe(channelProbe{
 				ProviderID: env.ProviderID, AccountID: env.AccountID, Label: env.Label,
-				At: time.Now().Unix(), Error: "账号当前不可用（冷却/停用/失效）",
+				At: time.Now().Unix(), Error: unavailableReason(env),
 			}, "")
 			continue
 		}
@@ -400,6 +406,13 @@ func (g *Gateway) probeAccounts(providerID, accountID string) {
 		}
 		if okProbe {
 			entry.Code = 200
+			// 探测成功说明账号此刻确实可用：如果它之前被误判成凭证失效
+			// （例如 403"没有这个模型的权限"，或一次临时抖动），
+			// 这里把它放回可用，否则它会永远卡在 invalid、连测试都点不动。
+			if state, _, _ := env.StateDetail(); state == provider.StateInvalid {
+				env.MarkReady()
+				log.Printf("[INFO] 账号 %s 探测成功，已从「凭证失效」恢复为可用", env.Label)
+			}
 		} else {
 			entry.Error = msg
 			entry.Code = statusFromText(msg)

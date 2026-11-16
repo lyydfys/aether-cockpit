@@ -29,14 +29,18 @@ func classifyUpstream(code int, body string, hdr http.Header) *ir.APIError {
 	msg := summarizeUpstreamBody(body)
 	switch {
 	case code == http.StatusUnauthorized:
-		return ir.NewAPIError(ir.ErrCodeUpstreamAuth, "上游拒绝凭证（401）：API Key 无效或已过期").
+		// 必须把上游原文带上：中转站的 401 常常写明"token 无效/过期/额度为零"，
+		// 只报"Key 无效"会让用户无从判断到底是哪一种。
+		return ir.NewAPIError(ir.ErrCodeUpstreamAuth, "上游拒绝凭证（401）：API Key 无效或已过期"+msg).
 			WithStatus(code)
 	case code == http.StatusForbidden:
 		if isBannedBody(body) {
-			return ir.NewAPIError(ir.ErrCodeUpstreamAuth, "上游账号被封禁（403）：请停止使用该账号").
+			return ir.NewAPIError(ir.ErrCodeUpstreamAuth, "上游账号被封禁（403）：请停止使用该账号"+msg).
 				WithStatus(code)
 		}
-		return ir.NewAPIError(ir.ErrCodeUpstreamAuth, "上游拒绝访问（403）：该 Key 没有这个模型/接口的权限").
+		// 403 的原因很多：模型不在该 Key 的白名单、渠道被禁用、需要额外权益……
+		// 上游原文通常直接给出答案，丢掉它等于让用户去猜。
+		return ir.NewAPIError(ir.ErrCodeUpstreamAuth, "上游拒绝访问（403）：该 Key 没有这个模型/接口的权限"+msg).
 			WithStatus(code)
 	case code == http.StatusNotFound:
 		return ir.NewAPIError(ir.ErrCodeBadRequest,

@@ -2832,6 +2832,17 @@ func (g *Gateway) penalizeModel(env *provider.AccountEnv, err *ir.APIError, mode
 			g.quotaHist.record(env.ProviderID, env.Label, env.RateWindows(), nil)
 		}
 	case ir.ErrCodeUpstreamAuth:
+		// 403「这条 Key 没有这个模型/接口的权限」是**模型级**问题：
+		// 同一把 Key 换个模型往往就能用。把它当凭证失效会把整个账号
+		// 永久打成 invalid（且 invalid 不会被熔断开关放行），
+		// 表现为"明明有额度、Key 也有效，却一直提示账号不可用"。
+		if isModelScopedForbidden(err.Message) {
+			if strings.TrimSpace(model) != "" {
+				env.MarkModelCoolingDown(model, provider.ModelRestBackoff(1), err.Message)
+			}
+			eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())
+			return
+		}
 		// 上游给了明确的重试窗口（如 WorkBuddy 14015/401 的 30 分钟）：这是
 		// 临时过期，不是凭证永久失效——冷却账号（到期自动恢复），不要打进
 		// invalid 永久态，否则一次抖动就得人工重新登录。
@@ -3547,4 +3558,19 @@ func decodeBody(r *http.Request, v any) error {
 		return err
 	}
 	return nil
+}
+
+// isModelScopedForbidden 判断错误是不是"这把 Key 对某个模型没权限"。
+//
+// 依据分类层生成的文案：403 分两种，封禁必须停用账号，
+// 缺权限只是"这个模型不给用"。两者混在一起会把好账号判死。
+func isModelScopedForbidden(msg string) bool {
+	if !strings.Contains(msg, "403") {
+		return false
+	}
+	// 封禁走另一条路（文案是"上游账号被封禁"），这里排除掉。
+	if strings.Contains(msg, "封禁") {
+		return false
+	}
+	return strings.Contains(msg, "没有这个模型") || strings.Contains(msg, "权限")
 }
