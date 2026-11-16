@@ -8,17 +8,12 @@ import (
 	"aether-cockpit/internal/provider"
 )
 
-// 熔断不可关闭：这是不变量，不是可选项。
+// 熔断默认开启：阈值 5 次，冷却 10 分钟封顶。
 //
-// 为什么不给开关：
-//   - 它是防止"一个坏账号被反复撞"的最后一道闸。关掉之后，上游持续 5xx
-//     的账号会被每个请求各撞一次，既拖慢整体，也会把上游的临时故障
-//     放大成我们的持续故障；
-//   - 超时可以按用户需要放开（中转站排队慢），但"放开等待"和"不设保护"
-//     是两件事：等待时间由用户决定，熔断是系统自保。
-//
-// 这条测试锁定两点：阈值仍然生效；冷却时长有上限，不会变永久封禁。
-func TestCircuitBreakerCannotBeDisabled(t *testing.T) {
+// 用户可以在设置里关掉保护（见 TestCircuitBreakerCanBeDisabled），
+// 但默认必须是开的——它是防止"一个坏账号被反复撞"的最后一道闸。
+// 这条测试锁定默认行为，以及"冷却有上限、不会变永久封禁"。
+func TestCircuitBreakerDefaultOn(t *testing.T) {
 	// 即使把首字节超时与总预算都设成"不限"，熔断依然要工作。
 	g := New(Config{
 		SettingsPath:     t.TempDir() + "/settings.json",
@@ -48,7 +43,7 @@ func TestCircuitBreakerCannotBeDisabled(t *testing.T) {
 	// 第 5 次必须熔断。
 	g.penalizeModel(env, err, "")
 	if env.Available() {
-		t.Fatal("熔断不可关闭：累计到阈值必须让账号进入冷却")
+		t.Fatal("默认应开启熔断：累计到阈值必须让账号进入冷却")
 	}
 
 	// 冷却时长必须有上限，不能变成永久封禁。
@@ -86,5 +81,88 @@ func TestCircuitBreakerIgnoresConnFailures(t *testing.T) {
 	}
 	if !env.Available() {
 		t.Fatal("建连失败不应触发熔断（那是网络/代理问题，不是账号问题）")
+	}
+}
+
+// 关闭熔断后，失败只记账、不再让账号进冷却。
+func TestCircuitBreakerCanBeDisabled(t *testing.T) {
+	off := true
+	g := New(Config{
+		SettingsPath:     t.TempDir() + "/settings.json",
+		AccountStorePath: t.TempDir() + "/accounts.json",
+		UsagePath:        "-",
+		MaxRecords:       10,
+		BreakerDisabled:  off,
+	})
+	t.Cleanup(func() { _ = g.Close(t.Context()) })
+
+	env := provider.NewAccountEnv("acc-off", "open-design")
+	g.Pool().Add(env)
+
+	err := ir.NewAPIError(ir.ErrCodeUpstreamFailed, "upstream returned 500: internal error")
+	for i := 0; i < 20; i++ {
+		g.penalizeModel(env, err, "")
+	}
+
+	if !env.Available() {
+		t.Fatal("关闭熔断后账号不应进入冷却")
+	}
+	// 失败仍然要记账，便于用户判断"到底是账号坏了还是线路坏了"。
+	if env.ConsecutiveFailures() == 0 {
+		t.Fatal("关闭熔断不等于不记失败次数")
+	}
+}
+
+// 打开开关时，要顺手解除已有的冷却（否则新开关只对将来生效）。
+func TestDisablingBreakerReleasesCoolingAccounts(t *testing.T) {
+	g := New(Config{
+		SettingsPath:     t.TempDir() + "/settings.json",
+		AccountStorePath: t.TempDir() + "/accounts.json",
+		UsagePath:        "-",
+		MaxRecords:       10,
+	})
+	t.Cleanup(func() { _ = g.Close(t.Context()) })
+
+	cooling := provider.NewAccountEnv("acc-cooling", "open-design")
+	cooling.MarkCoolingDown(5*time.Minute, "上游限流")
+	g.Pool().Add(cooling)
+
+	if cooling.Available() {
+		t.Fatal("前置条件错误：账号应处于冷却")
+	}
+
+	g.breakerOff.Store(true)
+	g.releaseCoolingAccounts()
+
+	if !cooling.Available() {
+		t.Fatal("关闭熔断后应解除冷却")
+	}
+}
+
+// 解除冷却只针对 cooling_down：凭证失效与额度耗尽不能顺手放过。
+func TestReleaseCoolingKeepsInvalidAndDepleted(t *testing.T) {
+	g := New(Config{
+		SettingsPath:     t.TempDir() + "/settings.json",
+		AccountStorePath: t.TempDir() + "/accounts.json",
+		UsagePath:        "-",
+		MaxRecords:       10,
+	})
+	t.Cleanup(func() { _ = g.Close(t.Context()) })
+
+	invalid := provider.NewAccountEnv("acc-invalid", "open-design")
+	invalid.MarkInvalid("token 过期")
+	g.Pool().Add(invalid)
+
+	depleted := provider.NewAccountEnv("acc-depleted", "open-design")
+	depleted.MarkDepleted(time.Now().Add(time.Hour), "额度用尽")
+	g.Pool().Add(depleted)
+
+	g.releaseCoolingAccounts()
+
+	if invalid.Available() {
+		t.Fatal("凭证失效不应被熔断开关解除")
+	}
+	if depleted.Available() {
+		t.Fatal("额度耗尽不应被熔断开关解除")
 	}
 }

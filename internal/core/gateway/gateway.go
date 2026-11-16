@@ -111,6 +111,12 @@ type Config struct {
 	MaxConcurrentPerAccount int `json:"max_concurrent_per_account"`
 	// RPMPerAccount 每账号每分钟请求上限。0（默认）表示不限。
 	RPMPerAccount int `json:"rpm_per_account"`
+	// BreakerDisabled 关闭账号级"连续失败熔断"。
+	//
+	// 默认 false（熔断生效）。打开后，上游持续失败不会再让账号进入冷却，
+	// 适合"中转站不稳定但每次都值得重试"的场景；代价是坏账号会被反复撞。
+	BreakerDisabled bool `json:"breaker_disabled"`
+
 	// TPMPerAccount 每账号每分钟输入 token 上限。0（默认）表示不限。
 	// 比 RPMPerAccount 更贴近上游配额语义：按 token 而非按次限流。
 	TPMPerAccount int `json:"tpm_per_account"`
@@ -194,6 +200,9 @@ type Gateway struct {
 	platform PlatformCapabilities
 	// keepAwakeOn 记录本网关是否真的开了保持唤醒，Close 时成对关闭。
 	keepAwakeOn atomic.Bool
+	// breakerOff 为真时关闭账号级连续失败熔断（设置页可切换）。
+	// 用原子量而不是直接读 cfg：它会在运行中被设置接口改写。
+	breakerOff atomic.Bool
 	// 测试注入点；nil 走真实实现。
 	keepAwakeApply func(bool) error
 	wslWarm        func()
@@ -507,6 +516,7 @@ func New(cfg Config) *Gateway {
 		g.settingsPath = apppaths.Data("settings.json")
 	}
 	g.gatewayKey.Store(strings.TrimSpace(cfg.APIKey))
+	g.breakerOff.Store(cfg.BreakerDisabled)
 
 	g.loadSettings()
 	// 模型重定向是路由层的显式虚拟名，启动时先注入；保存设置后会立即更新。
@@ -2866,7 +2876,13 @@ func (g *Gateway) penalizeModel(env *provider.AccountEnv, err *ir.APIError, mode
 		if transport.IsConnFailure(errors.New(err.Message)) {
 			return
 		}
-		env.MarkFailure(5)
+		// 用户可关闭熔断：threshold=0 表示"只计失败次数、不触发熔断"，
+		// 这样即使关掉保护，用户仍能在界面上看出这个号到底失败了几次。
+		threshold := 5
+		if g.breakerOff.Load() {
+			threshold = 0
+		}
+		env.MarkFailure(threshold)
 	}
 	// 状态变化推给前端，避免"账号已经冷却但界面还是绿的"。
 	eventbus.Emit(eventbus.TopicAccount+".state_changed", env.Snapshot())

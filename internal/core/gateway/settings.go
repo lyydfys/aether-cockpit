@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"aether-cockpit/internal/core/eventbus"
+	"aether-cockpit/internal/provider"
 	"aether-cockpit/internal/providers/workbuddy"
 )
 
@@ -58,6 +59,8 @@ type runtimeSettings struct {
 	// 0 = 默认 120 秒。它防止"5 次 × 60 秒"这种最坏情况把客户端挂住几分钟。
 	// 0 = 不限（整个请求不设总时限）。
 	RequestBudgetSec *int `json:"request_budget_sec,omitempty"`
+	// BreakerDisabled 关闭账号级连续失败熔断。
+	BreakerDisabled bool `json:"breaker_disabled,omitempty"`
 	// TPMPerAccount 每账号每分钟输入 token 上限；0 = 不限。
 	TPMPerAccount int `json:"tpm_per_account,omitempty"`
 	// APIKey 是网关鉴权密钥的持久副本。
@@ -502,6 +505,10 @@ func (g *Gateway) applyFailoverSettings() {
 			g.cfg.RequestBudget = time.Duration(*sec) * time.Second
 		}
 	}
+	if g.settings.BreakerDisabled {
+		g.cfg.BreakerDisabled = true
+		g.breakerOff.Store(true)
+	}
 	if tpm := g.settings.TPMPerAccount; tpm > 0 {
 		g.cfg.TPMPerAccount = tpm
 	}
@@ -629,7 +636,9 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		// FirstByteTimeoutSec / MaxAttempts：故障转移的两个关键旋钮。
 		FirstByteTimeoutSec *int `json:"first_byte_timeout_sec"`
 		MaxAttempts         *int `json:"max_attempts"`
-		RequestBudgetSec    *int `json:"request_budget_sec"`
+		// BreakerDisabled 关闭/开启账号级连续失败熔断。
+		BreakerDisabled  *bool `json:"breaker_disabled"`
+		RequestBudgetSec *int  `json:"request_budget_sec"`
 		// TPMPerAccount 每账号每分钟输入 token 上限（0 = 不限）。
 		TPMPerAccount *int `json:"tpm_per_account"`
 		// APIKey 是网关鉴权密钥。过去这个字段没有对应分支，前端提交的密钥
@@ -732,6 +741,16 @@ func (g *Gateway) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		v := *body.RequestBudgetSec
 		g.settings.RequestBudgetSec = &v
+	}
+	if body.BreakerDisabled != nil {
+		g.settings.BreakerDisabled = *body.BreakerDisabled
+		g.cfg.BreakerDisabled = *body.BreakerDisabled
+		g.breakerOff.Store(*body.BreakerDisabled)
+		// 关闭熔断时顺便解除已有的冷却：用户要的就是"别再自动停用"，
+		// 让旧冷却继续挂着等于开关只对新故障生效。
+		if *body.BreakerDisabled {
+			g.releaseCoolingAccounts()
+		}
 	}
 	if body.TPMPerAccount != nil {
 		// 0 = 不限；上限给到千万级，够覆盖最严格的付费档。
@@ -922,4 +941,24 @@ func (g *Gateway) applyOTLPConfig(raw json.RawMessage) {
 		g.settings.OTLP = &OTLPConfig{}
 	}
 	*g.settings.OTLP = in
+}
+
+// releaseCoolingAccounts 把所有"因连续失败进入冷却"的账号恢复为可用。
+//
+// 只动 cooling_down：那是熔断产生的状态，关掉熔断就该放行。
+// 凭证失效（invalid）与额度耗尽（depleted）是事实，不是保护策略，保持原样。
+func (g *Gateway) releaseCoolingAccounts() {
+	if g.pool == nil {
+		return
+	}
+	n := 0
+	for _, env := range g.pool.All() {
+		if state, _, _ := env.StateDetail(); state == provider.StateCoolingDown {
+			env.MarkReady()
+			n++
+		}
+	}
+	if n > 0 {
+		log.Printf("[INFO] 已关闭熔断保护，解除 %d 个账号的冷却状态", n)
+	}
 }
